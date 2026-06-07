@@ -24,13 +24,14 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
+import { SquareTerminal } from 'lucide-react'
 import '@xterm/xterm/css/xterm.css'
 import type { PtyExitPayload } from '../shared/ipc'
 import { PanelTabStrip, type PanelTab } from './PanelTabStrip'
 import { PanelFooter } from './PanelFooter'
 import { usePanelTabs } from './usePanelTabs'
 import { useTabShortcuts } from './useTabShortcuts'
-import { nextTerminalIndex, terminalLabel } from './panelTabs'
+import { nextTerminalIndex, seedTerminalIndex, terminalLabel } from './panelTabs'
 import './TerminalPanel.css'
 
 type ExitState = { kind: 'running' } | { kind: 'exited'; payload: PtyExitPayload }
@@ -39,6 +40,12 @@ type ExitState = { kind: 'running' } | { kind: 'exited'; payload: PtyExitPayload
 interface TerminalTab {
   id: string
   label: string
+  /**
+   * True once the user manually renamed this tab (tab-rename-v1 FR-007). Terminal
+   * labels are static today (no runtime relabel), so this is forward-protection
+   * (FR-009): the field exists so any future terminal-relabel path can respect it.
+   */
+  renamed?: boolean
 }
 
 function formatExit(payload: PtyExitPayload): string {
@@ -205,18 +212,28 @@ function TerminalView({ paneId, active }: { paneId: string; active: boolean }): 
 
 export function TerminalPanel({ active }: { active: boolean }): React.JSX.Element {
   // FR-024: always ≥1 terminal. Seed one default tab on first mount.
-  const everOpened = useRef(0)
+  // The counter starts AT the seed index (1), not 0 — the seed must NOT advance it.
+  // `mintTab()` mutates this ref, so it must never run inside the render-phase
+  // `useState` initializer: StrictMode double-invokes that initializer in dev and the
+  // ref mutation persists across both calls, which skipped the first `+` to "Terminal
+  // 3" (terminal-tab-index-skip-v1). Advance the counter only from event handlers /
+  // the empty-refill effect, which StrictMode does not double-invoke for this purpose.
+  const everOpened = useRef(seedTerminalIndex())
   const mintTab = (): TerminalTab => {
     const index = nextTerminalIndex(everOpened.current)
     everOpened.current = index
     return { id: crypto.randomUUID(), label: terminalLabel(index) }
   }
-  // Lazy initial state so the seed tab is minted exactly once.
+  // Lazy initial state — PURE: derive the seed tab's label directly from its index
+  // (no `mintTab()`, no ref mutation), so a StrictMode double-invoke is idempotent.
   const [initial] = useState(() => {
-    const first = mintTab()
+    const first: TerminalTab = {
+      id: crypto.randomUUID(),
+      label: terminalLabel(seedTerminalIndex())
+    }
     return { tabs: [first], activeTabId: first.id }
   })
-  const { tabs, activeTabId, open, close, setActive } = usePanelTabs<TerminalTab>(initial)
+  const { tabs, activeTabId, open, close, setActive, update } = usePanelTabs<TerminalTab>(initial)
 
   const handleNewTab = (): void => {
     // FR-022: mint a new pane + open a tab (its TerminalView issues pty:start).
@@ -265,6 +282,7 @@ export function TerminalPanel({ active }: { active: boolean }): React.JSX.Elemen
         onActivate={setActive}
         onClose={handleClose}
         onNewTab={handleNewTab}
+        onRename={(id, label) => update(id, { label, renamed: true })}
         ariaLabel="Terminal tabs"
       />
       {/* The terminal stack. Every view stays mounted; only the active one is shown
@@ -274,7 +292,7 @@ export function TerminalPanel({ active }: { active: boolean }): React.JSX.Elemen
           <TerminalView key={t.id} paneId={t.id} active={t.id === activeTabId} />
         ))}
       </div>
-      <PanelFooter activeTab={activeStripTab} />
+      <PanelFooter surfaceName="Terminal" icon={SquareTerminal} activeTab={activeStripTab} />
     </section>
   )
 }

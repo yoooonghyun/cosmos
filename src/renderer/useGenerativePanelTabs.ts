@@ -26,6 +26,7 @@ import { usePanelTabs, type PanelTabsController } from './usePanelTabs'
 import {
   defaultRequestDecision,
   labelFromUtterance,
+  shouldApplyAutoLabel,
   shouldFlushDeferredDefault,
   UNTITLED_LABEL
 } from './panelTabs'
@@ -56,6 +57,13 @@ export interface GenerativeTab {
    * Slack/Confluence/Generated UI tabs never carry it.
    */
   loadingDefault?: boolean
+  /**
+   * True once the user manually renamed this tab (tab-rename-v1 FR-007). A renamed
+   * tab keeps its custom label — the generative auto-relabel path below
+   * (`labelFromUtterance` on the originating utterance) skips it (FR-008). Session-only
+   * (FR-017), like every other tab field.
+   */
+  renamed?: boolean
 }
 
 export interface GenerativePanelTabs extends PanelTabsController<GenerativeTab> {
@@ -124,6 +132,10 @@ export function useGenerativePanelTabs(
   // Latest tab ids + active id, read inside subscriptions without re-subscribing.
   const tabIdsRef = useRef<Set<string>>(new Set())
   tabIdsRef.current = new Set(tabs.map((t) => t.id))
+  // Latest tab records by id, so the render subscription can consult a tab's `renamed`
+  // flag (tab-rename-v1 FR-008) without re-subscribing on every tab change.
+  const tabsByIdRef = useRef<Map<string, GenerativeTab>>(new Map())
+  tabsByIdRef.current = new Map(tabs.map((t) => [t.id, t]))
   const activeTabIdRef = useRef<string | null>(activeTabId)
   activeTabIdRef.current = activeTabId
   // Each in-flight tab's utterance, so the surface frame (no utterance) can derive
@@ -172,10 +184,16 @@ export function useGenerativePanelTabs(
 
       const utterance = pendingUtteranceRef.current.get(tabId)
       pendingUtteranceRef.current.delete(tabId)
+      // tab-rename-v1 FR-008: a manually-renamed tab keeps its custom label — skip the
+      // auto-relabel (label + untitled) while still updating surface/inFlight/error.
+      const applyAutoLabel = shouldApplyAutoLabel(tabsByIdRef.current.get(tabId))
       update(tabId, {
         surface: { requestId: payload.requestId, spec: payload.spec },
-        // FR-010: derive the label from the originating utterance (solicited only).
-        ...(utterance ? { label: labelFromUtterance(utterance), untitled: false } : {}),
+        // FR-010: derive the label from the originating utterance (solicited only),
+        // unless the tab was manually renamed (tab-rename-v1 FR-008).
+        ...(utterance && applyAutoLabel
+          ? { label: labelFromUtterance(utterance), untitled: false }
+          : {}),
         inFlight: false,
         error: undefined,
         // new-tab-base-view-v1 FR-008/FR-010: a landed surface (default board OR a

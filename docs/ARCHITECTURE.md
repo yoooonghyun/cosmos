@@ -224,7 +224,9 @@ env var (`COSMOS_BRIDGE_SOCKET` for both render entry scripts, which share the o
 
 ### 4.6 Code Structure & Conventions
 
-The four Electron process roles map to the source tree as follows:
+The four Electron process roles map to the source tree as below; the full file-by-file map is
+in [`PROJECT-STRUCTURE.md`](./PROJECT-STRUCTURE.md), and the detailed development conventions and
+gotchas are in [`DEVELOPMENT.md`](./DEVELOPMENT.md).
 
 - **main** (`src/main/`) — owns the PTY (`ptyManager.ts`), the headless agent runner
   (`agentRunner.ts`, §4.10), the socket bridges (`uiBridge.ts`, and per-integration siblings
@@ -561,6 +563,13 @@ trailing `+` new-tab affordance, and horizontal overflow scroll. Tabs are render
   native browser — see §4.9). The Terminal panel always keeps ≥1 tab (§4.2). In a generative panel a
   submitted utterance **fills the ACTIVE tab** (auto-creating the first tab if none are open) — it
   does NOT auto-spawn a tab per utterance; `+` first yields a fresh tab for the next compose.
+- **Tab rename (double-click / F2).** Any tab's label is renamable inline: double-clicking the
+  label (or F2 on the focused tab) swaps it for an in-cell text input; Enter/blur commits, Escape
+  cancels, an empty/whitespace commit reverts. The strip is presentational — it surfaces the
+  committed value via an `onRename(tabId, label)` callback and the owning panel writes its own tab
+  record. A committed rename sets a per-tab `renamed` flag, and the automatic relabel paths (a
+  generative tab's utterance-derived label; a Terminal tab's static "Terminal N") **skip a renamed
+  tab** so a user's custom name sticks for the session. Labels are session-only like the tabs.
 - **Renderer modules** (all `src/renderer/`): `panelTabs.ts` (pure tab-collection logic —
   open/close with right-else-left adjacent activation, label helpers `labelFromUtterance` /
   `terminalLabel` / monotonic `nextTerminalIndex` where closed terminals are not renumbered);

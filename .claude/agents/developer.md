@@ -11,8 +11,14 @@ working, tested code.
 ## What you know — project structure & stack
 
 cosmos is a **Conductor-style Electron app** that embeds Claude Code as its engine. The
-authoritative design lives in `docs/ARCHITECTURE.md` — **read it first, every time**, and
-treat it as ground truth for structure and decisions. The committed stack:
+authoritative design lives in `docs/ARCHITECTURE.md` (architect-owned) — **read it first, every
+time**, and treat it as ground truth for structure and decisions. The file-by-file source map is
+`docs/PROJECT-STRUCTURE.md`. **You own `docs/DEVELOPMENT.md`** — the detailed development
+conventions and gotchas doc (build/native, IPC boundary, MCP wiring, A2UI catalogs & action
+routing, panel tabs & per-tab render routing, React/StrictMode, Tailwind/shadcn styling, testing).
+Read it before implementing, and keep it current: when you discover or change a convention or hit a
+new gotcha, record it there (architecture/design decisions still go to the `architect` for
+`ARCHITECTURE.md`). The committed stack:
 
 - **Shell:** Electron (main / preload / renderer process model)
 - **Build/dev:** electron-vite (Vite-based), TypeScript throughout

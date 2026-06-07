@@ -24,7 +24,7 @@ import {
   type KeyboardEvent
 } from 'react'
 import { A2UIProvider } from '@a2ui-sdk/react/0.9'
-import { Loader2 } from 'lucide-react'
+import { Loader2, Sparkles } from 'lucide-react'
 import type { AgentStatusPayload } from '../shared/ipc'
 import { Button } from '@/components/ui/button'
 import { Textarea } from '@/components/ui/textarea'
@@ -142,7 +142,7 @@ function PromptComposer({ onSubmit }: { onSubmit: (utterance: string) => void })
 }
 
 export function GeneratedUiPanel({ active }: { active: boolean }): React.JSX.Element {
-  const { tabs, activeTabId, activeTab, setActive, submit, newTab, closeTab } =
+  const { tabs, activeTabId, activeTab, setActive, submit, newTab, closeTab, update } =
     useGenerativePanelTabs({ target: 'generated-ui', cancelOnClose: true })
 
   // Tab keyboard shortcuts act on THIS strip only while the Generated UI surface is active.
@@ -185,6 +185,7 @@ export function GeneratedUiPanel({ active }: { active: boolean }): React.JSX.Ele
         onActivate={setActive}
         onClose={closeTab}
         onNewTab={newTab}
+        onRename={(id, label) => update(id, { label, renamed: true, untitled: false })}
         ariaLabel="Generated UI tabs"
       />
 
@@ -217,7 +218,7 @@ export function GeneratedUiPanel({ active }: { active: boolean }): React.JSX.Ele
       </div>
 
       <PromptComposer onSubmit={submit} />
-      <PanelFooter activeTab={activeStripTab} />
+      <PanelFooter surfaceName="Generated UI" icon={Sparkles} activeTab={activeStripTab} />
     </section>
   )
 }

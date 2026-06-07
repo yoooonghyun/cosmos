@@ -6,8 +6,12 @@ import {
   labelFromUtterance,
   MAX_LABEL_LENGTH,
   nextTerminalIndex,
+  normalizeRenameInput,
+  renameCommitDecision,
+  seedTerminalIndex,
   openTab,
   setActiveTab,
+  shouldApplyAutoLabel,
   shouldFlushDeferredDefault,
   terminalLabel,
   UNTITLED_LABEL,
@@ -241,6 +245,77 @@ describe('shouldFlushDeferredDefault (new-tab-base-view-v1 FR-011)', () => {
   })
 })
 
+describe('normalizeRenameInput (tab-rename-v1 FR-006)', () => {
+  it('trims leading/trailing whitespace, keeping interior verbatim (no collapse)', () => {
+    expect(normalizeRenameInput('  hi  ')).toBe('hi')
+    expect(normalizeRenameInput('  a  b  ')).toBe('a  b')
+  })
+
+  it('returns "" for empty / whitespace-only input', () => {
+    expect(normalizeRenameInput('')).toBe('')
+    expect(normalizeRenameInput('   \n\t ')).toBe('')
+  })
+
+  it('degrades a non-string to "" without throwing (safe fallback)', () => {
+    expect(normalizeRenameInput(undefined as unknown as string)).toBe('')
+    expect(normalizeRenameInput(null as unknown as string)).toBe('')
+  })
+})
+
+describe('renameCommitDecision (tab-rename-v1 FR-005/FR-006)', () => {
+  it('commits a non-empty value with the trimmed label (happy path, FR-006)', () => {
+    expect(renameCommitDecision('My tab')).toEqual({ commit: true, label: 'My tab' })
+  })
+
+  it('trims leading/trailing whitespace on commit (FR-006)', () => {
+    expect(renameCommitDecision('  hi  ')).toEqual({ commit: true, label: 'hi' })
+  })
+
+  it('does NOT commit empty / whitespace-only (revert, not renamed, FR-005)', () => {
+    expect(renameCommitDecision('')).toEqual({ commit: false })
+    expect(renameCommitDecision('   ')).toEqual({ commit: false })
+    expect(renameCommitDecision('\t\n ')).toEqual({ commit: false })
+  })
+
+  it('still commits an unchanged-but-non-empty value (edge case: explicit confirm allowed)', () => {
+    expect(renameCommitDecision('Untitled')).toEqual({ commit: true, label: 'Untitled' })
+  })
+
+  it('does not throw on a non-string and falls into the revert branch (safe fallback)', () => {
+    expect(renameCommitDecision(undefined as unknown as string)).toEqual({ commit: false })
+  })
+})
+
+describe('shouldApplyAutoLabel (tab-rename-v1 FR-008/FR-009)', () => {
+  it('returns false for a renamed tab (auto-label must be skipped)', () => {
+    expect(shouldApplyAutoLabel({ renamed: true })).toBe(false)
+  })
+
+  it('returns true when not renamed (missing or false flag → auto-label proceeds)', () => {
+    expect(shouldApplyAutoLabel({})).toBe(true)
+    expect(shouldApplyAutoLabel({ renamed: false })).toBe(true)
+  })
+
+  it('degrades a missing/null tab to true (safe fallback — auto-label is the default)', () => {
+    expect(shouldApplyAutoLabel(null)).toBe(true)
+    expect(shouldApplyAutoLabel(undefined)).toBe(true)
+  })
+})
+
+describe('updateTab + renamed flag (tab-rename-v1 FR-007 — reuse existing patcher)', () => {
+  it('merges { label, renamed: true } into the addressed tab and locks the id', () => {
+    const state: TabsState<Tab & { renamed?: boolean }> = {
+      tabs: [tab('a'), tab('b'), tab('c')],
+      activeTabId: 'b'
+    }
+    const s = updateTab(state, 'b', { label: 'Renamed', renamed: true })
+    const b = s.tabs.find((t) => t.id === 'b')
+    expect(b?.label).toBe('Renamed')
+    expect(b?.renamed).toBe(true)
+    expect(s.tabs.map((t) => t.id)).toEqual(['a', 'b', 'c'])
+  })
+})
+
 describe('terminalLabel / nextTerminalIndex (FR-011)', () => {
   it('formats a 1-based terminal label', () => {
     expect(terminalLabel(1)).toBe('Terminal 1')
@@ -263,5 +338,69 @@ describe('terminalLabel / nextTerminalIndex (FR-011)', () => {
   it('nextTerminalIndex degrades a bad count to 1 (safe fallback)', () => {
     expect(nextTerminalIndex(-1)).toBe(1)
     expect(nextTerminalIndex(NaN)).toBe(1)
+  })
+})
+
+/*
+ * Regression: terminal-tab-index-skip-v1.
+ *
+ * The Terminal panel seeds one tab from a render-phase `useState` lazy initializer.
+ * React StrictMode double-invokes that initializer in dev. The OLD seed called an
+ * impure `mintTab()` (read AND advanced a monotonic ref) inside it, so two invokes
+ * advanced the counter twice for the one seed tab → the first `+` skipped to
+ * "Terminal 3". The FIX makes the seed PURE: the counter starts AT the seed index
+ * (`seedTerminalIndex()` = 1) and the seed labels directly from it WITHOUT advancing
+ * — only `mintTab()` (called from event handlers / effects) advances.
+ *
+ * These tests model the panel's counter discipline with plain helpers (node env, no
+ * DOM) and assert the seed is idempotent under double-evaluation.
+ */
+describe('terminal panel seeding is StrictMode-idempotent (terminal-tab-index-skip-v1)', () => {
+  /** A counter cell mirroring the panel's `everOpened` ref. */
+  interface Counter {
+    value: number
+  }
+
+  /** Mirror of `TerminalPanel.mintTab`: advances the counter, returns the label. */
+  const mintLabel = (counter: Counter): string => {
+    const index = nextTerminalIndex(counter.value)
+    counter.value = index
+    return terminalLabel(index)
+  }
+
+  /**
+   * Mirror of the FIXED render-phase seed: PURE — initialize the counter to the seed
+   * index and label directly from it, with NO advance.
+   */
+  const seed = (): { counter: Counter; label: string } => {
+    const counter: Counter = { value: seedTerminalIndex() }
+    const label = terminalLabel(seedTerminalIndex())
+    return { counter, label }
+  }
+
+  it('the seed reads "Terminal 1" and leaves the counter at 1', () => {
+    const { counter, label } = seed()
+    expect(label).toBe('Terminal 1')
+    expect(counter.value).toBe(1)
+  })
+
+  it('double-evaluating the seed (StrictMode) does NOT double-advance — next `+` is "Terminal 2"', () => {
+    // StrictMode runs the lazy initializer twice; the second result is discarded.
+    const first = seed()
+    const second = seed()
+    // Both invokes are idempotent — neither moves the counter past the seed index.
+    expect(first.label).toBe('Terminal 1')
+    expect(second.label).toBe('Terminal 1')
+    expect(second.counter.value).toBe(1)
+
+    // The kept counter is from a single seed; the first `+` mints index 2, not 3.
+    const kept = first.counter
+    expect(mintLabel(kept)).toBe('Terminal 2')
+  })
+
+  it('after the seed, minting two more tabs yields "Terminal 2" then "Terminal 3"', () => {
+    const { counter } = seed()
+    expect(mintLabel(counter)).toBe('Terminal 2')
+    expect(mintLabel(counter)).toBe('Terminal 3')
   })
 })

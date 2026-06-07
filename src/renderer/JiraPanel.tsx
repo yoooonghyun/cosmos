@@ -261,7 +261,8 @@ export function JiraPanel({ active }: { active: boolean }): React.JSX.Element {
     submit,
     newTab,
     requestDefaultInActiveTab,
-    closeTab
+    closeTab,
+    update
   } = useGenerativePanelTabs({ target: 'jira', cancelOnClose: false })
 
   // jira-ticket-detail-v1 (FR-002/FR-004/FR-005): renderer-local navigation chrome over
@@ -403,6 +404,7 @@ export function JiraPanel({ active }: { active: boolean }): React.JSX.Element {
         onActivate={setActive}
         onClose={closeTab}
         onNewTab={newTab}
+        onRename={(id, label) => update(id, { label, renamed: true, untitled: false })}
         ariaLabel="Jira tabs"
       />
 
@@ -500,6 +502,8 @@ export function JiraPanel({ active }: { active: boolean }): React.JSX.Element {
 
       {/* Connection bar is the panel footer (Terminal-unified layout). */}
       <PanelFooter
+        surfaceName="Jira"
+        icon={SquareKanban}
         activeTab={activeStripTab}
         right={<ConnectionStatus status={status} onDisconnect={() => void disconnect()} />}
       />

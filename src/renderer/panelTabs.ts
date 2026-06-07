@@ -243,6 +243,65 @@ export function shouldFlushDeferredDefault(
 }
 
 /**
+ * The outcome of committing an inline tab rename (tab-rename-v1 FR-005/FR-006/FR-007).
+ * `commit: false` ⇒ revert to the pre-edit label and DO NOT mark the tab renamed
+ * (the empty/whitespace path). `commit: true` ⇒ apply `label` (the trimmed value)
+ * and mark the tab renamed.
+ */
+export interface RenameCommitDecision {
+  commit: boolean
+  /** The trimmed label to apply — present only when `commit` is true. */
+  label?: string
+}
+
+/**
+ * Trim a raw rename-input string to the label that would be applied
+ * (tab-rename-v1 FR-006). Manual labels are kept verbatim EXCEPT for leading/
+ * trailing whitespace — no internal-whitespace collapse and no length cap (the
+ * existing CSS `truncate` handles overflow; a manual rename takes no
+ * `MAX_LABEL_LENGTH` content cap). A non-string degrades to '' (safe fallback —
+ * the caller's `renameCommitDecision` then reverts, never throwing).
+ */
+export function normalizeRenameInput(raw: string): string {
+  if (typeof raw !== 'string') {
+    return ''
+  }
+  return raw.trim()
+}
+
+/**
+ * Decide whether an inline rename should commit, and to what label
+ * (tab-rename-v1 FR-005/FR-006). This is the single tested predicate the strip and
+ * the panel callsites consult:
+ *   - empty / whitespace-only / non-string ⇒ `{ commit: false }` — revert to the
+ *     pre-edit label and DO NOT mark renamed (FR-005; no blank tabs).
+ *   - otherwise ⇒ `{ commit: true, label: <trimmed> }` (FR-006). An unchanged-but-
+ *     non-empty value still commits and marks renamed (spec edge case: explicit
+ *     confirmation of the current name is acceptable).
+ * Invalid input never throws — a non-string falls into the revert branch.
+ */
+export function renameCommitDecision(raw: string): RenameCommitDecision {
+  const trimmed = normalizeRenameInput(raw)
+  if (trimmed === '') {
+    return { commit: false }
+  }
+  return { commit: true, label: trimmed }
+}
+
+/**
+ * Whether an automatic label path may apply to `tab` (tab-rename-v1 FR-008/FR-009).
+ * Returns false when the tab has been manually renamed — the generative auto-relabel
+ * (`labelFromUtterance` application in `useGenerativePanelTabs`) and any future
+ * terminal-relabel path consult this so a renamed tab keeps its custom name. A
+ * missing/false `renamed` (the common case) ⇒ true (auto-label proceeds normally).
+ * Framework-free + null-safe (a missing tab degrades to true — auto-label is the
+ * default, the safe fallback).
+ */
+export function shouldApplyAutoLabel(tab: { renamed?: boolean } | null | undefined): boolean {
+  return !(tab && tab.renamed === true)
+}
+
+/**
  * The label for a Terminal tab at a given 1-based index (FR-011): "Terminal N".
  * A non-finite / non-positive index degrades to "Terminal 1" (safe fallback).
  */
@@ -263,4 +322,21 @@ export function nextTerminalIndex(everOpenedCount: number): number {
     ? Math.floor(everOpenedCount)
     : 0
   return base + 1
+}
+
+/**
+ * The 1-based index of the Terminal panel's SEED tab (FR-024): always 1.
+ *
+ * This is a PURE constant-valued helper used by the panel's render-phase `useState`
+ * seed so the seed never mutates the monotonic `everOpened` counter during render.
+ * React StrictMode double-invokes a `useState` lazy initializer in dev to surface
+ * impurity; an initializer that advanced the counter (via `nextTerminalIndex`) would
+ * advance it twice for the one seed tab, so the first `+` skipped to "Terminal 3"
+ * (terminal-tab-index-skip-v1). The counter is the seed index itself (1) and only
+ * advances from event handlers / the empty-refill effect — neither of which Strict-
+ * Mode double-invokes for this purpose. Keep the seed referentially pure: derive the
+ * label via `terminalLabel(seedTerminalIndex())` and initialize the counter to it.
+ */
+export function seedTerminalIndex(): number {
+  return 1
 }

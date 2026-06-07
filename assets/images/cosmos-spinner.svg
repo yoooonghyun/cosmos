@@ -1,0 +1,18 @@
+<svg width="120" height="120" viewBox="-80 -80 160 160" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="cosmos loading spinner">
+  <style>
+    @keyframes flSpin{to{transform:rotate(360deg)}}
+    @keyframes spkA{0%,100%{opacity:.2;transform:scale(.45)}50%{opacity:1;transform:scale(1.2)}}
+    @keyframes spkB{0%,100%{opacity:.25;transform:scale(.5)}45%{opacity:1;transform:scale(1.3)}}
+    .fl{transform-box:fill-box;transform-origin:center;animation:flSpin 4s linear infinite}
+    .sA{transform-box:fill-box;transform-origin:center;animation:spkA 1.5s ease-in-out infinite}
+    .sB{transform-box:fill-box;transform-origin:center;animation:spkB 2.1s ease-in-out infinite .5s}
+  </style>
+  <defs>
+    <linearGradient id="ps" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#f9a8d4"/><stop offset="1" stop-color="#d8b4fe"/>
+    </linearGradient>
+  </defs>
+  <g class="fl" fill="url(#ps)"><path d="M 0.00 -60.00 Q 9.55 -47.99 9.18 -22.17 Q 27.18 -40.68 42.43 -42.43 Q 40.68 -27.18 22.17 -9.18 Q 47.99 -9.55 60.00 0.00 Q 47.99 9.55 22.17 9.18 Q 40.68 27.18 42.43 42.43 Q 27.18 40.68 9.18 22.17 Q 9.55 47.99 0.00 60.00 Q -9.55 47.99 -9.18 22.17 Q -27.18 40.68 -42.43 42.43 Q -40.68 27.18 -22.17 9.18 Q -47.99 9.55 -60.00 0.00 Q -47.99 -9.55 -22.17 -9.18 Q -40.68 -27.18 -42.43 -42.43 Q -27.18 -40.68 -9.18 -22.17 Q -9.55 -47.99 0.00 -60.00 Z"/></g>
+  <g transform="translate(58,-58)"><g class="sA" fill="url(#ps)"><path d="M 0.0 -11.0 Q 1.5 -3.7 2.5 -2.5 Q 3.7 -1.5 11.0 0.0 Q 3.7 1.5 2.5 2.5 Q 1.5 3.7 0.0 11.0 Q -1.5 3.7 -2.5 2.5 Q -3.7 1.5 -11.0 0.0 Q -3.7 -1.5 -2.5 -2.5 Q -1.5 -3.7 0.0 -11.0 Z"/></g></g>
+  <g transform="translate(-58,58)"><g class="sB" fill="url(#ps)"><path d="M 0.0 -8.0 Q 1.1 -2.7 1.8 -1.8 Q 2.7 -1.1 8.0 0.0 Q 2.7 1.1 1.8 1.8 Q 1.1 2.7 0.0 8.0 Q -1.1 2.7 -1.8 1.8 Q -2.7 1.1 -8.0 0.0 Q -2.7 -1.1 -1.8 -1.8 Q -1.1 -2.7 0.0 -8.0 Z"/></g></g>
+</svg>

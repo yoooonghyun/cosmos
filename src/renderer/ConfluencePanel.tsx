@@ -47,6 +47,7 @@ import { PanelTabStrip, type PanelTab } from './PanelTabStrip'
 import { PanelFooter } from './PanelFooter'
 import { ActiveTabSurface } from './ActiveTabSurface'
 import { useGenerativePanelTabs } from './useGenerativePanelTabs'
+import { usePerTabNav } from './usePerTabNav'
 import { useTabShortcuts } from './useTabShortcuts'
 import type { AgentStatusPayload } from '../shared/ipc'
 import type {
@@ -98,6 +99,25 @@ function PageDetailSkeleton(): React.JSX.Element {
  * ------------------------------------------------------------------------- */
 
 type ConfluenceView = { kind: 'search' } | { kind: 'page'; pageId: string; title: string }
+
+/**
+ * The native-base browser nav held PER-TAB (bug panel-shared-tab-nav-state-v1): the
+ * `view` (search list vs page detail), the in-progress `searchText`, and the submitted
+ * `query` (empty => the default feed). Each tab keeps its own so a page detail / search
+ * query in one tab does not bleed into another tab's base.
+ */
+interface ConfluenceNav {
+  view: ConfluenceView
+  searchText: string
+  query: string
+}
+
+/** The default native-base nav for an unset / fresh tab (search list, empty input). */
+const CONFLUENCE_NAV_DEFAULT: ConfluenceNav = {
+  view: { kind: 'search' },
+  searchText: '',
+  query: ''
+}
 
 /* ------------------------------------------------------------------------- *
  * Search results list (§5.1 / §5.2)
@@ -419,16 +439,34 @@ function PromptComposer({ onSubmit }: { onSubmit: (utterance: string) => void })
 export function ConfluencePanel({ active }: { active: boolean }): React.JSX.Element {
   const [status, setStatus] = useState<ConfluenceConnectionStatus>({ state: 'not_connected' })
   const [busy, setBusy] = useState(false)
-  const [view, setView] = useState<ConfluenceView>({ kind: 'search' })
-  const [searchText, setSearchText] = useState('')
-  // The query that has actually been submitted (empty => idle prompt, no read).
-  const [query, setQuery] = useState('')
   // panel-tabs v1: the per-tab generative surfaces (read-only, target 'confluence').
   // Zero tabs => the native search/page browser base (FR-017).
-  const { tabs, activeTabId, activeTab, setActive, submit, newTab, closeTab } =
+  const { tabs, activeTabId, activeTab, setActive, submit, newTab, closeTab, update } =
     useGenerativePanelTabs({ target: 'confluence' })
+  // The native-base browser nav is held PER-TAB, keyed by the active tab id
+  // (bug panel-shared-tab-nav-state-v1), so each tab keeps its own view + search + query.
+  const {
+    nav: { view, searchText, query },
+    setNav,
+    drop: dropNav,
+    clearAll: clearAllNav
+  } = usePerTabNav<ConfluenceNav>(activeTabId, CONFLUENCE_NAV_DEFAULT)
+  const setView = useCallback((view: ConfluenceView) => setNav((prev) => ({ ...prev, view })), [setNav])
+  const setSearchText = useCallback(
+    (searchText: string) => setNav((prev) => ({ ...prev, searchText })),
+    [setNav]
+  )
+  // Closing a tab also drops its per-tab native-base nav entry so the map never leaks
+  // state for tabs that no longer exist (bug panel-shared-tab-nav-state-v1).
+  const handleCloseTab = useCallback(
+    (tabId: string) => {
+      dropNav(tabId)
+      closeTab(tabId)
+    },
+    [dropNav, closeTab]
+  )
   // Tab keyboard shortcuts act on THIS strip only while the Confluence surface is active.
-  useTabShortcuts({ active, tabs, activeTabId, onActivate: setActive, onNewTab: newTab, onCloseTab: closeTab })
+  useTabShortcuts({ active, tabs, activeTabId, onActivate: setActive, onNewTab: newTab, onCloseTab: handleCloseTab })
   // The native search/page browser is the base shown not only at zero tabs but also
   // whenever the active tab has not composed a surface yet (a fresh `+` "Untitled" tab),
   // so a new tab lands on the same base screen instead of a blank panel.
@@ -458,38 +496,40 @@ export function ConfluencePanel({ active }: { active: boolean }): React.JSX.Elem
     }
   }, [])
 
+  // A connection transition resets EVERY tab's native-base nav back to default
+  // (bug panel-shared-tab-nav-state-v1): while disconnected the connect call-to-action
+  // replaces the base entirely, so it is coherent to reset all tabs' base nav (view +
+  // search text + submitted query) rather than leave stale per-tab drill-ins/queries.
   const connect = useCallback(async () => {
     setBusy(true)
     const next = await window.cosmos.confluence.connect()
     setStatus(next)
     setBusy(false)
-    setView({ kind: 'search' })
-  }, [])
+    clearAllNav()
+  }, [clearAllNav])
 
   const disconnect = useCallback(async () => {
     const next = await window.cosmos.confluence.disconnect()
     setStatus(next)
-    setView({ kind: 'search' })
-    setQuery('')
-    setSearchText('')
-  }, [])
+    clearAllNav()
+  }, [clearAllNav])
 
   const refreshStatus = useCallback(async () => {
     const next = await window.cosmos.confluence.getStatus()
     setStatus(next)
-    setView({ kind: 'search' })
-  }, [])
+    clearAllNav()
+  }, [clearAllNav])
 
   const submitSearch = useCallback(
     (e: React.FormEvent) => {
       e.preventDefault()
       const q = searchText.trim()
       if (q !== '') {
-        setQuery(q)
-        setView({ kind: 'search' })
+        // Submit the query + show the search list, both scoped to the active tab.
+        setNav((prev) => ({ ...prev, query: q, view: { kind: 'search' } }))
       }
     },
-    [searchText]
+    [searchText, setNav]
   )
 
   const isConnected = status.state === 'connected'
@@ -516,8 +556,9 @@ export function ConfluencePanel({ active }: { active: boolean }): React.JSX.Elem
         tabs={stripTabs}
         activeTabId={activeTabId}
         onActivate={setActive}
-        onClose={closeTab}
+        onClose={handleCloseTab}
         onNewTab={newTab}
+        onRename={(id, label) => update(id, { label, renamed: true, untitled: false })}
         ariaLabel="Confluence tabs"
       />
 
@@ -655,6 +696,8 @@ export function ConfluencePanel({ active }: { active: boolean }): React.JSX.Elem
 
       {/* Connection bar is the panel footer (Terminal-unified layout). */}
       <PanelFooter
+        surfaceName="Confluence"
+        icon={BookText}
         activeTab={activeStripTab}
         right={<ConnectionStatus status={status} onDisconnect={() => void disconnect()} />}
       />

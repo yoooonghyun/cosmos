@@ -43,6 +43,7 @@ import { PanelTabStrip, type PanelTab } from './PanelTabStrip'
 import { PanelFooter } from './PanelFooter'
 import { ActiveTabSurface } from './ActiveTabSurface'
 import { useGenerativePanelTabs } from './useGenerativePanelTabs'
+import { usePerTabNav } from './usePerTabNav'
 import { useTabShortcuts } from './useTabShortcuts'
 import type { AgentStatusPayload } from '../shared/ipc'
 import type {
@@ -236,6 +237,19 @@ type View =
   | { kind: 'history'; channel: SlackChannel }
   | { kind: 'thread'; channel: SlackChannel; parent: SlackMessage }
   | { kind: 'search'; query: string }
+
+/**
+ * The native-base browser nav held PER-TAB (bug panel-shared-tab-nav-state-v1): the
+ * drill-in `view` plus the in-progress `searchText`. Each tab keeps its own so opening
+ * #general in tab 1 leaves tab 2 on its own view.
+ */
+interface SlackNav {
+  view: View
+  searchText: string
+}
+
+/** The default native-base nav for an unset / fresh tab (channel list, empty search). */
+const SLACK_NAV_DEFAULT: SlackNav = { view: { kind: 'channels' }, searchText: '' }
 
 /* ------------------------------------------------------------------------- *
  * Connection bar (design §2.1)
@@ -744,14 +758,34 @@ function PromptComposer({ onSubmit }: { onSubmit: (utterance: string) => void })
 export function SlackPanel({ active }: { active: boolean }): React.JSX.Element {
   const [status, setStatus] = useState<SlackConnectionStatus>({ state: 'not_connected' })
   const [busy, setBusy] = useState(false)
-  const [view, setView] = useState<View>({ kind: 'channels' })
-  const [searchText, setSearchText] = useState('')
   // panel-tabs v1: the per-tab generative surfaces (read-only, target 'slack'). Zero
   // tabs => the native channel/search browser base (FR-017).
-  const { tabs, activeTabId, activeTab, setActive, submit, newTab, closeTab } =
+  const { tabs, activeTabId, activeTab, setActive, submit, newTab, closeTab, update } =
     useGenerativePanelTabs({ target: 'slack' })
+  // The native-base browser nav is held PER-TAB, keyed by the active tab id
+  // (bug panel-shared-tab-nav-state-v1), so each tab keeps its own view + search text.
+  const {
+    nav: { view, searchText },
+    setNav,
+    drop: dropNav,
+    clearAll: clearAllNav
+  } = usePerTabNav<SlackNav>(activeTabId, SLACK_NAV_DEFAULT)
+  const setView = useCallback((view: View) => setNav((prev) => ({ ...prev, view })), [setNav])
+  const setSearchText = useCallback(
+    (searchText: string) => setNav((prev) => ({ ...prev, searchText })),
+    [setNav]
+  )
+  // Closing a tab also drops its per-tab native-base nav entry so the map never leaks
+  // state for tabs that no longer exist (bug panel-shared-tab-nav-state-v1).
+  const handleCloseTab = useCallback(
+    (tabId: string) => {
+      dropNav(tabId)
+      closeTab(tabId)
+    },
+    [dropNav, closeTab]
+  )
   // Tab keyboard shortcuts act on THIS strip only while the Slack surface is active.
-  useTabShortcuts({ active, tabs, activeTabId, onActivate: setActive, onNewTab: newTab, onCloseTab: closeTab })
+  useTabShortcuts({ active, tabs, activeTabId, onActivate: setActive, onNewTab: newTab, onCloseTab: handleCloseTab })
   // The native channel/search browser is the base shown not only at zero tabs but also
   // whenever the active tab has not composed a surface yet (a fresh `+` "Untitled" tab),
   // so a new tab lands on the same base screen instead of a blank panel.
@@ -769,8 +803,12 @@ export function SlackPanel({ active }: { active: boolean }): React.JSX.Element {
   const nameCache = useRef<Map<string, string>>(new Map())
 
   // A generated channel-row click navigates to that channel's native conversation
-  // view. Handled renderer-locally (never sent to main); leaves the generative tab by
-  // closing it so the native browser shows the channel (read-only preserved, FR-020).
+  // view. Handled renderer-locally (never sent to main). With PER-TAB nav state
+  // (bug panel-shared-tab-nav-state-v1) this opens the channel IN THE CURRENT tab —
+  // clear that tab's generative surface so its native base shows, and set its view to
+  // the channel history. (Previously this set the shared view then CLOSED the active
+  // tab, relying on the now-removed shared state to reveal the channel in the adjacent
+  // tab — that no longer makes sense per-tab.) Read-only preserved (FR-020).
   const handleSurfaceAction = useCallback(
     (action: A2UIAction): boolean => {
       if (action.name !== SLACK_OPEN_CHANNEL_ACTION) {
@@ -785,13 +823,14 @@ export function SlackPanel({ active }: { active: boolean }): React.JSX.Element {
           isMember: ctx.isMember === true
         }
         setView({ kind: 'history', channel })
+        // Clear this tab's surface so the native base (now on the channel view) shows.
         if (activeTabId) {
-          closeTab(activeTabId)
+          update(activeTabId, { surface: null, error: undefined })
         }
       }
       return true
     },
-    [activeTabId, closeTab]
+    [activeTabId, setView, update]
   )
 
   // Initial status + live updates (FR-007).
@@ -809,19 +848,23 @@ export function SlackPanel({ active }: { active: boolean }): React.JSX.Element {
     }
   }, [])
 
+  // A connection transition resets EVERY tab's native-base nav back to default
+  // (bug panel-shared-tab-nav-state-v1): while disconnected the connect call-to-action
+  // replaces the base entirely, so it is coherent to reset all tabs' base nav rather
+  // than leave stale per-tab drill-ins behind a reconnect.
   const connect = useCallback(async () => {
     setBusy(true)
     const next = await window.cosmos.slack.connect()
     setStatus(next)
     setBusy(false)
-    setView({ kind: 'channels' })
-  }, [])
+    clearAllNav()
+  }, [clearAllNav])
 
   const disconnect = useCallback(async () => {
     const next = await window.cosmos.slack.disconnect()
     setStatus(next)
-    setView({ kind: 'channels' })
-  }, [])
+    clearAllNav()
+  }, [clearAllNav])
 
   /**
    * Re-sync the connection status (used when a read reports reconnect_needed). The
@@ -831,8 +874,8 @@ export function SlackPanel({ active }: { active: boolean }): React.JSX.Element {
   const refreshStatus = useCallback(async () => {
     const next = await window.cosmos.slack.getStatus()
     setStatus(next)
-    setView({ kind: 'channels' })
-  }, [])
+    clearAllNav()
+  }, [clearAllNav])
 
   /** Resolve author ids to display names with a cache + raw-id fallback (FR-014). */
   const resolveNames = useCallback(async (messages: SlackMessage[]): Promise<SlackMessage[]> => {
@@ -885,8 +928,9 @@ export function SlackPanel({ active }: { active: boolean }): React.JSX.Element {
         tabs={stripTabs}
         activeTabId={activeTabId}
         onActivate={setActive}
-        onClose={closeTab}
+        onClose={handleCloseTab}
         onNewTab={newTab}
+        onRename={(id, label) => update(id, { label, renamed: true, untitled: false })}
         ariaLabel="Slack tabs"
       />
 
@@ -1061,6 +1105,8 @@ export function SlackPanel({ active }: { active: boolean }): React.JSX.Element {
 
       {/* Connection bar is the panel footer (Terminal-unified layout). */}
       <PanelFooter
+        surfaceName="Slack"
+        icon={MessageSquare}
         activeTab={activeStripTab}
         right={<ConnectionStatus status={status} onDisconnect={() => void disconnect()} />}
       />

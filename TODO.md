@@ -53,6 +53,17 @@ _None._
   and `jira.*` write re-push file into the right tab; PanelTabStrip keyboard a11y. All
   unverified at runtime.
 
+- [ ] Manual GUI verification of **terminal tab numbering** (bug `terminal-tab-index-skip-v1`) via
+  `npm run dev` (renderer-only, HMR — but the StrictMode double-invoke only manifests in dev): seed
+  tab reads "Terminal 1", first `+` → "Terminal 2" (NOT "Terminal 3"), next `+` → "Terminal 3"; close
+  a middle terminal and the counter still climbs monotonically (no renumber). Logic is locked by the
+  idempotence cases in `panelTabs.test.ts`; the live dev launch was not exercised by the agent.
+- [ ] Manual GUI verification of **per-tab native-base nav** (bug `panel-shared-tab-nav-state-v1`) via
+  `npm run dev` (renderer-only, HMR — OAuth-gated): with Slack/Confluence connected, drill into a
+  channel/page/search in one tab, open a `+` tab → the new tab shows its own fresh base (channel list /
+  default feed), NOT the first tab's drill-in; two tabs hold independent nav simultaneously; a
+  generated Slack channel-row click opens that channel IN the current tab; disconnect/reconnect resets
+  all tabs' base. Logic is locked by `perTabNav.test.ts`; the connected flow is unverified at runtime.
 - [ ] Manual GUI verification of the **Slack + Confluence generative panels** via `npm run dev`
   (OAuth-gated): utterance → composed A2UI surface from REAL fetched data (channels/history/threads
   for Slack; content search/page detail for Confluence); not-connected → single Notice; the spinner
@@ -96,6 +107,32 @@ _None._
 
 ## Done
 
+- [x] **Terminal tab index skip** (bug `terminal-tab-index-skip-v1`) — the Terminal panel's first `+`
+  tab opened as "Terminal 3" instead of "Terminal 2". NOT the user's hypothesized background gen-UI
+  terminal (the Generated UI surface is a headless `AgentRunner`, not a PTY — nothing consumes an
+  index); the real cause was an IMPURE `useState` lazy initializer that advanced the monotonic
+  `everOpened` ref, which React StrictMode double-invokes in dev (the ref advanced twice for one seed
+  tab). Fixed by making the seed referentially pure: new pure helper `seedTerminalIndex()`→1 in
+  `panelTabs.ts`, counter initialized AT the seed index (`useRef(seedTerminalIndex())`), seed tab
+  labelled directly via `terminalLabel(seedTerminalIndex())` with no `mintTab()` in the initializer;
+  `mintTab()` advances only from event handlers / the empty-refill effect. Pure helpers untouched;
+  monotonic close/reopen numbering preserved. Renderer-only, no contract change. 649 tests green (3
+  new idempotence cases in `panelTabs.test.ts`), typecheck clean. Bug report
+  `.sdd/bugs/terminal-tab-index-skip-v1.md`; CLAUDE.md StrictMode-purity gotcha added. GUI
+  verification pending (dev-only manifestation).
+- [x] **Per-tab native-base nav** (bug `panel-shared-tab-nav-state-v1`) — Slack & Confluence panels
+  shared ONE native-base browser nav across all tabs (a drill-in in one tab bled into every other);
+  fixed by holding the nav PER-TAB keyed by tab id via a new pure helper `src/renderer/perTabNav.ts`
+  (`getNav`/`setNav`/`dropNav`/`clearAllNav`, node-tested) + `usePerTabNav.ts` hook, reused by both
+  panels. Connection transitions `clearAllNav()` (reset all tabs); tab-close drops the entry; Slack's
+  generated channel-row click now opens the channel IN the current tab (set view + clear surface)
+  instead of close-active-tab. Renderer-only, no contract change. 646 tests green (11 new
+  `perTabNav.test.ts`), typecheck clean. Bug report `.sdd/bugs/panel-shared-tab-nav-state-v1.md`;
+  CLAUDE.md gotcha added. GUI verification pending (OAuth-gated).
+- [x] **`bugfix` skill** — added `.claude/skills/bugfix/SKILL.md` + `bug_report_template.md`: a defect
+  cycle parallel to `sdd` (triage → scope-gate → classify & route to designer/developer/architect →
+  root-cause → fix → regression test → verify → wrap-up). After triage a scope-gate escalates large
+  fixes to `sdd`. Bug reports live at `.sdd/bugs/<bug>-v<N>.md`. CLAUDE.md Workflow updated.
 - [x] **Jira ticket detail on click v1** (`jira-ticket-detail-v1`) — clicking a `TicketCard` in the
   Jira `IssueList` opens that ticket's full detail IN-PLACE in the active tab, with a native
   "← Back to list" row (Confluence `ChevronLeft` precedent) that re-runs the originating read (default
