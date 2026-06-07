@@ -25,7 +25,7 @@ function makeFakeStore(initial: StoredTokenSet | null = null, expired = false) {
 const connectedTokens: StoredTokenSet = {
   accessToken: 'at-1',
   refreshToken: 'rt-1',
-  scopes: ['read:confluence-content.all', 'offline_access'],
+  scopes: ['read:page:confluence', 'read:space:confluence', 'search:confluence', 'offline_access'],
   accountName: 'acme.atlassian.net',
   extra: { cloudId: 'cloud-9', siteName: 'acme.atlassian.net' }
 }
@@ -34,7 +34,7 @@ const oauthOk = async (): Promise<AtlassianOAuthResult> => ({
   accessToken: 'at-1',
   refreshToken: 'rt-1',
   expiresAtMs: Date.now() + 3_600_000,
-  scopes: ['read:confluence-content.all', 'offline_access'],
+  scopes: ['read:page:confluence', 'read:space:confluence', 'search:confluence', 'offline_access'],
   cloudId: 'cloud-9',
   siteName: 'acme.atlassian.net'
 })
@@ -51,7 +51,7 @@ function makeClient(overrides?: Partial<ConfluenceClient>): ConfluenceClient {
 
 const writeTokens: StoredTokenSet = {
   ...connectedTokens,
-  scopes: ['read:confluence-content.all', 'write:confluence-content', 'offline_access']
+  scopes: ['read:page:confluence', 'write:page:confluence', 'offline_access']
 }
 
 const refreshOk = async (): Promise<TokenExchangeResult> => ({

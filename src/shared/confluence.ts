@@ -189,8 +189,8 @@ export interface ConfluenceCreateResult {
   title: string
 }
 
-/** The single OAuth scope a Confluence page-create requires (granular fallback: `write:page:confluence`). */
-export const CONFLUENCE_WRITE_SCOPE = 'write:confluence-content'
+/** The single (granular) OAuth scope a Confluence page-create requires. */
+export const CONFLUENCE_WRITE_SCOPE = 'write:page:confluence'
 
 /** User-facing message when a create is attempted without the write scope (reconnect to grant it). */
 export const CONFLUENCE_WRITE_NOT_AUTHORIZED_MESSAGE =

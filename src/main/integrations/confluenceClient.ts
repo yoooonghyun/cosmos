@@ -12,9 +12,13 @@
  * transient `network` errors so both surfaces degrade gracefully (FR-X07, SC-010).
  *
  * Endpoints (plan §C):
- *   search: GET {base}/wiki/rest/api/search?cql=…&cursor=…      (v1 CQL search)
+ *   search: GET {base}/wiki/rest/api/search?cql=…&cursor=…       (v1 CQL search)
  *   page:   GET {base}/wiki/api/v2/pages/{id}?body-format=storage (v2 page read)
- * where `base = https://api.atlassian.com/ex/confluence/{cloudId}`.
+ * where `base = https://api.atlassian.com/ex/confluence/{cloudId}`. The page read uses
+ * v2 because the connection now requests GRANULAR scopes (`read:page:confluence`),
+ * which authorize the v2 API; the classic content scopes are granted on a
+ * granular-migrated app but 401 ("scope does not match") on the content endpoints. The
+ * CQL search stays on v1 under `search:confluence` (still honored).
  */
 
 import type {
@@ -227,8 +231,12 @@ export class ConfluenceClient {
   }
 
   /**
-   * Read one page's detail (FR-C04). GET /wiki/api/v2/pages/{id}?body-format=storage.
-   * The storage body is flattened to plain text (no macro rendering — design Q2).
+   * Read one page's detail (FR-C04). GET
+   * /wiki/api/v2/pages/{id}?body-format=storage — the v2 read, authorized by the
+   * granular `read:page:confluence` scope (the classic `read:confluence-content.all`
+   * scope is deprecated and no longer honored by the content endpoints → 401 "scope
+   * does not match"). The storage body is flattened to plain text (no macro rendering —
+   * design Q2). v2 returns only a numeric `spaceId`, surfaced as the space chip.
    */
   async getPage(
     auth: ConfluenceCallAuth,
@@ -243,10 +251,9 @@ export class ConfluenceClient {
     }
     const body = isRecord(r.body.body) ? r.body.body : {}
     const storage = isRecord(body.storage) ? body.storage : {}
-    // v2 returns the space as an id; the space name is not inlined, so we surface
-    // a spaceId chip when present (v1 keeps the resolution simple — design §5.1).
+    // v2 returns only a numeric spaceId (no expanded space object); surface it as-is.
     const spaceId =
-      typeof r.body.spaceId === 'string'
+      typeof r.body.spaceId === 'string' && r.body.spaceId !== ''
         ? r.body.spaceId
         : typeof r.body.spaceId === 'number'
           ? String(r.body.spaceId)

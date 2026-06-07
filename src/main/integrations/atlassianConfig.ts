@@ -38,18 +38,22 @@ export const JIRA_OAUTH_SCOPES = [
 ]
 
 /**
- * Confluence scopes. Classic 3LO read scopes plus exactly one write scope —
- * `write:confluence-content` — for the page-create tool (least privilege). If the
- * registered app is forced onto granular scopes, substitute `read:page:confluence` +
- * `read:space:confluence` for the reads and `write:page:confluence` for the write (one
- * edit). `offline_access` enables refresh (FR-A09). Adding the write scope forces an
- * existing connection to disconnect + reconnect to re-consent.
+ * Confluence scopes — GRANULAR. Atlassian's classic content scopes
+ * (`read:confluence-content.all` etc.) are granted on a granular-migrated app but no
+ * longer authorize the content REST endpoints, which 401 with "scope does not match";
+ * only granular scopes work (the v1 CQL search still works under `search:confluence`,
+ * which is why search succeeds while a page read fails). So reads use
+ * `read:page:confluence` (v2 page read) + `read:space:confluence` (space-key→id lookup
+ * for create) and the single write uses `write:page:confluence`. `search:confluence`
+ * stays for the CQL search. `offline_access` enables refresh (FR-A09). Changing the
+ * scope set forces an existing connection to disconnect + reconnect to re-consent, and
+ * the registered app must have these granular scopes enabled in the Atlassian console.
  */
 export const CONFLUENCE_OAUTH_SCOPES = [
-  'read:confluence-content.all',
-  'read:confluence-space.summary',
+  'read:page:confluence',
+  'read:space:confluence',
   'search:confluence',
-  'write:confluence-content',
+  'write:page:confluence',
   'offline_access'
 ]
 

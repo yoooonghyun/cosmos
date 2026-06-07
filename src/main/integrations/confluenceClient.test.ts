@@ -102,7 +102,7 @@ describe('ConfluenceClient.getPage (FR-C04)', () => {
       return res({
         id: '12345',
         title: 'Runbook',
-        spaceId: '777',
+        spaceId: 777,
         body: { storage: { value: '<p>Step one.</p><p>Step two.</p>' } }
       })
     }
