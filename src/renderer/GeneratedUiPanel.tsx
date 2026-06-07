@@ -1,152 +1,210 @@
 /**
- * GeneratedUiPanel — cosmos PoC milestone 2.
+ * GeneratedUiPanel — now TABBED (panel-tabs v1, Track B / Phase 6).
  *
- * Renders A2UI surfaces pushed by the render_ui MCP tool and returns the user's
- * interaction so Claude can continue reasoning.
+ * The panel hosts an independent ordered set of VS Code-style tabs (FR-001). Each
+ * tab owns its own A2UI surface; the panel mounts ONLY the active tab's
+ * `<A2UIProvider>` + renderer subtree (inactive tabs keep their surface spec in hook
+ * state, re-processed on switch — FR-003 — so we never mount N providers fighting
+ * over the one `ui:render` channel). With zero tabs the panel shows its idle
+ * placeholder (FR-018); the composer is always present (FR-016).
  *
- * Spec trace:
- *   FR-005 render the pushed A2UI spec via the A2UI React SDK
- *   FR-006 capture the user's action (+values) and send it back over IPC
- *   FR-009 a dismiss/cancel affordance resolves the call explicitly
- *   FR-012 echo the surface's requestId so the right pending call resolves
- *   FR-014 single active surface; a new render replaces the current one
- *   SC-005 a malformed/failed render shows a safe fallback, no crash
- *   SC-007 lives beside the Terminal Panel; the TUI stream is untouched
+ * The originating-tab correlation (FR-012/012a/013/014/015/027) lives in the shared
+ * `useGenerativePanelTabs` hook; this component is chrome (strip + idle placeholder)
+ * + composer. `cancelOnClose: true` because a `generated-ui` render_ui call BLOCKS
+ * in main awaiting the user's action (CLAUDE.md), so closing its tab must cancel.
+ *
+ * Spec trace carried forward (render-ui-v1): FR-005 render spec, FR-006 send action,
+ * FR-009 cancel (now via tab close), FR-012 requestId echo, SC-005 malformed → safe.
  */
 
-import { useEffect, useRef, useState } from 'react'
 import {
-  A2UIProvider,
-  A2UIRenderer,
-  useA2UIMessageHandler,
-  type A2UIAction,
-  type A2UIMessage
-} from '@a2ui-sdk/react/0.8'
-import type { UiRenderPayload } from '../shared/ipc'
-import './GeneratedUiPanel.css'
-
-/** The currently-displayed surface, or null when the panel is idle. */
-interface ActiveSurface {
-  requestId: string
-  /** Set when the surface could not be rendered, for a safe fallback (SC-005). */
-  error?: string
-}
+  useEffect,
+  useState,
+  type FormEvent,
+  type KeyboardEvent
+} from 'react'
+import { A2UIProvider } from '@a2ui-sdk/react/0.9'
+import { Loader2 } from 'lucide-react'
+import type { AgentStatusPayload } from '../shared/ipc'
+import { Button } from '@/components/ui/button'
+import { Textarea } from '@/components/ui/textarea'
+import { PanelTabStrip, type PanelTab } from './PanelTabStrip'
+import { ActiveTabSurface } from './ActiveTabSurface'
+import { useGenerativePanelTabs } from './useGenerativePanelTabs'
 
 /**
- * Inner bridge component (must live inside A2UIProvider to use the message-handler
- * hook). Subscribes to `ui:render`, feeds surfaces to the SDK, and maps SDK
- * actions back to the cosmos `ui:action` contract.
+ * Bottom-docked composer. Submitting calls `onSubmit(utterance)` (the panel hook owns
+ * the originating-tab bookkeeping + agent.submit) and reflects app-wide run status.
  */
-function SurfaceBridge({
-  active,
-  setActive
-}: {
-  active: ActiveSurface | null
-  setActive: (s: ActiveSurface | null) => void
-}): React.JSX.Element {
-  const { processMessage, clear } = useA2UIMessageHandler()
-  // The active requestId, read by the action handler without re-subscribing.
-  const requestIdRef = useRef<string | null>(null)
-  requestIdRef.current = active?.requestId ?? null
+function PromptComposer({ onSubmit }: { onSubmit: (utterance: string) => void }): React.JSX.Element {
+  const [value, setValue] = useState('')
+  const [running, setRunning] = useState(false)
+  const [error, setError] = useState<string | null>(null)
 
   useEffect(() => {
-    // FR-004/FR-005: render each pushed surface. FR-014: a new surface replaces
-    // the current one (clear, then process the new surfaceUpdate).
-    const off = window.cosmos.ui.onRender((payload: UiRenderPayload) => {
-      try {
-        clear()
-        const surfaceId = payload.spec.surfaceId
-        // The SDK needs a beginRendering before the surfaceUpdate to initialize
-        // the surface; the render_ui arg is just the surfaceUpdate, so synthesize
-        // beginRendering from it (plan Resolved Q2).
-        const begin: A2UIMessage = {
-          beginRendering: { surfaceId, root: payload.spec.components[0]?.id ?? surfaceId }
-        }
-        const update: A2UIMessage = { surfaceUpdate: payload.spec }
-        processMessage(begin)
-        processMessage(update)
-        setActive({ requestId: payload.requestId })
-      } catch (err) {
-        // SC-005: a bad spec must degrade gracefully, never crash the panel.
-        setActive({
-          requestId: payload.requestId,
-          error: err instanceof Error ? err.message : 'failed to render surface'
-        })
+    const off = window.cosmos.agent.onStatus((status: AgentStatusPayload) => {
+      switch (status.state) {
+        case 'started':
+          setRunning(true)
+          setError(null)
+          break
+        case 'completed':
+          setRunning(false)
+          break
+        case 'error':
+          setRunning(false)
+          setError(status.message ?? 'The run failed.')
+          break
       }
     })
     return off
-  }, [processMessage, clear, setActive])
+  }, [])
 
-  // FR-006: map an SDK action to the cosmos ui:action `submit` contract.
-  const handleAction = (action: A2UIAction): void => {
-    const requestId = requestIdRef.current
-    if (!requestId) {
+  const submit = (): void => {
+    if (running || value.trim().length === 0) {
       return
     }
-    window.cosmos.ui.sendAction({
-      requestId,
-      action: {
-        type: 'submit',
-        // SDK action name identifies which control fired; context carries values.
-        actionId: action.name,
-        values: action.context
-      }
-    })
-    setActive(null)
-    clear()
+    onSubmit(value)
+    setRunning(true)
+    setError(null)
+    setValue('')
   }
 
-  return <A2UIRenderer onAction={handleAction} />
-}
+  const handleSubmit = (event: FormEvent<HTMLFormElement>): void => {
+    event.preventDefault()
+    submit()
+  }
 
-/**
- * Mountable panel. Owns the active-surface state and the cancel affordance so the
- * cancel path (FR-009) is cosmos chrome, independent of any SDK event.
- */
-export function GeneratedUiPanel(): React.JSX.Element {
-  const [active, setActive] = useState<ActiveSurface | null>(null)
-
-  const handleCancel = (): void => {
-    if (!active) {
-      return
+  const handleKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>): void => {
+    if (event.key === 'Enter' && !event.shiftKey) {
+      event.preventDefault()
+      submit()
     }
-    // FR-009: explicit cancel — resolve the call as cancelled, never empty/hang.
-    window.cosmos.ui.sendAction({
-      requestId: active.requestId,
-      action: { type: 'cancel' }
-    })
-    setActive(null)
   }
+
+  const canSubmit = !running && value.trim().length > 0
 
   return (
-    <section className="ui-panel" aria-label="Generated UI">
-      <div className="ui-panel__header">
-        <span className="ui-panel__title">Generated UI</span>
-        {active && (
-          <button
-            type="button"
-            className="ui-panel__dismiss"
-            onClick={handleCancel}
-            title="Dismiss this surface"
-          >
-            Dismiss
-          </button>
-        )}
+    <form
+      className="shrink-0 border-t border-border bg-popover px-3 py-3"
+      aria-label="Compose generated UI"
+      onSubmit={handleSubmit}
+    >
+      <Textarea
+        value={value}
+        onChange={(e) => setValue(e.target.value)}
+        onKeyDown={handleKeyDown}
+        disabled={running}
+        placeholder="Describe the UI you want…"
+        aria-label="Describe the UI you want"
+        className="max-h-[9rem] min-h-[2.5rem] resize-none"
+      />
+      {error && (
+        <p
+          className="mt-2 rounded-md border border-destructive/40 bg-destructive/15 px-2.5 py-2 text-[13px] text-destructive"
+          role="alert"
+        >
+          Couldn&apos;t generate that UI: {error}
+        </p>
+      )}
+      <div className="mt-2 flex items-center justify-between">
+        <span className="text-[11px] text-muted-foreground" role="status" aria-live="polite">
+          {running ? (
+            <span className="inline-flex items-center gap-1.5 text-primary">
+              <Loader2 className="size-3.5 animate-spin" aria-hidden="true" />
+              <span className="text-muted-foreground">Generating…</span>
+            </span>
+          ) : (
+            'Enter to send · Shift+Enter for newline'
+          )}
+        </span>
+        <Button
+          type="submit"
+          variant="default"
+          size="sm"
+          disabled={!canSubmit}
+          aria-label={running ? 'Generating' : 'Send'}
+        >
+          {running ? (
+            <>
+              <Loader2 className="size-3.5 animate-spin" aria-hidden="true" />
+              Generating…
+            </>
+          ) : (
+            'Send'
+          )}
+        </Button>
       </div>
-      <div className="ui-panel__body">
-        {!active && (
-          <p className="ui-panel__empty">Claude has not rendered any UI yet.</p>
-        )}
-        {active?.error && (
-          <p className="ui-panel__error" role="alert">
-            Could not render this surface: {active.error}
+    </form>
+  )
+}
+
+export function GeneratedUiPanel(): React.JSX.Element {
+  const { tabs, activeTabId, activeTab, setActive, submit, newTab, closeTab } =
+    useGenerativePanelTabs({ target: 'generated-ui', cancelOnClose: true })
+  // The idle placeholder is the base shown not only at zero tabs but also whenever the
+  // active tab has not composed a surface yet (a fresh `+` "Untitled" tab), so a new tab
+  // lands on the same base screen instead of a blank panel.
+  const showBase = !activeTab || (!activeTab.surface && !activeTab.error)
+
+  const stripTabs: PanelTab[] = tabs.map((t) => ({
+    id: t.id,
+    label: t.label,
+    kind: 'generative' as const,
+    status: t.inFlight ? 'in-flight' : t.error ? 'error' : 'idle',
+    untitled: t.untitled,
+    ...(t.error ? { errorMessage: t.error } : {})
+  }))
+
+  return (
+    <section
+      className="flex h-full min-w-0 flex-col border-l border-border bg-card"
+      aria-label="Generated UI"
+    >
+      <div className="flex select-none items-center border-b border-border bg-popover px-3 py-2">
+        <span className="text-xs font-semibold tracking-wide text-muted-foreground">
+          Generated UI
+        </span>
+      </div>
+
+      <PanelTabStrip
+        tabs={stripTabs}
+        activeTabId={activeTabId}
+        onActivate={setActive}
+        onClose={closeTab}
+        onNewTab={newTab}
+        ariaLabel="Generated UI tabs"
+      />
+
+      <div className="min-h-0 flex-1 overflow-auto p-3 text-card-foreground" role="tabpanel">
+        {showBase && (
+          // FR-018: idle placeholder when zero tabs are open or the active tab is empty.
+          <p className="text-[13px] text-muted-foreground">
+            Describe a UI below and Claude will build it here.
           </p>
         )}
-        {/* The provider/renderer stay mounted so surfaces render in place. */}
-        <A2UIProvider>
-          <SurfaceBridge active={active} setActive={setActive} />
-        </A2UIProvider>
+        {activeTab?.error && (
+          <p
+            className="rounded-md border border-destructive/40 bg-destructive/15 px-2.5 py-2 text-[13px] text-destructive"
+            role="alert"
+          >
+            Could not generate that UI: {activeTab.error}
+          </p>
+        )}
+        {/* Only the ACTIVE tab's provider is mounted; keyed by tab id so a switch
+            remounts + re-processes that tab's stored surface (FR-003). */}
+        {activeTab && (activeTab.surface || activeTab.error) && (
+          <A2UIProvider key={activeTab.id}>
+            <ActiveTabSurface
+              surface={activeTab.surface}
+              catalogId="standard"
+              panelName="GeneratedUiPanel"
+            />
+          </A2UIProvider>
+        )}
       </div>
+
+      <PromptComposer onSubmit={submit} />
     </section>
   )
 }

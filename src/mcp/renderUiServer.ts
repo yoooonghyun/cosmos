@@ -35,6 +35,16 @@ function projectDir(): string {
 }
 
 /**
+ * Absolute path to the main-process bridge socket. cosmos runs the embedded
+ * `claude` in an isolated sandbox cwd, so it threads the socket path explicitly
+ * via COSMOS_BRIDGE_SOCKET; we fall back to deriving it from the project dir for
+ * a manual run from the project root.
+ */
+function resolveSocketPath(): string {
+  return process.env['COSMOS_BRIDGE_SOCKET'] || bridgeSocketPath(projectDir())
+}
+
+/**
  * A connection to the Electron main bridge. Frames are newline-delimited JSON.
  * Tracks awaiting tool calls by `callId` and resolves them when main responds.
  */
@@ -128,6 +138,76 @@ class BridgeClient {
   }
 }
 
+/**
+ * The render_ui tool description. It teaches the model the A2UI 0.9 component
+ * format so it emits a surface the 0.9 renderer accepts — without this guidance
+ * the model guesses a shape and the renderer reports "Unknown component type".
+ *
+ * Key 0.9 facts encoded below: components is a FLAT list (not a tree); each
+ * component is `{ id, component: "<Type>", ...props }` where `component` is a
+ * STRING type name (not a nested object); parents reference children by id
+ * string; exactly one root (the component nothing else references, or id "root").
+ *
+ * CRITICAL — data binding: every interactive input's `value` MUST be a path
+ * binding `{ "path": "/field" }`, NOT a literal. The SDK's form binding only
+ * writes the user's input back into the surface's data model when `value` is a
+ * path binding; with a literal (or omitted) `value` a dropdown/field selection
+ * does not stick AND no value is returned. The submit Button then echoes those
+ * same paths through `action.context` so the captured values come back.
+ */
+const A2UI_TOOL_DESCRIPTION = [
+  'Render a rich, interactive UI surface in the cosmos Generated-UI panel and',
+  "return the user's interaction. Use this whenever a request is best answered",
+  'with a form, list, card, choices, or other interactive UI rather than text.',
+  '',
+  'ARGUMENT: { spec: { surfaceId: string, components: Component[] } } — A2UI 0.9.',
+  '',
+  'components is a FLAT array (not nested). Each Component is:',
+  '  { "id": "<unique-string>", "component": "<TypeName>", ...props }',
+  '"component" is a STRING type name (e.g. "Text"), NOT a nested object.',
+  'Parents reference children by their id string. Exactly ONE component must be',
+  'the root: either give it "id": "root", or make it the only component that no',
+  'other component references.',
+  '',
+  'DATA BINDING (important): every interactive input MUST bind its "value" to a',
+  'data-model path written as { "path": "/fieldName" } — NOT a literal. Without a',
+  'path binding the control will not capture the user input (a dropdown choice',
+  'will not even stay selected) and nothing is returned. Then set the submit',
+  "Button's action.context to echo those paths so you receive the values, e.g.",
+  '  "action": { "name": "submit", "context": { "choice": { "path": "/choice" } } }',
+  '',
+  'Available component types and their props:',
+  '  Text   { text: string, variant?: "h1"|"h2"|"h3"|"h4"|"h5"|"body"|"caption" }',
+  '  Image  { url: string }   Icon { name: string }   Divider {}',
+  '  Column { children: string[] /* child ids */, justify?, align? }',
+  '  Row    { children: string[] /* child ids */, justify?, align? }',
+  '  List   { children: string[] }   Card { child: string /* child id */ }',
+  '  Button { child: string /* id, usually a Text */, primary?: boolean,',
+  '           action: { name: string, context?: { <key>: { path: string } } } }',
+  '  TextField { label?: string, value: { path: string },',
+  '              variant?: "shortText"|"longText"|"number"|"obscured" }',
+  '  CheckBox  { label?: string, value: { path: string } }',
+  '  ChoicePicker { label?: string, value: { path: string },',
+  '                 options: [{ value: string, label: string }],',
+  '                 variant?: "multipleSelection"|"mutuallyExclusive" }',
+  '  Slider { value: { path: string } }   DateTimeInput { value: { path: string } }',
+  '',
+  'Make at least one Button so the user can submit; its action.name identifies',
+  'which control fired and is returned to you. Example (a single-choice poll):',
+  '{ "surfaceId": "s1", "components": [',
+  '  { "id": "root", "component": "Column", "children": ["title", "pick", "send"] },',
+  '  { "id": "title", "component": "Text", "text": "Pick one", "variant": "h2" },',
+  '  { "id": "pick", "component": "ChoicePicker", "variant": "mutuallyExclusive",',
+  '    "value": { "path": "/choice" },',
+  '    "options": [ { "value": "a", "label": "Option A" },',
+  '                 { "value": "b", "label": "Option B" } ] },',
+  '  { "id": "send", "component": "Button", "primary": true, "child": "sendLbl",',
+  '    "action": { "name": "submit", "context": { "choice": { "path": "/choice" } } } },',
+  '  { "id": "sendLbl", "component": "Text", "text": "Submit" } ] }',
+  '',
+  'Resolves with the user action, or an explicit cancellation if dismissed.'
+].join('\n')
+
 /** Human-readable summary of the resolved action for the text tool result. */
 function describeAction(action: A2uiAction): string {
   if (action.type === 'cancel') {
@@ -139,18 +219,14 @@ function describeAction(action: A2uiAction): string {
 }
 
 async function main(): Promise<void> {
-  const bridge = new BridgeClient(bridgeSocketPath(projectDir()))
+  const bridge = new BridgeClient(resolveSocketPath())
   const server = new McpServer({ name: 'cosmos-render-ui', version: '0.1.0' })
 
   server.registerTool(
     'render_ui',
     {
       title: 'Render UI',
-      description:
-        'Render a rich, interactive A2UI surface in the cosmos Generated-UI panel ' +
-        'and return the user\'s interaction. The argument is an A2UI surfaceUpdate ' +
-        '(a surfaceId plus a list of components). Resolves with the user action, or ' +
-        'an explicit cancellation if the user dismisses the surface.',
+      description: A2UI_TOOL_DESCRIPTION,
       inputSchema: {
         // FR-001: single argument, an A2UI surfaceUpdate. Structurally validated
         // here at the boundary by validateSurfaceUpdate (FR-003); zod keeps the

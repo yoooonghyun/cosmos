@@ -4,5 +4,9 @@ dist/
 *.log
 .DS_Store
 .vite/
+.codegraph/
 *.tsbuildinfo
 .cosmos-render-ui.sock
+.env
+.env.*
+!.env.example

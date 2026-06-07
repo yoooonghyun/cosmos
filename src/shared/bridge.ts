@@ -15,12 +15,15 @@
  *   M->S  main -> entry script (the user's resolved action, to return as result)
  */
 
-import type { A2uiAction, A2uiSurfaceUpdate } from './ipc'
+import type { A2uiAction, A2uiSurfaceUpdate, UiRenderTarget } from './ipc'
+import type { SlackOpName, SlackResult } from './slack'
+import type { JiraOpName, JiraResult } from './jira'
+import type { ConfluenceOpName, ConfluenceResult } from './confluence'
 
 /**
- * Resolve the bridge socket path. Derived from the project dir so the spawned
- * entry script (which Claude Code launches with `CLAUDE_PROJECT_DIR` set) and
- * Electron main agree without configuration. Unix domain socket on macOS/Linux.
+ * Resolve the render_ui bridge socket path. Derived from the project dir so the
+ * spawned entry script (which Claude Code launches with `CLAUDE_PROJECT_DIR` set)
+ * and Electron main agree without configuration. Unix domain socket on macOS/Linux.
  *
  * @param projectDir absolute project root (main: `process.cwd()`; entry script:
  *   `CLAUDE_PROJECT_DIR` || `process.cwd()`).
@@ -29,6 +32,33 @@ export function bridgeSocketPath(projectDir: string): string {
   // A fixed name under the project dir keeps both ends in sync. Kept short to
   // stay within the platform's sun_path limit.
   return `${projectDir}/.cosmos-render-ui.sock`
+}
+
+/**
+ * Resolve the Slack bridge socket path — a sibling to {@link bridgeSocketPath}
+ * (Slack integration v1, FR-018). The Slack MCP entry script connects here; main
+ * threads it explicitly via `COSMOS_SLACK_BRIDGE_SOCKET`.
+ */
+export function slackBridgeSocketPath(projectDir: string): string {
+  return `${projectDir}/.cosmos-slack.sock`
+}
+
+/**
+ * Resolve the Jira bridge socket path — a sibling to the Slack/render_ui sockets
+ * (Atlassian integration v1, FR-X01). The Jira MCP entry script connects here;
+ * main threads it explicitly via `COSMOS_JIRA_BRIDGE_SOCKET`.
+ */
+export function jiraBridgeSocketPath(projectDir: string): string {
+  return `${projectDir}/.cosmos-jira.sock`
+}
+
+/**
+ * Resolve the Confluence bridge socket path — a fully separate sibling socket
+ * (FR-X01, FR-A13). The Confluence MCP entry script connects here; main threads it
+ * via `COSMOS_CONFLUENCE_BRIDGE_SOCKET`.
+ */
+export function confluenceBridgeSocketPath(projectDir: string): string {
+  return `${projectDir}/.cosmos-confluence.sock`
 }
 
 /**
@@ -43,6 +73,13 @@ export interface BridgeRenderRequest {
   callId: string
   /** The A2UI surfaceUpdate spec passed to `render_ui`. */
   spec: A2uiSurfaceUpdate
+  /**
+   * Which panel should render the surface (Jira generative-UI v2, D1 / v2 FR-004,
+   * FR-011). The Jira-scoped `render_jira_ui` entry script stamps `'jira'`; the
+   * standard `render_ui` omits it. ABSENT ⇒ main treats it as `'generated-ui'`
+   * (backward-compatible — UiBridge defaults it). Non-secret.
+   */
+  target?: UiRenderTarget
 }
 
 /**
@@ -64,9 +101,134 @@ export type BridgeClientMessage = BridgeRenderRequest
 /** Any message main sends back to the entry script over the socket. */
 export type BridgeServerMessage = BridgeResultResponse
 
+/* ------------------------------------------------------------------------- *
+ * Slack bridge frames (sibling to render_ui; Slack integration v1, FR-018)
+ *
+ * The Slack MCP entry script (`src/mcp/slackMcpServer.ts`) connects to
+ * `src/main/slackBridge.ts`. Same NDJSON-over-socket framing as render_ui — this
+ * is the spec's "registry of MCP tools" generalization: two independent bridges
+ * share the framing, each owns its own pending-call state. A Slack call is
+ * request/result (main forwards to SlackManager and returns the typed result);
+ * there is no renderer round-trip, so main does not mint a separate id — the
+ * entry script's `callId` is the only correlation id.
+ * ------------------------------------------------------------------------- */
+
+/**
+ * S->M. The Slack MCP entry script asks main to run one read operation. `op`
+ * selects the SlackManager read; `params` is the operation's parameter object
+ * (validated at the boundary — FR-023). READ-ONLY: there is no mutate op (FR-019).
+ */
+export interface SlackBridgeCallRequest {
+  kind: 'slack_call'
+  /** Entry-script-side correlation id for this tool call. */
+  callId: string
+  /** Which read operation to run. */
+  op: SlackOpName
+  /** The operation's params (shape depends on `op`; validated in main). */
+  params: Record<string, unknown>
+}
+
+/**
+ * M->S. Main returns the typed `SlackResult` for a prior `slack_call`, so the
+ * entry script returns it as the MCP tool result. Always sent exactly once per
+ * `callId` (success, structured error, or disconnect — FR-020). Carries NO token
+ * (FR-021, SC-008).
+ */
+export interface SlackBridgeResultResponse {
+  kind: 'slack_result'
+  /** Echoes the `callId` from the matching SlackBridgeCallRequest. */
+  callId: string
+  /** The typed read result (success data or a structured SlackError). */
+  result: SlackResult<unknown>
+}
+
+/** Any message the Slack entry script sends to main over the socket. */
+export type SlackBridgeClientMessage = SlackBridgeCallRequest
+
+/** Any message main sends back to the Slack entry script over the socket. */
+export type SlackBridgeServerMessage = SlackBridgeResultResponse
+
+/* ------------------------------------------------------------------------- *
+ * Jira bridge frames (sibling to Slack; Atlassian integration v1, FR-X01)
+ *
+ * The Jira MCP entry script (`src/mcp/jiraMcpServer.ts`) connects to
+ * `src/main/jiraBridge.ts`. Same NDJSON-over-socket framing — its own pending-call
+ * state, its own socket. Request/result: main forwards to JiraManager and returns
+ * the typed `JiraResult`. The entry script's `callId` is the only correlation id.
+ * READ-ONLY: there is no mutate op (FR-J01). Carries NO token (FR-X02, SC-009).
+ * ------------------------------------------------------------------------- */
+
+/** S->M. The Jira MCP entry script asks main to run one read operation. */
+export interface JiraBridgeCallRequest {
+  kind: 'jira_call'
+  /** Entry-script-side correlation id for this tool call. */
+  callId: string
+  /** Which read operation to run. */
+  op: JiraOpName
+  /** The operation's params (shape depends on `op`; validated in main). */
+  params: Record<string, unknown>
+}
+
+/** M->S. Main returns the typed `JiraResult` for a prior `jira_call`. NO token. */
+export interface JiraBridgeResultResponse {
+  kind: 'jira_result'
+  /** Echoes the `callId` from the matching JiraBridgeCallRequest. */
+  callId: string
+  /** The typed read result (success data or a structured JiraError). */
+  result: JiraResult<unknown>
+}
+
+/** Any message the Jira entry script sends to main over the socket. */
+export type JiraBridgeClientMessage = JiraBridgeCallRequest
+
+/** Any message main sends back to the Jira entry script over the socket. */
+export type JiraBridgeServerMessage = JiraBridgeResultResponse
+
+/* ------------------------------------------------------------------------- *
+ * Confluence bridge frames (fully separate sibling; FR-X01, FR-A13)
+ *
+ * The Confluence MCP entry script (`src/mcp/confluenceMcpServer.ts`) connects to
+ * `src/main/confluenceBridge.ts`. Independent socket + pending-call state from
+ * Jira. READ-ONLY (FR-C01). Carries NO token (FR-X02, SC-009).
+ * ------------------------------------------------------------------------- */
+
+/** S->M. The Confluence MCP entry script asks main to run one read operation. */
+export interface ConfluenceBridgeCallRequest {
+  kind: 'confluence_call'
+  /** Entry-script-side correlation id for this tool call. */
+  callId: string
+  /** Which read operation to run. */
+  op: ConfluenceOpName
+  /** The operation's params (shape depends on `op`; validated in main). */
+  params: Record<string, unknown>
+}
+
+/** M->S. Main returns the typed `ConfluenceResult` for a prior call. NO token. */
+export interface ConfluenceBridgeResultResponse {
+  kind: 'confluence_result'
+  /** Echoes the `callId` from the matching ConfluenceBridgeCallRequest. */
+  callId: string
+  /** The typed read result (success data or a structured ConfluenceError). */
+  result: ConfluenceResult<unknown>
+}
+
+/** Any message the Confluence entry script sends to main over the socket. */
+export type ConfluenceBridgeClientMessage = ConfluenceBridgeCallRequest
+
+/** Any message main sends back to the Confluence entry script over the socket. */
+export type ConfluenceBridgeServerMessage = ConfluenceBridgeResultResponse
+
 /** Serialize a bridge message as one newline-delimited JSON frame. */
 export function encodeBridgeMessage(
-  message: BridgeClientMessage | BridgeServerMessage
+  message:
+    | BridgeClientMessage
+    | BridgeServerMessage
+    | SlackBridgeClientMessage
+    | SlackBridgeServerMessage
+    | JiraBridgeClientMessage
+    | JiraBridgeServerMessage
+    | ConfluenceBridgeClientMessage
+    | ConfluenceBridgeServerMessage
 ): string {
   return `${JSON.stringify(message)}\n`
 }

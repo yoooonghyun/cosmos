@@ -1,9 +1,14 @@
 /**
- * PTY Manager (Electron main process) — cosmos PoC milestone 1.
+ * PTY Manager (Electron main process) — multi-session (panel-tabs v1, Track A).
  *
  * Spawns the interactive `claude` CLI inside a pseudo-terminal via node-pty,
  * streams its raw output to the renderer, relays keyboard input and resize
  * events back into the PTY, detects exit, and supports restart.
+ *
+ * Each terminal tab is a DISTINCT live PTY session keyed by a renderer-minted
+ * `paneId` (panel-tabs v1, FR-021): the manager holds a `Map<paneId, IPty>` and
+ * routes start/write/resize/restart/kill by `paneId`. Sinks tag every event with
+ * its `paneId` so the renderer routes it to the matching xterm instance.
  *
  * Spec trace:
  *   FR-001 spawn `claude` via node-pty in main with a PTY
@@ -14,14 +19,23 @@
  *   FR-008 restart without restarting the app
  *   FR-009 start with the project root as cwd
  *   FR-010 inbound payloads are validated by callers (src/shared/validate.ts)
- *   Edge case: `claude` not found -> surface error, do not crash
+ *   panel-tabs v1 FR-021 one PTY per terminal tab, keyed by paneId
+ *   panel-tabs v1 FR-022 start a new pane's session
+ *   panel-tabs v1 FR-023 dispose a single pane's session (others unaffected)
+ *   panel-tabs v1 FR-025 each pane's session is independent
+ *   panel-tabs v1 FR-026 per-tab restart restarts only that pane's PTY
+ *   Edge case: `claude` not found -> surface per-pane error, do not crash
  */
 
 import * as pty from 'node-pty'
 import type { IPty } from 'node-pty'
 import { accessSync, constants } from 'node:fs'
 import { delimiter, isAbsolute, join } from 'node:path'
-import type { PtyDataPayload, PtyExitPayload, PtyResizePayload } from '../shared/ipc'
+import type {
+  PtyDataPayload,
+  PtyExitPayload,
+  PtyResizePayload
+} from '../shared/ipc'
 
 /** Sinks the manager pushes events into; wired to IPC by the caller. */
 export interface PtyManagerSinks {
@@ -52,7 +66,7 @@ const DEFAULT_ROWS = 24
  * unsure (PATH unset) so we never block a legitimate spawn — the spawn itself
  * remains the source of truth, with `onExit` as the fallback.
  */
-function isExecutableResolvable(command: string): boolean {
+export function isExecutableResolvable(command: string): boolean {
   const canExec = (p: string): boolean => {
     try {
       accessSync(p, constants.X_OK)
@@ -76,128 +90,171 @@ function isExecutableResolvable(command: string): boolean {
     .some((dir) => canExec(join(dir, command)))
 }
 
+/** One live terminal-tab session: its PTY plus its last-known dimensions. */
+interface PtySession {
+  proc: IPty
+  cols: number
+  rows: number
+}
+
 export class PtyManager {
-  private proc: IPty | null = null
+  /**
+   * One PTY per terminal tab, keyed by the renderer-minted `paneId` (panel-tabs
+   * v1, FR-021). Replaces the previous single `proc`.
+   */
+  private readonly sessions = new Map<string, PtySession>()
   private readonly sinks: PtyManagerSinks
   private readonly options: Required<Pick<PtyManagerOptions, 'cwd'>> &
     PtyManagerOptions
-  private cols: number
-  private rows: number
+  private readonly defaultCols: number
+  private readonly defaultRows: number
 
   constructor(sinks: PtyManagerSinks, options: PtyManagerOptions) {
     this.sinks = sinks
     this.options = options
-    this.cols = options.cols ?? DEFAULT_COLS
-    this.rows = options.rows ?? DEFAULT_ROWS
+    this.defaultCols = options.cols ?? DEFAULT_COLS
+    this.defaultRows = options.rows ?? DEFAULT_ROWS
   }
 
-  /** True when a live PTY process is attached. */
-  get isRunning(): boolean {
-    return this.proc !== null
+  /** True when a live PTY process is attached for `paneId` (panel-tabs v1, FR-021). */
+  isRunning(paneId: string): boolean {
+    return this.sessions.has(paneId)
   }
 
   /**
-   * Spawn the `claude` process (FR-001, FR-009). If a process is already
-   * running it is killed first so restart reuses the same panel (FR-008).
-   * If the binary cannot be found, emits an exit event with an `error` rather
-   * than throwing (edge case: do not crash).
+   * Spawn the `claude` process for `paneId` (FR-001, FR-009; panel-tabs v1
+   * FR-021/FR-022). If a process is already running for this pane it is killed
+   * first so restart reuses the same tab (FR-008/FR-026) — other panes are never
+   * touched. If the binary cannot be found, emits a per-pane exit event with an
+   * `error` rather than throwing (edge case: do not crash).
    */
-  start(): void {
-    if (this.proc) {
-      this.kill()
+  start(paneId: string): void {
+    const existing = this.sessions.get(paneId)
+    if (existing) {
+      this.kill(paneId)
     }
 
     const command = this.options.command ?? 'claude'
     const args = this.options.args ?? []
+    const cols = existing?.cols ?? this.defaultCols
+    const rows = existing?.rows ?? this.defaultRows
 
-    // Edge case: `claude` not found on PATH. node-pty does not reject a missing
-    // binary synchronously on this platform (it exits with code 1 and no output),
-    // so we pre-check and surface a clear error rather than a bare exit code.
+    // Edge case (per pane): `claude` not found on PATH. node-pty does not reject a
+    // missing binary synchronously on this platform (it exits with code 1 and no
+    // output), so we pre-check and surface a clear error rather than a bare exit
+    // code. The error is tagged with this pane's id so only that tab shows it.
     if (!isExecutableResolvable(command)) {
-      this.proc = null
       this.sinks.onExit({
+        paneId,
         error: `"${command}" was not found on PATH. Install Claude Code or ensure it is on PATH, then restart.`
       })
       return
     }
 
+    let proc: IPty
     try {
-      this.proc = pty.spawn(command, args, {
+      proc = pty.spawn(command, args, {
         name: 'xterm-256color',
-        cols: this.cols,
-        rows: this.rows,
+        cols,
+        rows,
         cwd: this.options.cwd,
         env: process.env as { [key: string]: string }
       })
     } catch (err) {
       // ENOENT (binary not found) and similar spawn failures land here.
-      this.proc = null
-      const message =
-        err instanceof Error ? err.message : String(err)
-      this.sinks.onExit({
-        error: `Failed to start "${command}": ${message}`
-      })
+      const message = err instanceof Error ? err.message : String(err)
+      this.sinks.onExit({ paneId, error: `Failed to start "${command}": ${message}` })
       return
     }
 
-    const active = this.proc
+    const session: PtySession = { proc, cols, rows }
+    this.sessions.set(paneId, session)
 
-    active.onData((data: string) => {
-      this.sinks.onData({ data })
+    proc.onData((data: string) => {
+      this.sinks.onData({ paneId, data })
     })
 
-    active.onExit(({ exitCode, signal }) => {
-      // Only report if this is still the active process (guards against a
-      // stale handler firing after a restart replaced `this.proc`).
-      if (this.proc === active) {
-        this.proc = null
+    proc.onExit(({ exitCode, signal }) => {
+      // Only clear if this is still the active session for the pane (guards
+      // against a stale handler firing after a restart replaced the process).
+      if (this.sessions.get(paneId) === session) {
+        this.sessions.delete(paneId)
       }
-      this.sinks.onExit({ exitCode, signal })
+      this.sinks.onExit({ paneId, exitCode, signal })
     })
   }
 
-  /** FR-008: kill the current process then spawn a fresh one. */
-  restart(): void {
-    this.start()
+  /**
+   * FR-008/FR-026: kill `paneId`'s current process then spawn a fresh one. Other
+   * panes are unaffected.
+   */
+  restart(paneId: string): void {
+    this.start(paneId)
   }
 
-  /** FR-004: write validated input to the PTY. No-op if not running. */
-  write(data: string): void {
-    if (!this.proc) {
+  /**
+   * FR-004 (panel-tabs v1 FR-021): write validated input to `paneId`'s PTY.
+   * No-op if that pane is not running.
+   */
+  write(paneId: string, data: string): void {
+    const session = this.sessions.get(paneId)
+    if (!session) {
       return
     }
-    this.proc.write(data)
+    session.proc.write(data)
   }
 
-  /** FR-005: resize the PTY. Remembers size so a later restart uses it. */
-  resize(payload: PtyResizePayload): void {
-    this.cols = payload.cols
-    this.rows = payload.rows
-    if (!this.proc) {
+  /**
+   * FR-005 (panel-tabs v1 FR-021): resize `paneId`'s PTY. Remembers the size so a
+   * later restart of that pane reuses it. No-op if the pane is not running.
+   */
+  resize(paneId: string, payload: PtyResizePayload): void {
+    const session = this.sessions.get(paneId)
+    if (!session) {
       return
     }
+    session.cols = payload.cols
+    session.rows = payload.rows
     try {
-      this.proc.resize(payload.cols, payload.rows)
+      session.proc.resize(payload.cols, payload.rows)
     } catch {
       // A resize racing with exit can throw; ignore rather than crash.
     }
   }
 
   /**
-   * Kill the current process without emitting an exit event to the renderer.
-   * Used for clean teardown on app quit / renderer reload (edge case: do not
-   * orphan the PTY). Detaches the active handler reference first.
+   * Kill `paneId`'s process without emitting an exit event to the renderer
+   * (panel-tabs v1, FR-023 — tab close). Used for tab dispose and for clean
+   * teardown on app quit / renderer reload (edge case: do not orphan the PTY).
+   * Detaches the session first so its exit handler does not re-emit. No-op if the
+   * pane is unknown.
    */
-  kill(): void {
-    const active = this.proc
-    if (!active) {
+  kill(paneId: string): void {
+    const session = this.sessions.get(paneId)
+    if (!session) {
       return
     }
-    this.proc = null
+    this.sessions.delete(paneId)
     try {
-      active.kill()
+      session.proc.kill()
     } catch {
       // Already dead; nothing to do.
     }
+  }
+
+  /**
+   * Kill EVERY pane's process and clear the map, without emitting exit events.
+   * Used for full teardown on app quit / window close / renderer reload so no
+   * `claude` session is orphaned (panel-tabs v1, FR-023 teardown).
+   */
+  killAll(): void {
+    for (const session of this.sessions.values()) {
+      try {
+        session.proc.kill()
+      } catch {
+        // Already dead; nothing to do.
+      }
+    }
+    this.sessions.clear()
   }
 }

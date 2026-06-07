@@ -31,16 +31,30 @@
   display: flex;
 }
 
-.app__terminal {
-  flex: 1 1 60%;
+/* The single selected surface (Terminal / Generated UI / Slack / Jira /
+ * Confluence). All five stay mounted; inactive ones are hidden via Tabs'
+ * data-[state=inactive]:hidden. The active one is a full-bleed flex region
+ * filling the entire main content area beside the rail. */
+.app__ui {
+  flex: 1 1 auto;
   min-width: 0;
   min-height: 0;
   display: flex;
+  /* Column so the single surface child fills the full width via cross-axis
+   * stretch — panels (Slack/Jira/Confluence/Generated UI) have no flex-grow of
+   * their own, so a row container would leave them at content width. */
+  flex-direction: column;
 }
 
-.app__ui {
-  flex: 1 1 40%;
-  min-width: 320px;
-  min-height: 0;
+.app__ui[data-state='active'] {
   display: flex;
+}
+
+/* Radix marks inactive forceMount panels with data-state="inactive". This rule
+ * must live here (unlayered) — Tailwind v4 emits its `hidden` utility into
+ * `@layer utilities`, and any unlayered rule (like `.app__ui` above) beats a
+ * layered one regardless of specificity, so a Tailwind `data-[state=inactive]:hidden`
+ * class cannot override `.app__ui { display: flex }`. Hiding it here does. */
+.app__ui[data-state='inactive'] {
+  display: none;
 }

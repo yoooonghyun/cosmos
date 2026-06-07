@@ -67,6 +67,16 @@ For each target document:
 4. Match the repository's style; do not add commentary about this iteration ("added for
    the cosmos work", "per the session on …") — write the durable fact only.
 
+## Step 3.5 — Persist durable learnings to agentmemory
+
+In addition to the document edits, save the durable, cross-session learnings from Step 1 into
+**agentmemory** (the canonical memory consulted at the start of every sdd cycle — see the sdd
+skill's Step 0). For each generalizable item, call `memory_save` (agentmemory MCP) with the
+appropriate `type` (`preference`, `pattern`, `architecture`, `bug`, `workflow`, or `fact`),
+a concise `content` statement, and the relevant `concepts`/`files`. Save only durable items —
+the same exclusion of ephemeral task detail from Step 1 applies. This is what makes a learning
+available to future cycles even when it does not belong in any tracked document.
+
 ## Step 4 — Reconcile TODO.md
 
 Always update the project's root `TODO.md` to reflect where the work now stands —
@@ -87,6 +97,7 @@ propagation. (If `TODO.md` does not exist, create it with `In progress` / `Next`
 
 Summarize concisely:
 - Which documents were updated and the one-line reason for each.
+- Which learnings were saved to agentmemory (type + one-line content).
 - How `TODO.md` changed (items checked off, items added).
 - Any learning you deliberately did NOT record, and why (e.g. too ephemeral).
 - Any target that was requested but skipped (and why).

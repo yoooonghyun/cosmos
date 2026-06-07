@@ -20,6 +20,7 @@ import { createServer, type Server, type Socket } from 'node:net'
 import { randomUUID } from 'node:crypto'
 import { existsSync, unlinkSync } from 'node:fs'
 import { bridgeSocketPath, encodeBridgeMessage, type BridgeClientMessage } from '../shared/bridge'
+import { DEFAULT_UI_RENDER_TARGET } from '../shared/ipc'
 import type { A2uiAction, UiRenderPayload } from '../shared/ipc'
 
 /** Logger shape (injectable for clarity / future tests). */
@@ -168,8 +169,27 @@ export class UiBridge {
     // FR-012: mint the renderer-facing requestId in main; map it to the
     // entry-script callId so the right tool call resolves.
     const requestId = randomUUID()
+    const target = message.target ?? DEFAULT_UI_RENDER_TARGET
     this.active = { requestId, callId: message.callId, socket }
-    this.pushRender({ requestId, spec: message.spec })
+    console.log('[ui] render received target=', target, 'surfaceId=', message.spec?.surfaceId, 'components=', Array.isArray(message.spec?.components) ? message.spec.components.map((c) => c.component).join(',') : 'n/a')
+    // Jira generative-UI v2 (D1): carry the frame's render target into the pushed
+    // payload so the owning panel filters `ui:render` by `target`. A render_ui frame
+    // omits it ⇒ default 'generated-ui' (backward-compatible).
+    this.pushRender({ requestId, spec: message.spec, target })
+
+    // Every non-`'generated-ui'` target is DISPLAY-ONLY from the composing run's
+    // perspective (Slack + Confluence generative-UI v1, FR-014; generalizes the original
+    // jira-only branch): the surface emits no action this render call awaits — a `jira.*`
+    // action is dispatched DETERMINISTICALLY by main (JiraActionDispatcher), and `'slack'`/
+    // `'confluence'` surfaces are read-only with no controls at all. So settle it
+    // immediately (the FR-016 cancel pattern) — otherwise the one-shot headless run blocks
+    // forever on `await bridge.render()`, never emits `completed`, and the panel spinner
+    // never stops. The surface stays rendered (driven by `pushRender` above); any later
+    // jira action re-pushes a fresh surface via the dispatcher, independent of this call.
+    // Only `'generated-ui'` keeps blocking, awaiting the user's action on its control.
+    if (target !== 'generated-ui') {
+      this.settle(this.active, { type: 'cancel' })
+    }
   }
 
   /** Resolve a call exactly once: clear it, then notify the entry script. */

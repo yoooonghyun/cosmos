@@ -16,7 +16,7 @@
  *   R->M  renderer sends to main process (ipcRenderer.send / invoke)
  */
 
-import type { SurfaceUpdatePayload } from '@a2ui-sdk/types/0.8'
+import type { UpdateComponentsPayload } from '@a2ui-sdk/types/0.9'
 
 /**
  * Channel name constants. Centralized so main, preload, and renderer never
@@ -31,8 +31,22 @@ export const PtyChannel = {
   Resize: 'pty:resize',
   /** M->R: the `claude` process exited / failed to start. FR-007 + edge case. */
   Exit: 'pty:exit',
-  /** R->M: request a fresh `claude` session in the same panel. FR-008. */
-  Restart: 'pty:restart'
+  /** R->M: request a fresh `claude` session for the given pane. FR-008, FR-026. */
+  Restart: 'pty:restart',
+  /**
+   * R->M: spawn a NEW PTY session for a freshly-opened terminal tab (panel-tabs
+   * v1, FR-021/FR-022). Each terminal tab is its own live `claude` process keyed
+   * by a renderer-minted `paneId`; the renderer issues this on tab create. (The
+   * single PTY is no longer auto-started at window create — every pane starts via
+   * an explicit `pty:start`.)
+   */
+  Start: 'pty:start',
+  /**
+   * R->M: dispose/kill a terminal tab's PTY session on tab close (panel-tabs v1,
+   * FR-023). Kills exactly that `paneId`'s `claude` process; no exit event is
+   * emitted back (the tab is gone).
+   */
+  Dispose: 'pty:dispose'
 } as const
 
 export type PtyChannelName = (typeof PtyChannel)[keyof typeof PtyChannel]
@@ -40,28 +54,71 @@ export type PtyChannelName = (typeof PtyChannel)[keyof typeof PtyChannel]
 /**
  * M->R. A chunk of raw PTY output. `data` is the terminal byte stream encoded
  * as a UTF-8 string (xterm.js `write` accepts string). FR-002, FR-003.
+ *
+ * `paneId` identifies WHICH terminal tab's PTY produced the output so the
+ * renderer routes it to the matching xterm instance (panel-tabs v1, FR-021/FR-025).
  */
 export interface PtyDataPayload {
+  /** Which terminal tab's PTY produced this output (panel-tabs v1, FR-021). */
+  paneId: string
   /** Raw terminal output, including ANSI escape sequences. */
   data: string
 }
 
 /**
  * R->M. Keyboard input destined for the PTY stdin. FR-004.
+ *
+ * `paneId` routes the input to the correct terminal tab's PTY (panel-tabs v1,
+ * FR-021).
  */
 export interface PtyInputPayload {
+  /** Which terminal tab's PTY to write to (panel-tabs v1, FR-021). */
+  paneId: string
   /** The bytes the user typed, as produced by xterm.js `onData`. */
   data: string
 }
 
 /**
- * R->M. New terminal dimensions. FR-005.
+ * R->M. New terminal dimensions for one terminal tab's PTY. FR-005.
+ *
+ * `paneId` routes the resize to the correct terminal tab's PTY (panel-tabs v1,
+ * FR-021).
  */
 export interface PtyResizePayload {
+  /** Which terminal tab's PTY to resize (panel-tabs v1, FR-021). */
+  paneId: string
   /** Number of columns; MUST be a positive integer. */
   cols: number
   /** Number of rows; MUST be a positive integer. */
   rows: number
+}
+
+/**
+ * R->M. Spawn a new PTY session for a freshly-opened terminal tab (panel-tabs
+ * v1, FR-021/FR-022) or dispose one on tab close (FR-023). Carries only the
+ * renderer-minted `paneId` that keys the session.
+ */
+export interface PtyStartPayload {
+  /** The terminal tab's PTY to spawn (panel-tabs v1, FR-021/FR-022). */
+  paneId: string
+}
+
+/**
+ * R->M. Request a fresh `claude` session for one terminal tab (panel-tabs v1,
+ * FR-026 — per-tab restart). Carries only the renderer-minted `paneId`.
+ */
+export interface PtyRestartPayload {
+  /** Which terminal tab's PTY to restart (panel-tabs v1, FR-021/FR-026). */
+  paneId: string
+}
+
+/**
+ * R->M. Dispose/kill a terminal tab's PTY session on tab close (panel-tabs v1,
+ * FR-023). Carries only the renderer-minted `paneId`.
+ */
+export interface PtyDisposePayload {
+  /** Which terminal tab's PTY to dispose (panel-tabs v1, FR-023). */
+  paneId: string
 }
 
 /**
@@ -76,6 +133,8 @@ export interface PtyResizePayload {
  * the renderer treats the message as best-effort. FR-007, edge case.
  */
 export interface PtyExitPayload {
+  /** Which terminal tab's PTY exited (panel-tabs v1, FR-021/FR-025). */
+  paneId: string
   /** Process exit code, when the process actually started and then exited. */
   exitCode?: number
   /** Terminating signal, if the process was killed by a signal. */
@@ -93,15 +152,30 @@ export interface PtyExitPayload {
  * detach listeners on unmount (avoids leaks / double-binding on HMR).
  */
 export interface PtyApi {
-  /** R->M. Send keyboard input to the PTY. FR-004. */
+  /**
+   * R->M. Spawn a new PTY session for a terminal tab (panel-tabs v1,
+   * FR-021/FR-022). The renderer mints `paneId` per terminal tab and calls this
+   * on tab create (the single PTY is no longer auto-started at window create).
+   */
+  start(paneId: string): void
+  /** R->M. Send keyboard input to a tab's PTY (panel-tabs v1, FR-021). FR-004. */
   sendInput(payload: PtyInputPayload): void
-  /** R->M. Notify the PTY of new dimensions. FR-005. */
+  /** R->M. Notify a tab's PTY of new dimensions (panel-tabs v1, FR-021). FR-005. */
   resize(payload: PtyResizePayload): void
-  /** R->M. Request a fresh `claude` session. FR-008. */
-  restart(): void
-  /** M->R. Subscribe to PTY output. Returns an unsubscribe fn. FR-002/FR-003. */
+  /** R->M. Request a fresh `claude` session for a tab (panel-tabs v1, FR-026). FR-008. */
+  restart(paneId: string): void
+  /** R->M. Dispose/kill a terminal tab's PTY on tab close (panel-tabs v1, FR-023). */
+  dispose(paneId: string): void
+  /**
+   * M->R. Subscribe to PTY output for ALL panes; each payload carries its own
+   * `paneId` so the renderer routes it to the matching tab (panel-tabs v1,
+   * FR-021). Returns an unsubscribe fn. FR-002/FR-003.
+   */
   onData(listener: (payload: PtyDataPayload) => void): () => void
-  /** M->R. Subscribe to PTY exit/error events. Returns an unsubscribe fn. FR-007. */
+  /**
+   * M->R. Subscribe to PTY exit/error events for ALL panes; each payload carries
+   * its own `paneId` (panel-tabs v1, FR-021). Returns an unsubscribe fn. FR-007.
+   */
   onExit(listener: (payload: PtyExitPayload) => void): () => void
 }
 
@@ -124,12 +198,39 @@ export const UiChannel = {
 export type UiChannelName = (typeof UiChannel)[keyof typeof UiChannel]
 
 /**
- * The A2UI `surfaceUpdate` payload that `render_ui(spec)` receives and the panel
- * renders (FR-001, FR-005). Typed alias over the installed SDK's
- * `SurfaceUpdatePayload` (`@a2ui-sdk/types/0.8`) so cosmos and the SDK never
- * disagree on the surface shape.
+ * Jira generative-UI v2 — render-target discriminator (D1 / v2 FR-004, FR-012).
+ *
+ * The EXISTING `ui:render` channel now carries a `target` so MULTIPLE panels can
+ * consume it, each hosting its OWN `A2UIProvider`/catalog and FILTERING incoming
+ * `ui:render` by `target` (rendering only payloads whose `target` matches its own
+ * panel, ignoring the rest). No dedicated Jira channel set is added.
+ *
+ *  - `'generated-ui'` — the generic Generated-UI panel (standard catalog). The
+ *    DEFAULT when a render frame omits `target` (backward-compatible with the
+ *    unchanged standard `render_ui`).
+ *  - `'jira'` — the native Jira rail panel (the `catalogId: 'jira'` custom catalog).
+ *    Set by the deterministic default-view + post-write re-pushes and by the
+ *    Jira-scoped `render_jira_ui` tool.
+ *  - `'slack'` — the native Slack rail panel (the `catalogId: 'slack'` custom
+ *    catalog). Set by the Slack-scoped `render_slack_ui` tool. Display-only / read-only
+ *    (Slack + Confluence generative-UI v1, FR-001).
+ *  - `'confluence'` — the native Confluence rail panel (the `catalogId: 'confluence'`
+ *    custom catalog). Set by the Confluence-scoped `render_confluence_ui` tool.
+ *    Display-only / read-only (Slack + Confluence generative-UI v1, FR-001).
  */
-export type A2uiSurfaceUpdate = SurfaceUpdatePayload
+export type UiRenderTarget = 'jira' | 'generated-ui' | 'slack' | 'confluence'
+
+/** The default render target when a render frame omits one (D1 / v2 FR-004). */
+export const DEFAULT_UI_RENDER_TARGET: UiRenderTarget = 'generated-ui'
+
+/**
+ * The A2UI surface payload that `render_ui(spec)` receives and the panel renders
+ * (FR-001, FR-005). Typed alias over the installed SDK's 0.9
+ * `UpdateComponentsPayload` (`@a2ui-sdk/types/0.9`) — `{ surfaceId, components }`
+ * — so cosmos and the SDK never disagree on the surface shape. The panel
+ * synthesizes the 0.9 `createSurface` envelope around it at render time.
+ */
+export type A2uiSurfaceUpdate = UpdateComponentsPayload
 
 /**
  * M->R. Push a surface to the Generated-UI panel. FR-004, FR-012.
@@ -142,6 +243,13 @@ export interface UiRenderPayload {
   requestId: string
   /** The A2UI surfaceUpdate spec to render. FR-001, FR-005. */
   spec: A2uiSurfaceUpdate
+  /**
+   * Which panel should render this surface (Jira generative-UI v2, D1 / v2
+   * FR-004, FR-012). Each panel filters incoming `ui:render` by this field. Always
+   * present on a pushed payload — main defaults it to `'generated-ui'` when the
+   * originating render frame omits a target (backward-compatible). NO secret.
+   */
+  target: UiRenderTarget
 }
 
 /**
@@ -188,8 +296,316 @@ export interface UiApi {
   sendAction(payload: UiActionPayload): void
 }
 
+/* ------------------------------------------------------------------------- *
+ * Slack integration — native panel IPC surface
+ * Spec: .sdd/specs/slack-integration-v1.md
+ * ------------------------------------------------------------------------- */
+
+import type {
+  SlackChannel,
+  SlackConnectionStatus,
+  SlackGetUserParams,
+  SlackHistoryParams,
+  SlackListChannelsParams,
+  SlackMessage,
+  SlackPage,
+  SlackRepliesParams,
+  SlackResult,
+  SlackSearchMatch,
+  SlackSearchParams,
+  SlackUser
+} from './slack'
+
+/**
+ * Slack IPC channel name constants (FR-025). The reads are request/response via
+ * `ipcRenderer.invoke`/`ipcMain.handle` (unlike PTY's streaming send); only
+ * `StatusChanged` is a fire-and-forget M->R event for live connection state.
+ *
+ * NO channel carries the access token in either direction (FR-006, SC-008): the
+ * renderer requests *operations*; main attaches the token.
+ */
+export const SlackChannelName = {
+  /** R->M (invoke): current connection status. FR-007. */
+  GetStatus: 'slack:getStatus',
+  /** R->M (invoke): run the desktop OAuth flow (opens the browser); resolves with the new status. FR-001. */
+  Connect: 'slack:connect',
+  /** R->M (invoke): delete the stored token; resolves with not-connected status. FR-009. */
+  Disconnect: 'slack:disconnect',
+  /** R->M (invoke): list public channels (paginated). FR-013. */
+  ListChannels: 'slack:listChannels',
+  /** R->M (invoke): read a channel's recent history (paginated). FR-013. */
+  GetHistory: 'slack:getHistory',
+  /** R->M (invoke): read a thread's replies (paginated). FR-013. */
+  GetReplies: 'slack:getReplies',
+  /** R->M (invoke): keyword message search. FR-015. */
+  Search: 'slack:search',
+  /** R->M (invoke): resolve a user id to a display name. FR-014. */
+  GetUser: 'slack:getUser',
+  /** M->R (event): connection status changed (e.g. connect finished, reconnect needed). FR-007. */
+  StatusChanged: 'slack:statusChanged'
+} as const
+
+export type SlackChannelNameValue =
+  (typeof SlackChannelName)[keyof typeof SlackChannelName]
+
+/**
+ * The Slack API surface exposed to the renderer via `contextBridge` as
+ * `window.cosmos.slack`, alongside (not merged into) `pty` and `ui` (FR-007).
+ *
+ * Every read resolves with a `SlackResult<T>` so the panel branches on `ok` and
+ * degrades gracefully (FR-016, FR-020, FR-026). No method takes or returns a
+ * token (FR-006, SC-008).
+ */
+export interface SlackApi {
+  /** R->M. Current connection status. FR-007. */
+  getStatus(): Promise<SlackConnectionStatus>
+  /** R->M. Run the desktop OAuth flow (opens the browser); resolves with the resulting status. FR-001, FR-002. */
+  connect(): Promise<SlackConnectionStatus>
+  /** R->M. Delete the stored token; resolves with not-connected status. FR-009. */
+  disconnect(): Promise<SlackConnectionStatus>
+  /** R->M. List public channels (paginated). FR-013. */
+  listChannels(params: SlackListChannelsParams): Promise<SlackResult<SlackPage<SlackChannel>>>
+  /** R->M. Read a channel's recent history (paginated). FR-013. */
+  getHistory(params: SlackHistoryParams): Promise<SlackResult<SlackPage<SlackMessage>>>
+  /** R->M. Read a thread's replies (paginated). FR-013. */
+  getReplies(params: SlackRepliesParams): Promise<SlackResult<SlackPage<SlackMessage>>>
+  /** R->M. Keyword message search. FR-015. */
+  search(params: SlackSearchParams): Promise<SlackResult<SlackPage<SlackSearchMatch>>>
+  /** R->M. Resolve a user id to a display name. FR-014. */
+  getUser(params: SlackGetUserParams): Promise<SlackResult<SlackUser>>
+  /**
+   * M->R. Subscribe to connection-status changes. Returns an unsubscribe fn so
+   * the panel can detach on unmount (avoids leaks / double-binding on HMR). FR-007.
+   */
+  onStatusChanged(listener: (status: SlackConnectionStatus) => void): () => void
+}
+
+/* ------------------------------------------------------------------------- *
+ * Atlassian — Jira native panel IPC surface
+ * Spec: .sdd/specs/atlassian-integration-v1.md (Group A FR-A12, Group J)
+ * ------------------------------------------------------------------------- */
+
+import type {
+  JiraConnectionStatus,
+  JiraGetIssueParams,
+  JiraIssueDetail,
+  JiraIssueSummary,
+  JiraPage,
+  JiraResult,
+  JiraSearchParams
+} from './jira'
+
+/**
+ * Jira IPC channel name constants (FR-X06). Reads are request/response via
+ * `ipcRenderer.invoke`/`ipcMain.handle`; only `StatusChanged` is a fire-and-forget
+ * M->R event for live connection state. NO channel carries a token in either
+ * direction (FR-A11, SC-009): the renderer requests *operations*; main attaches
+ * the token.
+ */
+export const JiraChannelName = {
+  /** R->M (invoke): current connection status. FR-A12. */
+  GetStatus: 'jira:getStatus',
+  /** R->M (invoke): run the desktop OAuth flow (opens the browser); resolves with the new status. FR-A01. */
+  Connect: 'jira:connect',
+  /** R->M (invoke): delete the stored token; resolves with not-connected status. FR-A14. */
+  Disconnect: 'jira:disconnect',
+  /** R->M (invoke): search issues by JQL (paginated). FR-J04. */
+  SearchIssues: 'jira:searchIssues',
+  /** R->M (invoke): read one issue's detail. FR-J04. */
+  GetIssue: 'jira:getIssue',
+  /**
+   * R->M (send): the Jira panel became the active rail surface; main re-composes
+   * the default recent-issues view and pushes it with `target: 'jira'` (Jira
+   * generative-UI v2, D4 / v2 FR-002, FR-019, FR-020). Fire-and-forget — the rail
+   * switch never blocks on the read.
+   */
+  RequestDefaultView: 'jira:requestDefaultView',
+  /** M->R (event): connection status changed. FR-A12. */
+  StatusChanged: 'jira:statusChanged'
+} as const
+
+export type JiraChannelNameValue =
+  (typeof JiraChannelName)[keyof typeof JiraChannelName]
+
+/**
+ * R->M. The Jira panel's per-switch default-view request (Jira generative-UI v2,
+ * D4 / v2 FR-002). Carries NO field — it is a pure "I was switched to" trigger;
+ * main owns the default JQL, the bounded single-page read, and the deterministic
+ * compose. NO secret-bearing field (v2 FR-017).
+ */
+export type JiraRequestDefaultViewPayload = Record<string, never>
+
+/**
+ * The Jira API surface exposed to the renderer via `contextBridge` as
+ * `window.cosmos.jira`, alongside (not merged into) `pty`, `ui`, and `slack`
+ * (FR-A12). Every read resolves with a `JiraResult<T>` so the panel branches on
+ * `ok` and degrades gracefully. No method takes or returns a token (FR-A11, SC-009).
+ */
+export interface JiraApi {
+  /** R->M. Current connection status. FR-A12. */
+  getStatus(): Promise<JiraConnectionStatus>
+  /** R->M. Run the desktop OAuth flow (opens the browser); resolves with the resulting status. FR-A01. */
+  connect(): Promise<JiraConnectionStatus>
+  /** R->M. Delete the stored token; resolves with not-connected status. FR-A14. */
+  disconnect(): Promise<JiraConnectionStatus>
+  /** R->M. Search issues by JQL (paginated). FR-J04. */
+  searchIssues(params: JiraSearchParams): Promise<JiraResult<JiraPage<JiraIssueSummary>>>
+  /** R->M. Read one issue's detail. FR-J04. */
+  getIssue(params: JiraGetIssueParams): Promise<JiraResult<JiraIssueDetail>>
+  /**
+   * R->M. Tell main the Jira panel became the active rail surface so it
+   * re-composes + pushes the default recent-issues view (Jira generative-UI v2,
+   * D4 / v2 FR-002). Fire-and-forget; the surface arrives via `ui:render`
+   * (`target: 'jira'`). Never blocks the rail switch.
+   */
+  requestDefaultView(): void
+  /**
+   * M->R. Subscribe to connection-status changes. Returns an unsubscribe fn so
+   * the panel can detach on unmount (avoids leaks / double-binding on HMR). FR-A12.
+   */
+  onStatusChanged(listener: (status: JiraConnectionStatus) => void): () => void
+}
+
+/* ------------------------------------------------------------------------- *
+ * Atlassian — Confluence native panel IPC surface
+ * Spec: .sdd/specs/atlassian-integration-v1.md (Group A FR-A12, Group C)
+ * ------------------------------------------------------------------------- */
+
+import type {
+  ConfluenceConnectionStatus,
+  ConfluenceGetPageParams,
+  ConfluencePage,
+  ConfluencePageDetail,
+  ConfluenceResult,
+  ConfluenceSearchParams,
+  ConfluenceSearchResult
+} from './confluence'
+
+/**
+ * Confluence IPC channel name constants (FR-X06). Same request/response +
+ * status-event model as Jira; fully separate connection (FR-A13). No channel
+ * carries a token (FR-A11, SC-009).
+ */
+export const ConfluenceChannelName = {
+  /** R->M (invoke): current connection status. FR-A12. */
+  GetStatus: 'confluence:getStatus',
+  /** R->M (invoke): run the desktop OAuth flow; resolves with the new status. FR-A01. */
+  Connect: 'confluence:connect',
+  /** R->M (invoke): delete the stored token; resolves with not-connected status. FR-A14. */
+  Disconnect: 'confluence:disconnect',
+  /** R->M (invoke): search content (paginated). FR-C04. */
+  SearchContent: 'confluence:searchContent',
+  /** R->M (invoke): read one page's detail. FR-C04. */
+  GetPage: 'confluence:getPage',
+  /** M->R (event): connection status changed. FR-A12. */
+  StatusChanged: 'confluence:statusChanged'
+} as const
+
+export type ConfluenceChannelNameValue =
+  (typeof ConfluenceChannelName)[keyof typeof ConfluenceChannelName]
+
+/**
+ * The Confluence API surface exposed to the renderer via `contextBridge` as
+ * `window.cosmos.confluence`, alongside (not merged into) `pty`, `ui`, `slack`,
+ * and `jira` (FR-A12). Every read resolves with a `ConfluenceResult<T>`. No method
+ * takes or returns a token (FR-A11, SC-009).
+ */
+export interface ConfluenceApi {
+  /** R->M. Current connection status. FR-A12. */
+  getStatus(): Promise<ConfluenceConnectionStatus>
+  /** R->M. Run the desktop OAuth flow; resolves with the resulting status. FR-A01. */
+  connect(): Promise<ConfluenceConnectionStatus>
+  /** R->M. Delete the stored token; resolves with not-connected status. FR-A14. */
+  disconnect(): Promise<ConfluenceConnectionStatus>
+  /** R->M. Search content (paginated). FR-C04. */
+  searchContent(
+    params: ConfluenceSearchParams
+  ): Promise<ConfluenceResult<ConfluencePage<ConfluenceSearchResult>>>
+  /** R->M. Read one page's detail. FR-C04. */
+  getPage(params: ConfluenceGetPageParams): Promise<ConfluenceResult<ConfluencePageDetail>>
+  /**
+   * M->R. Subscribe to connection-status changes. Returns an unsubscribe fn so the
+   * panel can detach on unmount (avoids leaks / double-binding on HMR). FR-A12.
+   */
+  onStatusChanged(listener: (status: ConfluenceConnectionStatus) => void): () => void
+}
+
+/* ------------------------------------------------------------------------- *
+ * Generative UI foundation — headless agent runner IPC surface
+ * Spec: .sdd/specs/generative-ui-foundation-v1.md
+ * ------------------------------------------------------------------------- */
+
+/**
+ * Agent channel name constants (FR-009). A dedicated channel set for the headless
+ * `claude -p` runner, exposed to the renderer ONLY as `window.cosmos.agent`,
+ * alongside (not merged into) the pty/ui/slack/jira/confluence surfaces.
+ */
+export const AgentChannel = {
+  /** R->M: submit a natural-language utterance to compose a surface. FR-002. */
+  Submit: 'agent:submit',
+  /** M->R: run lifecycle/status (started, completed, error). FR-009, FR-011. */
+  Status: 'agent:status'
+} as const
+
+export type AgentChannelName = (typeof AgentChannel)[keyof typeof AgentChannel]
+
+/**
+ * R->M. Submit an utterance to the headless runner. Carries ONLY the utterance
+ * string — nothing else (FR-002).
+ */
+export interface AgentSubmitPayload {
+  /** The user's natural-language utterance. FR-002. */
+  utterance: string
+  /**
+   * Which panel this run composes for (Jira generative-UI v2, D2 / v2 FR-013).
+   * The Jira panel's composer submits `'jira'` (the run grants `render_jira_ui`
+   * and its render is tagged `target: 'jira'`); the generic composer submits
+   * `'generated-ui'` (grants `render_ui`). Absent ⇒ `'generated-ui'`
+   * (backward-compatible). NO secret.
+   */
+  target?: UiRenderTarget
+}
+
+/**
+ * The lifecycle state of a headless run (FR-009, FR-011):
+ *  - `started`   — the headless run has begun (input shows in-progress).
+ *  - `completed` — the run exited successfully (input returns to idle).
+ *  - `error`     — the run failed or could not start (input shows error, FR-014).
+ */
+export type AgentRunState = 'started' | 'completed' | 'error'
+
+/**
+ * M->R. Run lifecycle/status for the headless runner (FR-009, FR-011). Carries
+ * ONLY what the panel needs to display state — NO tokens, secrets, provider
+ * credentials, or raw transcript (FR-011, FR-012).
+ */
+export interface AgentStatusPayload {
+  /** The run's lifecycle state. FR-009. */
+  state: AgentRunState
+  /** Human-readable failure reason; present only for `error` (FR-014). */
+  message?: string
+}
+
+/**
+ * The agent API surface exposed to the renderer via `contextBridge` as
+ * `window.cosmos.agent`, alongside (not merged into) the other surfaces (FR-009).
+ */
+export interface AgentApi {
+  /** R->M. Submit an utterance for a headless run. FR-002. */
+  submit(payload: AgentSubmitPayload): void
+  /**
+   * M->R. Subscribe to run lifecycle/status. Returns an unsubscribe fn so the
+   * panel can detach on unmount (avoids leaks / double-binding on HMR). FR-011.
+   */
+  onStatus(listener: (payload: AgentStatusPayload) => void): () => void
+}
+
 /** Shape attached to `window` by the preload. */
 export interface CosmosApi {
   pty: PtyApi
   ui: UiApi
+  slack: SlackApi
+  jira: JiraApi
+  confluence: ConfluenceApi
+  agent: AgentApi
 }
