@@ -402,8 +402,26 @@ serving **both** surfaces:
   `loadingDefault` skeleton shows until it lands, and the request is deferred while a compose is
   awaiting a frame to protect the correlation slot, §4.11), and the panel carries a
   **prompt input** so a typed utterance composes the active tab's body via the headless
-  `AgentRunner` (§4.10) and the `render_jira_ui` tool. It renders with the **Jira custom
-  catalog** (`src/renderer/jiraCatalog/` — a real A2UI `Catalog` of cosmos React components:
+  `AgentRunner` (§4.10) and the `render_jira_ui` tool. Alongside the prompt input the panel
+  also carries a **native deterministic JQL search box** (`jira-jql-search-v1`, paralleling
+  Confluence's search box): its placeholder is the my-tickets JQL `assignee = currentUser() ORDER
+  BY updated DESC` (the `JIRA_DEFAULT_VIEW_JQL`), an empty submit returns that default view, and a
+  non-empty submit runs a native `jira:searchIssues` read (NOT an `AgentRunner` run) → the same
+  `JiraSurfaceBuilder` `IssueList` compose → an unsolicited `target:'jira'` frame that replaces the
+  ACTIVE tab's surface (filing + the fire-or-defer correlation-slot protection are the §4.11
+  unsolicited-frame discipline, reused in place). Main generalizes `handleJiraDefaultView` to a
+  shared `handleJiraView(jql)`; the search trigger is the sibling channel `jira:requestSearchView`
+  (`{ jql }`). **Clicking a ticket opens its detail in place** (`jira-ticket-detail-v1`): a clickable
+  `TicketCard` emits a renderer-local nav action that the panel intercepts via the same
+  `ActiveTabSurface` `onAction` seam Slack uses for open-channel navigation (handled in the renderer,
+  never forwarded to main / the agent), firing the sibling channel `jira:requestIssueDetail`
+  (`{ issueKey }`) → main `getIssue` → `JiraSurfaceBuilder.buildIssueDetailSurface` → an unsolicited
+  `target:'jira'` frame that replaces the ACTIVE tab's surface (the §4.11 unsolicited-frame +
+  fire-or-defer discipline, reused in place). A **native back row** (panel chrome outside the A2UI
+  host, the Confluence `ChevronLeft` precedent) returns to the originating list by re-running its read
+  (`jira:requestDefaultView` for a default-view origin, `jira:requestSearchView` for a search origin;
+  default view as the fallback). It is read-only — no new OAuth scope, no token on the payload/surface. It renders
+  with the **Jira custom catalog** (`src/renderer/jiraCatalog/` — a real A2UI `Catalog` of cosmos React components:
   TicketCard, StatusBadge, TransitionPicker, IssueList, CommentList, AddCommentControl, plus
   v1 create/edit forms). Because catalog components are plain cosmos React, they use any Tailwind
   class including the `--status-todo/-progress/-done` tokens, giving the generated surface the same
@@ -414,7 +432,13 @@ serving **both** surfaces:
   (`src/renderer/confluenceCatalog/` — SearchResultList/PageDetail/Notice over
   `src/shared/confluence.ts` shapes), with its native search content (title/space/excerpt,
   paginated) + open-one-page (title/space/body) browser as the base shown when zero tabs are open
-  (composed surfaces fill per-tab, §4.11). **The
+  (composed surfaces fill per-tab, §4.11). When the native search box is empty the base shows a
+  **default personal feed** instead of a blank panel — a deterministic native read (`defaultFeed`,
+  NOT an `AgentRunner` run) over the fixed CQL `(mention = currentUser() or watcher = currentUser()
+  or favourite = currentUser()) and type = page order by lastmodified desc`, the closest 3LO-reachable
+  approximation of the user's notification/bell feed (Confluence Cloud exposes NO OAuth-3LO
+  notifications API or scope). It reuses the same `ContentList` component, `ConfluenceResult<…>` shape,
+  and opaque-cursor pagination as search; typing a query swaps it for the search read. **The
   Confluence generative panel stays read-only** (no write control/dispatcher, and the page-create
   tool is intentionally NOT in the panel's `--allowedTools` grant — `CONFLUENCE_TOOL_GRANTS`); the
   `confluence_create_page` write lives only on the MCP server for the interactive TUI. Both panels
@@ -465,16 +489,20 @@ to ADF via `plainTextToAdf`; all failures mapped through the existing `mapJiraEr
 (429 → `rate_limited`, 401/403 → `reconnect_needed`, else → `network`). Confluence at
 `…/ex/confluence/{cloudId}/wiki` is a v1+v2 **hybrid** — v2 `GET
 /wiki/api/v2/pages/{id}?body-format=storage` for page reads and v1 `GET /wiki/rest/api/search?cql=…`
-for content search (CQL is not exposed in v2) — both paginating by opaque cursor
+for content search — and the default personal feed (a fixed personal-CQL variant of the same v1
+search endpoint, §default feed above) — (CQL is not exposed in v2), both paginating by opaque cursor
 (`Link`/`_links.next`) — plus a single v2 write, **`POST /wiki/api/v2/pages`** (create), which first
 resolves the user-supplied space KEY to the numeric `spaceId` the v2 create requires via `GET
 /wiki/api/v2/spaces?keys={spaceKey}&limit=1`, then POSTs `{ spaceId, status: 'current', title, body:
 { representation: 'storage', value }, parentId? }` with the plain-text body wrapped to Confluence
 storage XHTML via `plainTextToStorage` (the inverse of `storageToPlainText`: one `<p>…</p>` per line,
 HTML-escaped). Scopes: Jira `read:jira-work` + `read:jira-user` + **`write:jira-work`**
-(the least-privilege write scope; create + update reuse it, no new scope); Confluence classic
-`read:confluence-content.all` + `read:confluence-space.summary` + `search:confluence` +
-**`write:confluence-content`** (the single create write scope); both plus `offline_access`. Deferred:
+(the least-privilege write scope; create + update reuse it, no new scope); Confluence **granular**
+`read:page:confluence` + `read:space:confluence` + **`write:page:confluence`** (the single create
+write scope) plus the one **classic** scope `search:confluence` — kept because the v1 CQL
+`/wiki/rest/api/search` endpoint has no granular search-scope equivalent and is the only classic
+content scope still honored on a granular-migrated app (the deprecated `read:confluence-content.all`
+family now 401s "scope does not match"); both plus `offline_access`. Deferred:
 Confluence writes beyond create (edit/delete/labels), Jira writes beyond transition/comment/
 create/update (assign-by-name, delete, bulk, attachments, worklogs), cross-product/unified search,
 multi-site selection, and real-time updates.

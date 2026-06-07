@@ -49,8 +49,10 @@ import {
   diffUpdateFields,
   isCommentSubmittable,
   isCreateSubmittable,
+  isOpenDetailEmittable,
   isTransitionSubmittable,
   isUpdateSubmittable,
+  JIRA_OPEN_DETAIL_ACTION,
   statusBadgeLabel,
   statusBadgeStyle,
   ticketCardSummary
@@ -135,6 +137,14 @@ export interface TicketCardNode extends SdkProps {
   statusName?: string
   statusCategory?: JiraStatusCategory
   assignee?: JiraUserRef
+  /**
+   * Whether this card is the clickable/actionable variant (jira-ticket-detail-v1,
+   * design §1.3/§2). When true it gets `cursor-pointer` + the hover lift (it is wrapped
+   * in a real `<button>` by `IssueList`); when false (the `—` placeholder, no real key)
+   * it is an inert read-only card with NO hover affordance (§2.2). The `<button>` wrapper
+   * + the open-detail dispatch live in `IssueList`, mirroring Slack `ChannelList`.
+   */
+  actionable?: boolean
 }
 
 export function TicketCard({
@@ -142,11 +152,19 @@ export function TicketCard({
   summary,
   statusName,
   statusCategory,
-  assignee
+  assignee,
+  actionable
 }: TicketCardNode): React.JSX.Element {
   const summaryText = ticketCardSummary(summary)
   return (
-    <Card className="gap-2 rounded-xl p-3 transition-colors hover:bg-accent/40">
+    <Card
+      className={cn(
+        'gap-2 rounded-xl p-3 transition-colors',
+        // §2.1: the actionable card gets the pointer + hover lift (it responds to a click).
+        // §2.2: the inert "—" card drops them so it has no false affordance.
+        actionable && 'cursor-pointer hover:bg-accent/40'
+      )}
+    >
       <div className="flex items-center justify-between gap-2">
         <Badge variant="secondary" className="shrink-0 font-mono text-[10px]">
           {issueKey ?? '—'}
@@ -176,7 +194,8 @@ export interface IssueListNode extends SdkProps {
   issues?: TicketCardNode[]
 }
 
-export function IssueList({ surfaceId, issues }: IssueListNode): React.JSX.Element {
+export function IssueList({ surfaceId, componentId, issues }: IssueListNode): React.JSX.Element {
+  const dispatch = useDispatchAction()
   const items = Array.isArray(issues) ? issues : []
   if (items.length === 0) {
     return (
@@ -186,23 +205,55 @@ export function IssueList({ surfaceId, issues }: IssueListNode): React.JSX.Eleme
       </div>
     )
   }
+  // A card click opens that ticket's detail in place (jira-ticket-detail-v1, FR-001/FR-002).
+  // The action is handled renderer-locally by the Jira panel's onAction seam (never sent to
+  // main or the agent — JIRA_OPEN_DETAIL_ACTION is a non-jira.* nav action). A card with no
+  // real key (the "—" placeholder) is non-actionable (no button, no dispatch — §2.2).
+  const open = (issueKey: string): void => {
+    if (!isOpenDetailEmittable(issueKey)) {
+      return
+    }
+    dispatch(surfaceId, componentId, {
+      name: JIRA_OPEN_DETAIL_ACTION,
+      context: { issueKey }
+    })
+  }
   return (
     <div className="flex flex-col gap-2">
       <p className="text-xs text-muted-foreground" aria-live="polite">
         {items.length} {items.length === 1 ? 'issue' : 'issues'}
       </p>
-      {items.map((issue, i) => (
-        <TicketCard
-          key={issue.issueKey ?? i}
-          surfaceId={surfaceId}
-          componentId={`${issue.issueKey ?? i}`}
-          issueKey={issue.issueKey}
-          summary={issue.summary}
-          statusName={issue.statusName}
-          statusCategory={issue.statusCategory}
-          assignee={issue.assignee}
-        />
-      ))}
+      {items.map((issue, i) => {
+        const actionable = isOpenDetailEmittable(issue.issueKey)
+        const card = (
+          <TicketCard
+            surfaceId={surfaceId}
+            componentId={`${issue.issueKey ?? i}`}
+            issueKey={issue.issueKey}
+            summary={issue.summary}
+            statusName={issue.statusName}
+            statusCategory={issue.statusCategory}
+            assignee={issue.assignee}
+            actionable={actionable}
+          />
+        )
+        // Actionable (non-empty key): a real <button> wrapper — focusable, Enter/Space for
+        // free, cosmos focus ring on the rounded-xl corner (Slack ChannelList precedent).
+        return actionable ? (
+          <button
+            key={issue.issueKey}
+            type="button"
+            className="w-full rounded-xl text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            aria-label={`Open ${issue.issueKey}`}
+            onClick={() => open(issue.issueKey as string)}
+          >
+            {card}
+          </button>
+        ) : (
+          // Non-actionable ("—"): the inert card, no wrapper, skipped in tab order (§2.2).
+          <div key={i}>{card}</div>
+        )
+      })}
     </div>
   )
 }

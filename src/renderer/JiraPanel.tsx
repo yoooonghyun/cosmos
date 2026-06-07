@@ -29,20 +29,31 @@
  * FR-020 (write re-push lands in tab).
  */
 
-import { useEffect, useRef, useState } from 'react'
-import { A2UIProvider } from '@a2ui-sdk/react/0.9'
-import { Loader2, SquareKanban } from 'lucide-react'
+import { useCallback, useEffect, useRef, useState } from 'react'
+import { A2UIProvider, type A2UIAction } from '@a2ui-sdk/react/0.9'
+import { ChevronLeft, Loader2, Search, SquareKanban } from 'lucide-react'
 import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
 import { Textarea } from '@/components/ui/textarea'
 import { Skeleton } from '@/components/ui/skeleton'
 import type { FormEvent, KeyboardEvent } from 'react'
-import { ConnectionBar, ConnectForm } from './atlassianPanelBits'
-import { jiraCatalog, JIRA_CATALOG_ID } from './jiraCatalog'
+import { ConnectionStatus, ConnectForm } from './atlassianPanelBits'
+import { jiraCatalog, JIRA_CATALOG_ID, JIRA_OPEN_DETAIL_ACTION } from './jiraCatalog'
 import { PanelTabStrip, type PanelTab } from './PanelTabStrip'
+import { PanelFooter } from './PanelFooter'
 import { ActiveTabSurface } from './ActiveTabSurface'
 import { useGenerativePanelTabs } from './useGenerativePanelTabs'
+import { useTabShortcuts } from './useTabShortcuts'
 import type { AgentStatusPayload } from '../shared/ipc'
 import type { JiraConnectionStatus } from '../shared/jira'
+
+/**
+ * The my-tickets JQL — the native search box's placeholder AND the empty-submit fallback
+ * (jira-jql-search-v1 FR-002/FR-005). Mirrors main's `JIRA_DEFAULT_VIEW_JQL`; main owns
+ * the empty⇒default decision (this constant is only the placeholder so the box and the
+ * fallback never drift visually). Renderer-local because main's constant isn't exported.
+ */
+const JIRA_DEFAULT_VIEW_JQL = 'assignee = currentUser() ORDER BY updated DESC'
 
 /** A skeleton list shown while the per-switch default-view read is in flight (§5/§9.3). */
 function DefaultViewSkeleton(): React.JSX.Element {
@@ -174,104 +185,43 @@ function PromptComposer({ onSubmit }: { onSubmit: (utterance: string) => void })
   )
 }
 
-/** The connected body: the tab strip + per-tab A2UI host + composer + per-switch
- * default refresh (§9, panel-tabs v1 Phase 6). */
-function ConnectedBody({ active }: { active: boolean }): React.JSX.Element {
-  // panel-tabs v1: Jira tabs reuse the shared correlation. cancelOnClose=false because
-  // jira.* actions are dispatched deterministically by main (never the blocking render
-  // call's answer), so closing a tab needs no cancel. new-tab-base-view-v1: the per-tab
-  // default-view loading state + fire-or-defer of `requestDefaultView` live in the shared
-  // hook (`newTabWithDefault`), NOT as panel-wide flags here.
-  const { tabs, activeTabId, activeTab, setActive, submit, newTabWithDefault, closeTab } =
-    useGenerativePanelTabs({ target: 'jira', cancelOnClose: false })
+/**
+ * Native deterministic JQL search box (jira-jql-search-v1, design §1.2). Mirrors the
+ * Confluence panel's search box byte-for-byte (the `border-b border-border p-2` container,
+ * `<form className="relative">`, lucide `Search` icon, shadcn `Input` `h-8 pl-8 text-sm`).
+ * Enter-only submit (no button); the box is NOT cleared on submit (the query stays
+ * editable for refinement). Sends the RAW text — main trims + does empty⇒default (FR-005).
+ */
+function JqlSearchBox({ onSubmit }: { onSubmit: (jql: string) => void }): React.JSX.Element {
+  const [searchText, setSearchText] = useState('')
 
-  // Track the prior `active` so we only act on the false->true edge.
-  const wasActiveRef = useRef(false)
-  // Mirror of tab presence so the activation effect (which only depends on `active`)
-  // can read it without going stale across switches.
-  const hasTabsRef = useRef(false)
-  hasTabsRef.current = tabs.length > 0
-  // Latest newTabWithDefault, read inside the activation effect without re-running it
-  // on every render (the callback identity changes when `open` would, but `open` is
-  // stable; this keeps the effect keyed purely on `active`).
-  const newTabWithDefaultRef = useRef(newTabWithDefault)
-  newTabWithDefaultRef.current = newTabWithDefault
-
-  useEffect(() => {
-    // FR-002/FR-019 + new-tab-base-view-v1 FR-007: load the default view only on the
-    // FIRST show with no tab yet. `newTabWithDefault` opens a fresh tab (loadingDefault)
-    // and fires-or-defers `requestDefaultView`; the default board arrives as an
-    // unsolicited 'jira' frame the shared hook files into the (now active) tab and
-    // clears its skeleton. Once a tab exists, keep it across rail switches — do NOT
-    // re-request the default view.
-    if (active && !wasActiveRef.current && !hasTabsRef.current) {
-      newTabWithDefaultRef.current(() => window.cosmos.jira.requestDefaultView())
-    }
-    wasActiveRef.current = active
-    // reads go through refs; keyed purely on `active`.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [active])
+  const handleSubmit = (event: FormEvent<HTMLFormElement>): void => {
+    event.preventDefault()
+    onSubmit(searchText)
+  }
 
   return (
-    <div className="flex h-full flex-col">
-      <PanelTabStrip
-        tabs={tabs.map(
-          (t): PanelTab => ({
-            id: t.id,
-            label: t.label,
-            kind: 'generative',
-            status: t.inFlight ? 'in-flight' : t.error ? 'error' : 'idle',
-            untitled: t.untitled,
-            ...(t.error ? { errorMessage: t.error } : {})
-          })
-        )}
-        activeTabId={activeTabId}
-        onActivate={setActive}
-        onClose={closeTab}
-        onNewTab={() => newTabWithDefault(() => window.cosmos.jira.requestDefaultView())}
-        ariaLabel="Jira tabs"
-      />
-
-      <div className="min-h-0 flex-1 overflow-auto p-3 text-card-foreground" role="tabpanel">
-        {/* Per-tab default-view loading skeleton (FR-008/FR-009): shown only while THIS
-            tab's default-view read is outstanding and before its surface lands. */}
-        {activeTab?.loadingDefault && !activeTab.surface && <DefaultViewSkeleton />}
-        {activeTab?.error && (
-          <p
-            className="rounded-md border border-destructive/40 bg-destructive/15 px-2.5 py-2 text-[13px] text-destructive"
-            role="alert"
-          >
-            Could not render this surface: {activeTab.error}
-          </p>
-        )}
-        {/* Only the ACTIVE tab's provider is mounted; keyed by tab id so a switch
-            remounts + re-processes that tab's stored surface (FR-003). A jira.* action
-            re-pushes a fresh surface that lands in the active tab (FR-020). */}
-        {activeTab && (
-          <A2UIProvider key={activeTab.id} catalog={jiraCatalog}>
-            <ActiveTabSurface
-              surface={activeTab.surface}
-              catalogId={JIRA_CATALOG_ID}
-              panelName="JiraPanel"
-            />
-          </A2UIProvider>
-        )}
-      </div>
-      <PromptComposer onSubmit={submit} />
+    <div className="border-b border-border p-2">
+      <form onSubmit={handleSubmit} className="relative">
+        <Search className="pointer-events-none absolute left-2.5 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground" />
+        <Input
+          value={searchText}
+          onChange={(e) => setSearchText(e.target.value)}
+          placeholder={JIRA_DEFAULT_VIEW_JQL}
+          className="h-8 pl-8 text-sm"
+          aria-label="Search Jira issues with JQL"
+        />
+      </form>
     </div>
   )
 }
-
-/* ------------------------------------------------------------------------- *
- * The panel
- * ------------------------------------------------------------------------- */
 
 export function JiraPanel({ active }: { active: boolean }): React.JSX.Element {
   const [status, setStatus] = useState<JiraConnectionStatus>({ state: 'not_connected' })
   const [busy, setBusy] = useState(false)
 
-  // Initial status + live updates (FR-A12). A reconnect_needed flows here, so the
-  // body routes to the native Connect/Reconnect affordance (FR-016).
+  // Initial status + live updates (FR-A12). A reconnect_needed routes the content region
+  // to the native Connect/Reconnect affordance (FR-016) while the tab strip stays put.
   useEffect(() => {
     let alive = true
     void window.cosmos.jira.getStatus().then((s) => {
@@ -300,21 +250,197 @@ export function JiraPanel({ active }: { active: boolean }): React.JSX.Element {
 
   const isConnected = status.state === 'connected'
 
+  // panel-tabs v1: Jira tabs reuse the shared correlation. cancelOnClose=false because
+  // jira.* actions are dispatched deterministically by main (never the blocking render
+  // call's answer), so closing a tab needs no cancel.
+  const {
+    tabs,
+    activeTabId,
+    activeTab,
+    setActive,
+    submit,
+    newTab,
+    requestDefaultInActiveTab,
+    closeTab
+  } = useGenerativePanelTabs({ target: 'jira', cancelOnClose: false })
+
+  // jira-ticket-detail-v1 (FR-002/FR-004/FR-005): renderer-local navigation chrome over
+  // the ACTIVE tab. `view` toggles the native back row (panel chrome OUTSIDE the A2UI host);
+  // `originList` remembers which list the open detail came from so "back" re-runs the
+  // originating read (FR-005). Both are reset to the list view whenever the active tab
+  // changes so detail chrome never bleeds across tabs (FR-013 edge: detail bleed).
+  const [view, setView] = useState<{ kind: 'list' } | { kind: 'detail'; issueKey: string }>({
+    kind: 'list'
+  })
+  const originListRef = useRef<{ kind: 'default' } | { kind: 'search'; jql: string }>({
+    kind: 'default'
+  })
+
+  // jira-ticket-detail-v1: a minimum-duration skeleton floor for in-place navigation
+  // (list⇄detail, JQL search). The per-tab `loadingDefault` flag already gates the
+  // skeleton, but a warm detail/list read can resolve faster than one paint, so the
+  // skeleton would never become visible. `navLoading` holds the skeleton up for a short
+  // floor on every navigation so the transition always reads as "loading"; the real
+  // read (via `loadingDefault`) keeps it up longer when it's slower.
+  const [navLoading, setNavLoading] = useState(false)
+  const navTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const beginNavLoad = useCallback(() => {
+    setNavLoading(true)
+    if (navTimerRef.current) {
+      clearTimeout(navTimerRef.current)
+    }
+    navTimerRef.current = setTimeout(() => setNavLoading(false), 350)
+  }, [])
+  useEffect(
+    () => () => {
+      if (navTimerRef.current) {
+        clearTimeout(navTimerRef.current)
+      }
+    },
+    []
+  )
+
+  // Reset the detail chrome to the list view on a tab switch / new tab so an open detail's
+  // back row does not bleed across tabs (FR-013 edge).
+  useEffect(() => {
+    setView({ kind: 'list' })
+    originListRef.current = { kind: 'default' }
+  }, [activeTabId])
+
+  // Terminal-unified layout: always keep ≥1 tab. Seed one on mount and reopen a fresh tab
+  // if the collection ever empties, so the tab strip is always the topmost element — even
+  // when not connected (its content region then shows the Connect CTA).
+  useEffect(() => {
+    if (tabs.length === 0) {
+      newTab()
+    }
+    // newTab is stable; only react to the count reaching 0.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tabs.length])
+
+  // Lazily load the default board into an EMPTY tab once Jira is shown AND connected
+  // (FR-002/FR-019). Keyed on the active tab's emptiness: a fresh `+`/seed tab, a reconnect,
+  // or first show all resolve to "active tab has no surface, not loading, no error, list
+  // view" → fire one `requestDefaultInActiveTab(requestDefaultView)`. That marks the tab
+  // loadingDefault (its skeleton), so the condition immediately goes false and never loops;
+  // search/detail reads also set loadingDefault, so they suppress this default load too.
+  // Gated on `active` so a connected-but-hidden Jira panel does not eager-read.
+  useEffect(() => {
+    if (
+      active &&
+      isConnected &&
+      view.kind === 'list' &&
+      activeTab &&
+      !activeTab.surface &&
+      !activeTab.loadingDefault &&
+      !activeTab.error
+    ) {
+      requestDefaultInActiveTab(() => window.cosmos.jira.requestDefaultView())
+    }
+  }, [active, isConnected, view.kind, activeTab, requestDefaultInActiveTab])
+
+  // jira-ticket-detail-v1 (FR-001/FR-002/FR-009/FR-012): intercept the renderer-local
+  // open-detail nav action a clicked TicketCard emits. Read its `issueKey`, flip to the
+  // detail view (shows the back row immediately), and fire the deterministic detail read
+  // through the in-place seam. Return TRUE so the action is NEVER forwarded to main or the
+  // agent. ANY OTHER action (jira.transition/jira.comment writes) returns FALSE so it still
+  // flows to main via ui:action (FR-012).
+  const handleSurfaceAction = useCallback(
+    (action: A2UIAction): boolean => {
+      if (action.name !== JIRA_OPEN_DETAIL_ACTION) {
+        return false
+      }
+      const ctx = (action.context ?? {}) as Record<string, unknown>
+      const issueKey = typeof ctx.issueKey === 'string' ? ctx.issueKey : ''
+      if (issueKey.trim().length > 0) {
+        setView({ kind: 'detail', issueKey })
+        beginNavLoad()
+        requestDefaultInActiveTab(() => window.cosmos.jira.requestIssueDetail({ issueKey }))
+      }
+      return true
+    },
+    [requestDefaultInActiveTab, beginNavLoad]
+  )
+
+  // jira-ticket-detail-v1 (FR-004/FR-005): the native back row re-runs the originating read
+  // — the last JQL search if the detail was opened from a search, else the default view
+  // (also the fallback when no origin was captured). Then flip back to the list view.
+  const goBackToList = useCallback(() => {
+    const origin = originListRef.current
+    setView({ kind: 'list' })
+    beginNavLoad()
+    if (origin.kind === 'search') {
+      requestDefaultInActiveTab(() => window.cosmos.jira.requestSearchView({ jql: origin.jql }))
+    } else {
+      requestDefaultInActiveTab(() => window.cosmos.jira.requestDefaultView())
+    }
+  }, [requestDefaultInActiveTab, beginNavLoad])
+
+  const stripTabs: PanelTab[] = tabs.map((t) => ({
+    id: t.id,
+    label: t.label,
+    kind: 'generative' as const,
+    status: t.inFlight ? 'in-flight' : t.error ? 'error' : 'idle',
+    untitled: t.untitled,
+    ...(t.error ? { errorMessage: t.error } : {})
+  }))
+  const activeStripTab = stripTabs.find((t) => t.id === activeTabId) ?? null
+
+  // Tab keyboard shortcuts act on THIS strip only while the Jira surface is active.
+  useTabShortcuts({ active, tabs, activeTabId, onActivate: setActive, onNewTab: newTab, onCloseTab: closeTab })
+
   return (
     <section
       className="flex h-full min-w-0 flex-col border-l border-border bg-card"
       aria-label="Jira"
     >
-      <div className="flex select-none items-center border-b border-border bg-popover px-3 py-2">
-        <span className="text-xs font-semibold tracking-wide text-muted-foreground">Jira</span>
-      </div>
+      {/* Terminal-unified layout: the tab strip is the topmost element (no title header).
+          The connection status moves to the footer; the not-connected CTA renders inside the
+          active tab's content region. */}
+      <PanelTabStrip
+        tabs={stripTabs}
+        activeTabId={activeTabId}
+        onActivate={setActive}
+        onClose={closeTab}
+        onNewTab={newTab}
+        ariaLabel="Jira tabs"
+      />
 
-      <ConnectionBar status={status} onDisconnect={() => void disconnect()} />
+      {/* Connection-only chrome: the JQL search row + back row only make sense connected. */}
+      {isConnected && (
+        <JqlSearchBox
+          onSubmit={(jql) => {
+            // jira-ticket-detail-v1 (FR-005): a search submit makes the active list a SEARCH
+            // origin (capturing the RAW text — main re-resolves empty⇒default on a back), and
+            // returns to the list view so a stale detail's back row is dropped.
+            originListRef.current = { kind: 'search', jql }
+            setView({ kind: 'list' })
+            beginNavLoad()
+            requestDefaultInActiveTab(() => window.cosmos.jira.requestSearchView({ jql }))
+          }}
+        />
+      )}
 
-      <div className="min-h-0 flex-1">
+      {isConnected && view.kind === 'detail' && (
+        <div className="flex items-center gap-1.5 border-b border-border px-2 py-1.5">
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon-sm"
+            aria-label="Back to list"
+            onClick={goBackToList}
+          >
+            <ChevronLeft className="size-4" />
+          </Button>
+          <span className="truncate text-sm font-medium text-foreground">Back to list</span>
+        </div>
+      )}
+
+      {/* Content region (the active tab's content). */}
+      <div className="flex min-h-0 flex-1 flex-col overflow-auto">
         {!isConnected ? (
-          // FR-016: not-connected / reconnect_needed -> the existing native Connect
-          // affordance. No A2UI host, no composer, no per-switch read.
+          // FR-016: not-connected / reconnect_needed -> the native Connect affordance,
+          // rendered as the active tab's content (always one tab present).
           <div className="flex h-full flex-col items-center justify-center gap-3 px-6 text-center">
             <SquareKanban className="size-8 text-muted-foreground" />
             <p className="text-sm text-muted-foreground">
@@ -333,9 +459,50 @@ export function JiraPanel({ active }: { active: boolean }): React.JSX.Element {
             )}
           </div>
         ) : (
-          <ConnectedBody active={active} />
+          <div className="min-h-0 flex-1 p-3 text-card-foreground" role="tabpanel">
+            {/* Per-tab loading skeleton: shown for the initial default-view read AND every
+                in-place navigation read (list⇄detail, JQL search). While loadingDefault is
+                set we hide the stale surface below and show the skeleton so a navigation
+                always reads as "loading" instead of flashing the previous surface. */}
+            {activeTab?.loadingDefault || navLoading ? (
+              <DefaultViewSkeleton />
+            ) : (
+              <>
+                {activeTab?.error && (
+                  <p
+                    className="rounded-md border border-destructive/40 bg-destructive/15 px-2.5 py-2 text-[13px] text-destructive"
+                    role="alert"
+                  >
+                    Could not render this surface: {activeTab.error}
+                  </p>
+                )}
+                {/* Only the ACTIVE tab's provider is mounted; keyed by tab id so a switch
+                    remounts + re-processes that tab's stored surface (FR-003). A jira.* action
+                    re-pushes a fresh surface that lands in the active tab (FR-020). */}
+                {activeTab && (
+                  <A2UIProvider key={activeTab.id} catalog={jiraCatalog}>
+                    <ActiveTabSurface
+                      surface={activeTab.surface}
+                      catalogId={JIRA_CATALOG_ID}
+                      panelName="JiraPanel"
+                      onAction={handleSurfaceAction}
+                    />
+                  </A2UIProvider>
+                )}
+              </>
+            )}
+          </div>
         )}
       </div>
+
+      {/* Composer docks above the footer, only when there is something to ask about. */}
+      {isConnected && <PromptComposer onSubmit={submit} />}
+
+      {/* Connection bar is the panel footer (Terminal-unified layout). */}
+      <PanelFooter
+        activeTab={activeStripTab}
+        right={<ConnectionStatus status={status} onDisconnect={() => void disconnect()} />}
+      />
     </section>
   )
 }

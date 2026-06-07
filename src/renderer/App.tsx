@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { BookText, MessageSquare, Sparkles, SquareKanban, SquareTerminal } from 'lucide-react'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip'
@@ -30,6 +30,25 @@ const RAIL_ITEMS: { id: SurfaceId; label: string; Icon: typeof Sparkles }[] = [
 
 export function App(): React.JSX.Element {
   const [surface, setSurface] = useState<SurfaceId>('terminal')
+
+  // Left-rail surface switching via Cmd+Shift+] / Cmd+Shift+[ (matched in main,
+  // delivered over `shortcuts.onTrigger`). Bind once; functional setState wraps
+  // around RAIL_ITEMS without needing the current surface in the closure. The
+  // per-surface tab shortcuts (Cmd+T/W, cycle, jump) are handled inside each panel.
+  useEffect(() => {
+    const off = window.cosmos.shortcuts.onTrigger((payload) => {
+      if (payload.command !== 'surface:next' && payload.command !== 'surface:prev') {
+        return
+      }
+      const delta = payload.command === 'surface:next' ? 1 : -1
+      setSurface((prev) => {
+        const i = RAIL_ITEMS.findIndex((it) => it.id === prev)
+        const next = (i + delta + RAIL_ITEMS.length) % RAIL_ITEMS.length
+        return RAIL_ITEMS[next].id
+      })
+    })
+    return off
+  }, [])
 
   return (
     <TooltipProvider delayDuration={300}>
@@ -87,26 +106,26 @@ export function App(): React.JSX.Element {
             forceMount
             className="app__ui data-[state=inactive]:hidden"
           >
-            <TerminalPanel />
+            <TerminalPanel active={surface === 'terminal'} />
           </TabsContent>
           <TabsContent
             value="generated-ui"
             forceMount
             className="app__ui data-[state=inactive]:hidden"
           >
-            <GeneratedUiPanel />
+            <GeneratedUiPanel active={surface === 'generated-ui'} />
           </TabsContent>
           <TabsContent value="slack" forceMount className="app__ui data-[state=inactive]:hidden">
-            <SlackPanel />
+            <SlackPanel active={surface === 'slack'} />
           </TabsContent>
           <TabsContent value="jira" forceMount className="app__ui data-[state=inactive]:hidden">
             {/* Jira generative-UI v2 (D4): the panel is force-mounted, so it learns
                 it became the active rail surface from this prop and triggers the
-                per-switch default-view refresh. */}
+                per-switch default-view refresh AND scopes its tab shortcuts. */}
             <JiraPanel active={surface === 'jira'} />
           </TabsContent>
           <TabsContent value="confluence" forceMount className="app__ui data-[state=inactive]:hidden">
-            <ConfluencePanel />
+            <ConfluencePanel active={surface === 'confluence'} />
           </TabsContent>
         </Tabs>
       </div>

@@ -91,6 +91,20 @@ See `docs/ARCHITECTURE.md` for the authoritative design.
   filters `ui:render` by its `target` so one render channel feeds multiple A2UI panels. The Jira,
   Slack, and Confluence panels each register their own catalog (`jiraCatalog/`, `slackCatalog/`,
   `confluenceCatalog/`).
+- **A catalog action is routed by the panel's `onAction` return value: `true` = handled
+  renderer-locally (never forwarded), `false` = forward to main.** A catalog component emits a bound
+  action via `useDispatchAction`; the SDK pipes it `A2UIRenderer onAction → ActiveTabSurface →` the
+  panel's `onAction` handler. There are TWO kinds of action and the boundary is the return value:
+  (1) a **renderer-local NAV action** (e.g. Slack `SLACK_OPEN_CHANNEL_ACTION`, Jira
+  `jiraNav.openDetail`) drives panel `view`/navigation state in the renderer and returns `true` so it
+  is NEVER sent to main as a `ui:action` and never reaches the agent; (2) a **main-dispatched WRITE
+  action** (the reserved `jira.*` namespace — transition/comment/create/update) returns `false`, flows
+  to main, and is executed deterministically by `JiraActionDispatcher`. Give nav actions a
+  NON-`jira.`-prefixed name so they can never be mistaken for the reserved write namespace (a leak to
+  main is a safe no-op anyway — `validateJiraBoundAction` returns `null` for an unknown `jira.*` name).
+  Panel `view` chrome (e.g. a back row) lives OUTSIDE the `A2UIProvider` and resets on `activeTabId`
+  change so it doesn't bleed across tabs; the action carries its target id in `action.context` (e.g.
+  `{ issueKey }`) since catalog components have no panel callback prop.
 - **Generative-UI panels are target-routed end to end.** A panel (Jira/Slack/Confluence) is
   generative when a `PromptComposer` utterance drives a headless `AgentRunner` run for that
   `target`. The per-target policy lives in `mcpConfig.ts` (`renderMcpConfigJsonForTarget`,
@@ -164,6 +178,12 @@ See `docs/ARCHITECTURE.md` for the authoritative design.
 - Specs/plans and `docs/ARCHITECTURE.md` are owned by the **`architect`** agent;
   implementation (interface/tests/code) by the **`developer`** agent. The **`wrap-up`**
   skill propagates end-of-iteration learnings into the living docs and reconciles `TODO.md`.
+- **The SDD agents (`architect`/`developer`/`designer`) are equipped with codegraph +
+  agentmemory and must ground their own investigation with them** — `codegraph_explore` for
+  code structure, `memory_recall`/`memory_smart_search` for prior decisions, `memory_save` to
+  persist new ones. Do NOT have the orchestrator pre-gather findings and embed them into a
+  subagent's prompt; delegate the investigation, not just the writing. (A subagent starts with
+  a fresh context, but it has the tools to rebuild exactly the grounding it needs.)
 - **UI-bearing features add a design step** (the **`design`** skill, owned by the
   **`designer`** agent) between plan and interface: it establishes/extends the Tailwind +
   shadcn/ui design system and produces a design spec (`.sdd/designs/<feature>-v<N>.md`) so

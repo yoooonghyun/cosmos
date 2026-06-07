@@ -13,6 +13,8 @@ import type {
   A2uiSurfaceUpdate,
   AgentSubmitPayload,
   JiraRequestDefaultViewPayload,
+  JiraRequestIssueDetailPayload,
+  JiraRequestSearchViewPayload,
   PtyDisposePayload,
   PtyInputPayload,
   PtyResizePayload,
@@ -45,6 +47,7 @@ import type {
 import { JiraBoundAction, JiraOp } from './jira'
 import type {
   ConfluenceCreateParams,
+  ConfluenceDefaultFeedParams,
   ConfluenceGetPageParams,
   ConfluenceOpName,
   ConfluenceSearchParams
@@ -264,6 +267,59 @@ export function validateRequestDefaultView(
     return null
   }
   return {}
+}
+
+/**
+ * Validate a `jira:requestSearchView` payload (jira-jql-search-v1, FR-012). The native
+ * search box sends ONLY the raw `jql` string the user typed. Required: `jql` is a STRING
+ * — the EMPTY string is ALLOWED (empty/whitespace is the valid "clear to default" case,
+ * resolved in main, FR-005). A non-object or a non-string `jql` is warned and ignored
+ * (returns null) so a malformed frame triggers no read. Carries no secret (FR-011).
+ *
+ * @returns the validated payload, or `null` if invalid (caller ignores null).
+ */
+export function validateRequestSearchView(
+  raw: unknown,
+  warn: WarnFn = defaultWarn
+): JiraRequestSearchViewPayload | null {
+  if (!isObject(raw)) {
+    warn('[jira] ignoring jira:requestSearchView — payload is not an object:', raw)
+    return null
+  }
+  if (typeof raw.jql !== 'string') {
+    warn('[jira] ignoring jira:requestSearchView — required "jql" must be a string:', raw)
+    return null
+  }
+  return { jql: raw.jql }
+}
+
+/**
+ * Validate a `jira:requestIssueDetail` payload (jira-ticket-detail-v1, FR-011). The
+ * clickable `TicketCard` sends ONLY the clicked `issueKey`. Required: `issueKey` is a
+ * NON-EMPTY, non-whitespace string. Unlike `validateRequestSearchView` (where the empty
+ * string is the valid "clear to default" case), an EMPTY/whitespace `issueKey` is INVALID
+ * here — there is no "default detail" — so a non-object, a non-string `issueKey`, or an
+ * empty/whitespace `issueKey` is warned and ignored (returns null) so a malformed frame
+ * triggers no read. Carries no secret (FR-010).
+ *
+ * @returns the validated payload, or `null` if invalid (caller ignores null).
+ */
+export function validateRequestIssueDetail(
+  raw: unknown,
+  warn: WarnFn = defaultWarn
+): JiraRequestIssueDetailPayload | null {
+  if (!isObject(raw)) {
+    warn('[jira] ignoring jira:requestIssueDetail — payload is not an object:', raw)
+    return null
+  }
+  if (typeof raw.issueKey !== 'string' || raw.issueKey.trim().length === 0) {
+    warn(
+      '[jira] ignoring jira:requestIssueDetail — required "issueKey" must be a non-empty, non-whitespace string:',
+      raw
+    )
+    return null
+  }
+  return { issueKey: raw.issueKey }
 }
 
 /* ------------------------------------------------------------------------- *
@@ -854,6 +910,31 @@ export function validateConfluenceSearch(
     query: raw.query,
     ...(typeof raw.cursor === 'string' ? { cursor: raw.cursor } : {})
   }
+}
+
+/**
+ * Validate a `confluence:defaultFeed` params payload (confluence-default-feed v1,
+ * FR-006, FR-016). Cursor-only: there is NO `query` and NO CQL/mode string (the fixed
+ * personal CQL lives only in the client). Required: none — `{}`/`undefined` is accepted
+ * (first page). Optional: `cursor` is a string when present; a non-object or a
+ * non-string `cursor` is warned and ignored (returns null).
+ */
+export function validateConfluenceDefaultFeed(
+  raw: unknown,
+  warn: WarnFn = defaultWarn
+): ConfluenceDefaultFeedParams | null {
+  if (raw === undefined) {
+    return {}
+  }
+  if (!isObject(raw)) {
+    warn('[confluence] ignoring confluence:defaultFeed — payload is not an object:', raw)
+    return null
+  }
+  if (!optionalCursorOk(raw.cursor)) {
+    warn('[confluence] ignoring confluence:defaultFeed — optional "cursor" must be a string:', raw)
+    return null
+  }
+  return typeof raw.cursor === 'string' ? { cursor: raw.cursor } : {}
 }
 
 /**

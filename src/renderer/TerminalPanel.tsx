@@ -27,7 +27,9 @@ import { FitAddon } from '@xterm/addon-fit'
 import '@xterm/xterm/css/xterm.css'
 import type { PtyExitPayload } from '../shared/ipc'
 import { PanelTabStrip, type PanelTab } from './PanelTabStrip'
+import { PanelFooter } from './PanelFooter'
 import { usePanelTabs } from './usePanelTabs'
+import { useTabShortcuts } from './useTabShortcuts'
 import { nextTerminalIndex, terminalLabel } from './panelTabs'
 import './TerminalPanel.css'
 
@@ -201,7 +203,7 @@ function TerminalView({ paneId, active }: { paneId: string; active: boolean }): 
   )
 }
 
-export function TerminalPanel(): React.JSX.Element {
+export function TerminalPanel({ active }: { active: boolean }): React.JSX.Element {
   // FR-024: always ≥1 terminal. Seed one default tab on first mount.
   const everOpened = useRef(0)
   const mintTab = (): TerminalTab => {
@@ -240,6 +242,18 @@ export function TerminalPanel(): React.JSX.Element {
     [tabs]
   )
 
+  const activeStripTab = stripTabs.find((t) => t.id === activeTabId) ?? null
+
+  // Tab keyboard shortcuts act on THIS strip only while the Terminal surface is active.
+  useTabShortcuts({
+    active,
+    tabs,
+    activeTabId,
+    onActivate: setActive,
+    onNewTab: handleNewTab,
+    onCloseTab: handleClose
+  })
+
   return (
     <section
       className="flex h-full min-w-0 flex-col border-l border-border bg-card"
@@ -260,6 +274,7 @@ export function TerminalPanel(): React.JSX.Element {
           <TerminalView key={t.id} paneId={t.id} active={t.id === activeTabId} />
         ))}
       </div>
+      <PanelFooter activeTab={activeStripTab} />
     </section>
   )
 }

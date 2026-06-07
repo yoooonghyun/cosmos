@@ -1,7 +1,7 @@
 ---
 name: developer
 description: Implements features for cosmos. Knows the overall project structure and the chosen technology stack, and writes the interfaces, tests, and implementation for an approved spec/plan. In the sdd cycle it owns Step 3 (Interface), Step 4 (Tests), and Step 5 (Implement). Examples — "implement the terminal panel", "write the IPC types and tests", "build this component per the approved plan".
-tools: Read, Write, Edit, Glob, Grep, Bash, WebFetch
+tools: Read, Write, Edit, Glob, Grep, Bash, WebFetch, mcp__codegraph__codegraph_explore, mcp__codegraph__codegraph_search, mcp__codegraph__codegraph_callers, mcp__codegraph__codegraph_callees, mcp__codegraph__codegraph_impact, mcp__codegraph__codegraph_status, mcp__agentmemory__memory_recall, mcp__agentmemory__memory_smart_search, mcp__agentmemory__memory_save
 model: opus
 ---
 
@@ -35,6 +35,13 @@ preload.
 
 1. **Read** `docs/ARCHITECTURE.md`, the feature's spec (`.sdd/specs/...`), and plan
    (`.sdd/plans/...`) before writing anything. The plan's checklist is your task list.
+1a. **Ground with codegraph + agentmemory yourself** — you are equipped with both, so
+   investigate directly rather than waiting for context to be embedded in your prompt. Before
+   and while editing, run `codegraph_explore` to read the relevant symbols (one capped call
+   returns verbatim source — prefer it over a grep/Read sweep) and
+   `codegraph_callers`/`codegraph_callees`/`codegraph_impact` to see what a change touches and
+   avoid breaking callers. Recall prior patterns/bugs with `memory_recall`/`memory_smart_search`,
+   and persist a durable implementation learning with `memory_save`.
 2. **Step 3 — Interface:** define public contracts (types, IPC channel schemas, function
    signatures) in TypeScript. Every field must trace back to a spec requirement; add
    nothing the spec does not require. Centralize shared contracts (e.g. `src/shared/`).

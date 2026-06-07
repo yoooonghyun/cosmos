@@ -10,10 +10,12 @@ import {
   app,
   BrowserWindow,
   ipcMain,
+  Menu,
   safeStorage,
   shell,
   type IpcMainEvent,
-  type IpcMainInvokeEvent
+  type IpcMainInvokeEvent,
+  type MenuItemConstructorOptions
 } from 'electron'
 import { fileURLToPath } from 'node:url'
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
@@ -24,11 +26,13 @@ import {
   ConfluenceChannelName,
   JiraChannelName,
   PtyChannel,
+  ShortcutChannel,
   SlackChannelName,
   UiChannel,
   type AgentStatusPayload,
   type UiRenderPayload
 } from '../shared/ipc'
+import { matchShortcut } from './shortcutMatch'
 import type { SlackConnectionStatus } from '../shared/slack'
 import type { JiraConnectionStatus } from '../shared/jira'
 import type { ConfluenceConnectionStatus } from '../shared/confluence'
@@ -39,6 +43,7 @@ import {
 } from '../shared/bridge'
 import {
   validateAgentPrompt,
+  validateConfluenceDefaultFeed,
   validateConfluenceGetPage,
   validateConfluenceSearch,
   validateDispose,
@@ -46,6 +51,8 @@ import {
   validateJiraGetIssue,
   validateJiraSearch,
   validateRequestDefaultView,
+  validateRequestIssueDetail,
+  validateRequestSearchView,
   validateResize,
   validateRestart,
   validateSlackGetUser,
@@ -76,7 +83,7 @@ import { runSlackOAuth } from './integrations/slackOAuth'
 import { JiraBridge } from './jiraBridge'
 import { JiraManager } from './jiraManager'
 import { JiraActionDispatcher } from './jiraActionDispatcher'
-import { buildDefaultViewSurface, buildNoticeSurface } from './jiraSurfaceBuilder'
+import { buildDefaultViewSurface, buildIssueDetailSurface, buildNoticeSurface } from './jiraSurfaceBuilder'
 import { JiraClient } from './integrations/jiraClient'
 import { ConfluenceBridge } from './confluenceBridge'
 import { ConfluenceManager } from './confluenceManager'
@@ -96,6 +103,13 @@ try {
   process.loadEnvFile(join(app.getAppPath(), '.env'))
 } catch {
   // no .env present — fall back to the ambient environment
+}
+
+// The cosmos app icon (rasterized from assets/logo/cosmos-pastel.svg). Used for the
+// window (Windows/Linux taskbar) and the macOS dock. Resolved from the app root so it
+// works in dev; absent → fall back to the default Electron icon.
+function appIconPath(): string {
+  return join(app.getAppPath(), 'build', 'icon.png')
 }
 
 let mainWindow: BrowserWindow | null = null
@@ -555,6 +569,33 @@ function registerJiraIpcHandlers(): void {
     }
     void handleJiraDefaultView()
   })
+
+  // jira-jql-search-v1 (FR-003, FR-005): the native JQL search box was submitted. Trim
+  // the raw jql and fall back to the my-tickets default JQL when empty/whitespace, then
+  // run the SAME bounded read/compose/push as the default view. Fire-and-forget; never
+  // blocks. Validate the payload at the boundary (FR-012, SC-005).
+  ipcMain.on(JiraChannelName.RequestSearchView, (_event: IpcMainEvent, raw: unknown) => {
+    const payload = validateRequestSearchView(raw)
+    if (!payload || !jiraManager) {
+      return // invalid -> warned + ignored; or manager not ready
+    }
+    const jql = payload.jql.trim()
+    void handleJiraView(jql.length === 0 ? JIRA_DEFAULT_VIEW_JQL : jql)
+  })
+
+  // jira-ticket-detail-v1 (FR-003/FR-010/FR-011): a ticket card was clicked to open its
+  // detail in place. Run the deterministic native `getIssue` read for the clicked
+  // `issueKey` and push the composed detail surface (`target: 'jira'`) as an unsolicited
+  // frame into the active tab. Read-only — NOT an AgentRunner run, no new scope. Validate
+  // the payload at the boundary: an invalid/empty `issueKey` is warned + ignored (no read).
+  // Fire-and-forget; never blocks.
+  ipcMain.on(JiraChannelName.RequestIssueDetail, (_event: IpcMainEvent, raw: unknown) => {
+    const payload = validateRequestIssueDetail(raw)
+    if (!payload || !jiraManager) {
+      return // invalid -> warned + ignored; or manager not ready
+    }
+    void handleJiraIssueDetail(payload.issueKey)
+  })
 }
 
 /**
@@ -564,22 +605,25 @@ function registerJiraIpcHandlers(): void {
 const JIRA_DEFAULT_VIEW_JQL = 'assignee = currentUser() ORDER BY updated DESC'
 
 /**
- * Run the bounded default-view read and push the composed surface (Jira generative-UI
- * v2, D4). On `ok` → `buildDefaultViewSurface` (IssueList, incl. its own empty state).
- * On `reconnect_needed` → the JiraManager already drives `statusChanged`, so the panel
- * routes to the native Connect/Reconnect (no surface OAuth, FR-016) — push nothing. On
- * any other failure (`rate_limited`/`network`) → push a calm, recoverable `Notice`
- * surface (FR-019). Never throws; never blocks the rail switch (FR-020).
+ * Run a bounded Jira issue read for `jql` and push the composed surface with
+ * `target: 'jira'` (Jira generative-UI v2, D4; generalized for jira-jql-search-v1 FR-003).
+ * On `ok` → `buildDefaultViewSurface` (IssueList, incl. its own empty state). On
+ * `reconnect_needed`/`not_connected` → the JiraManager already drives `statusChanged`, so
+ * the panel routes to the native Connect/Reconnect (no surface OAuth, FR-016) — push
+ * nothing. On any other failure (`rate_limited`/`network`) → push a calm, recoverable
+ * `Notice` surface (FR-019/jql-search FR-007). Never throws; never blocks the rail
+ * switch (FR-020). Parameterized by `jql` so the default view and the JQL search share
+ * ALL read/error/push logic (the only difference is the JQL the caller passes).
  */
-async function handleJiraDefaultView(): Promise<void> {
+async function handleJiraView(jql: string): Promise<void> {
   if (!jiraManager) {
     return
   }
   let result
   try {
-    result = await jiraManager.searchIssues({ jql: JIRA_DEFAULT_VIEW_JQL })
+    result = await jiraManager.searchIssues({ jql })
   } catch (err) {
-    console.warn('[jira] default-view read threw (handled):', err instanceof Error ? err.message : err)
+    console.warn('[jira] view read threw (handled):', err instanceof Error ? err.message : err)
     pushRenderToRenderer({
       requestId: randomUUID(),
       spec: buildNoticeSurface({ kind: 'error', message: 'Could not load Jira issues. Try again shortly.' }),
@@ -612,6 +656,68 @@ async function handleJiraDefaultView(): Promise<void> {
 }
 
 /**
+ * Run the bounded default-view read (the my-tickets recently-updated issues) and push it
+ * (Jira generative-UI v2, D4 / v2 FR-002). A thin wrapper over `handleJiraView` so the
+ * existing `RequestDefaultView` handler behaves byte-for-byte as before.
+ */
+async function handleJiraDefaultView(): Promise<void> {
+  await handleJiraView(JIRA_DEFAULT_VIEW_JQL)
+}
+
+/**
+ * Run a bounded native `getIssue` read for `issueKey` and push the composed ticket-detail
+ * surface with `target: 'jira'` (jira-ticket-detail-v1, FR-003/FR-007/FR-008). Mirrors
+ * `handleJiraView` structurally:
+ *  - on `ok` → `buildIssueDetailSurface(detail)` (the EXISTING detail surface the post-write
+ *    re-push already renders — key/status, description, comments, transition + add-comment),
+ *    pushed as an unsolicited `target: 'jira'` frame the renderer files into the active tab.
+ *  - on `reconnect_needed`/`not_connected` → push NOTHING; the JiraManager already drives
+ *    `statusChanged` so the panel routes to the native Connect/Reconnect (FR-008).
+ *  - on any other failure (`rate_limited`/`network`, or a thrown error) → push a single
+ *    calm, recoverable `Notice` surface (FR-007). Never throws; never blocks the click.
+ * Read-only — NOT an AgentRunner run, no new OAuth scope; the token stays in main (FR-010).
+ */
+async function handleJiraIssueDetail(issueKey: string): Promise<void> {
+  if (!jiraManager) {
+    return
+  }
+  let result
+  try {
+    result = await jiraManager.getIssue({ issueKey })
+  } catch (err) {
+    console.warn('[jira] detail read threw (handled):', err instanceof Error ? err.message : err)
+    pushRenderToRenderer({
+      requestId: randomUUID(),
+      spec: buildNoticeSurface({ kind: 'error', message: 'Could not load this Jira issue. Try again shortly.' }),
+      target: 'jira'
+    })
+    return
+  }
+
+  if (result.ok) {
+    pushRenderToRenderer({
+      requestId: randomUUID(),
+      spec: buildIssueDetailSurface(result.data),
+      target: 'jira'
+    })
+    return
+  }
+
+  // reconnect_needed routes through the native Connect/Reconnect (statusChanged);
+  // don't push a surface for it (FR-008).
+  if (result.kind === 'reconnect_needed' || result.kind === 'not_connected') {
+    return
+  }
+
+  // rate_limited / network / write_not_authorized -> a calm recoverable Notice (FR-007).
+  pushRenderToRenderer({
+    requestId: randomUUID(),
+    spec: buildNoticeSurface({ kind: 'error', message: result.message }),
+    target: 'jira'
+  })
+}
+
+/**
  * Register the Confluence IPC `invoke` handlers (FR-A12, FR-X04). Same validate-at-
  * the-boundary + token-stays-in-main discipline as Jira (FR-A11, SC-009).
  */
@@ -629,6 +735,13 @@ function registerConfluenceIpcHandlers(): void {
       return badParams
     }
     return confluenceManager.searchContent(params)
+  })
+  ipcMain.handle(ConfluenceChannelName.DefaultFeed, (_e: IpcMainInvokeEvent, raw: unknown) => {
+    const params = validateConfluenceDefaultFeed(raw)
+    if (!params || !confluenceManager) {
+      return badParams
+    }
+    return confluenceManager.defaultFeed(params)
   })
   ipcMain.handle(ConfluenceChannelName.GetPage, (_e: IpcMainInvokeEvent, raw: unknown) => {
     const params = validateConfluenceGetPage(raw)
@@ -656,6 +769,7 @@ function createWindow(): void {
     show: false,
     backgroundColor: '#1e1e1e',
     title: 'cosmos',
+    ...(existsSync(appIconPath()) ? { icon: appIconPath() } : {}),
     webPreferences: {
       preload: join(__dirname, '../preload/index.mjs'),
       // FR-006: secure renderer baseline.
@@ -680,6 +794,31 @@ function createWindow(): void {
   })
   mainWindow.webContents.on('unresponsive', () => {
     console.error('[renderer unresponsive]')
+  })
+
+  // Global tab/window shortcuts (Chrome-style). Matched here in main so they fire
+  // regardless of DOM focus (an xterm-focused terminal otherwise swallows the keys)
+  // and are `preventDefault`'d before the page/xterm sees them. The resolved command
+  // is forwarded to the renderer, which maps it onto the active surface's tab ops.
+  // (Cmd/Ctrl+W's default window-close accelerator is removed from the menu in
+  // `buildAppMenu` so it can't preempt this — preventDefault here does not stop a
+  // menu accelerator.)
+  mainWindow.webContents.on('before-input-event', (event, input) => {
+    const match = matchShortcut(
+      {
+        type: input.type,
+        code: input.code,
+        meta: input.meta,
+        control: input.control,
+        shift: input.shift,
+        alt: input.alt
+      },
+      process.platform === 'darwin' ? 'darwin' : 'other'
+    )
+    if (match && mainWindow && !mainWindow.isDestroyed()) {
+      event.preventDefault()
+      mainWindow.webContents.send(ShortcutChannel.Trigger, match)
+    }
   })
 
   // The embedded agent and the bridge socket share one isolated cwd so the
@@ -797,7 +936,62 @@ function createWindow(): void {
   }
 }
 
+// In dev the app runs from the unpackaged Electron binary, whose bundle name is
+// "Electron"; set the product name explicitly so the macOS menu bar, About panel,
+// and dock all read "cosmos" instead. Must run before the menu is built.
+app.setName('cosmos')
+
+// Build the application menu from a template so the bold first menu (and About
+// dialog) shows "cosmos". The default menu derives its app-menu title from the
+// bundle name ("Electron") in dev, which app.setName alone does not override.
+function buildAppMenu(): void {
+  const isMac = process.platform === 'darwin'
+  const template: MenuItemConstructorOptions[] = [
+    ...(isMac
+      ? [
+          {
+            label: app.name,
+            submenu: [
+              { role: 'about' as const },
+              { type: 'separator' as const },
+              { role: 'services' as const },
+              { type: 'separator' as const },
+              { role: 'hide' as const },
+              { role: 'hideOthers' as const },
+              { role: 'unhide' as const },
+              { type: 'separator' as const },
+              { role: 'quit' as const }
+            ]
+          } satisfies MenuItemConstructorOptions
+        ]
+      : []),
+    { role: 'editMenu' },
+    { role: 'viewMenu' },
+    // Custom Window menu that OMITS the default Close item: its CmdOrCtrl+W
+    // accelerator would otherwise close the whole window and preempt our Cmd+W
+    // "close active tab" shortcut (a menu accelerator wins over before-input-event).
+    {
+      label: 'Window',
+      submenu: [
+        { role: 'minimize' as const },
+        { role: 'zoom' as const },
+        ...(isMac
+          ? [{ type: 'separator' as const }, { role: 'front' as const }]
+          : [])
+      ]
+    }
+  ]
+  Menu.setApplicationMenu(Menu.buildFromTemplate(template))
+}
+
 app.whenReady().then(() => {
+  app.setAboutPanelOptions({ applicationName: 'cosmos' })
+  buildAppMenu()
+  // macOS shows the dock icon from the app bundle, not the BrowserWindow `icon`;
+  // set it explicitly so dev (unpackaged Electron) shows the cosmos icon too.
+  if (process.platform === 'darwin' && existsSync(appIconPath())) {
+    app.dock?.setIcon(appIconPath())
+  }
   registerIpcHandlers()
   createWindow()
 

@@ -94,6 +94,93 @@ describe('ConfluenceClient.searchContent (FR-C04)', () => {
   })
 })
 
+describe('ConfluenceClient.defaultFeed (confluence-default-feed v1, FR-006)', () => {
+  const FEED_CQL =
+    '(mention = currentUser() or watcher = currentUser() or favourite = currentUser())' +
+    ' and type = page order by lastmodified desc'
+
+  it('builds the exact personal CQL (URL-encoded) and GETs the v1 search endpoint', async () => {
+    let capturedUrl = ''
+    const fetchImpl: FetchLike = async (url) => {
+      capturedUrl = url
+      return res({ results: [], _links: {} })
+    }
+    const client = new ConfluenceClient({ fetchImpl })
+    await client.defaultFeed(auth)
+    expect(capturedUrl).toContain('/wiki/rest/api/search')
+    expect(capturedUrl).toContain('cql=')
+    expect(capturedUrl).toContain('limit=25')
+    // URL-encoded, not hand-concatenated: a literal '(' would be unencoded.
+    expect(capturedUrl).toContain('cql=%28')
+    expect(capturedUrl).not.toContain('cql=(')
+    // The cql param decodes (via URLSearchParams, which also turns '+' back into a
+    // space) to the exact fixed personal CQL.
+    const cql = new URL(capturedUrl).searchParams.get('cql')
+    expect(cql).toBe(FEED_CQL)
+  })
+
+  it('maps hits to plain-text results and exposes the next-link cursor', async () => {
+    const fetchImpl: FetchLike = async () =>
+      res({
+        results: [
+          {
+            title: 'My @@@hl@@@watched@@@endhl@@@ page',
+            excerpt: 'A short @@@hl@@@excerpt@@@endhl@@@ here',
+            content: { id: '222', title: 'My watched page' },
+            resultGlobalContainer: { title: 'Engineering' }
+          }
+        ],
+        _links: { next: '/wiki/rest/api/search?cql=x&cursor=FEED9' }
+      })
+    const client = new ConfluenceClient({ fetchImpl })
+    const result = await client.defaultFeed(auth)
+    expect(result.ok).toBe(true)
+    if (result.ok) {
+      expect(result.data.items).toEqual([
+        { id: '222', title: 'My watched page', space: 'Engineering', excerpt: 'A short excerpt here' }
+      ])
+      expect(result.data.nextCursor).toBe('FEED9')
+    }
+  })
+
+  it('passes the cursor through to searchParams on a subsequent page', async () => {
+    let capturedUrl = ''
+    const fetchImpl: FetchLike = async (url) => {
+      capturedUrl = url
+      return res({ results: [], _links: {} })
+    }
+    const client = new ConfluenceClient({ fetchImpl })
+    await client.defaultFeed(auth, 'CUR42')
+    expect(new URL(capturedUrl).searchParams.get('cursor')).toBe('CUR42')
+  })
+
+  it('omits the cursor when there is no next link', async () => {
+    const fetchImpl: FetchLike = async () => res({ results: [], _links: {} })
+    const client = new ConfluenceClient({ fetchImpl })
+    const result = await client.defaultFeed(auth)
+    expect(result.ok).toBe(true)
+    if (result.ok) {
+      expect(result.data.nextCursor).toBeUndefined()
+    }
+  })
+
+  it('returns reconnect_needed on a 403 and rate_limited on a 429', async () => {
+    const c403 = new ConfluenceClient({ fetchImpl: async () => res({}, 403) })
+    const r403 = await c403.defaultFeed(auth)
+    expect(r403.ok).toBe(false)
+    if (!r403.ok) {
+      expect(r403.kind).toBe('reconnect_needed')
+    }
+    const c429 = new ConfluenceClient({ fetchImpl: async () => res({}, 429, '7') })
+    const r429 = await c429.defaultFeed(auth)
+    expect(r429.ok).toBe(false)
+    if (!r429.ok) {
+      expect(r429.kind).toBe('rate_limited')
+      expect(r429.retryAfterSeconds).toBe(7)
+    }
+  })
+})
+
 describe('ConfluenceClient.getPage (FR-C04)', () => {
   it('reads v2 page detail and flattens the storage body to text', async () => {
     const fetchImpl: FetchLike = async (url) => {

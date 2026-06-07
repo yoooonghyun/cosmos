@@ -157,8 +157,8 @@ export function PanelTabStrip({
                     'group/tab relative flex h-full min-w-0 max-w-[16rem] cursor-pointer items-center gap-1.5 border-r border-border px-2.5 text-[13px] whitespace-nowrap outline-none transition-colors focus-visible:ring-[3px] focus-visible:ring-ring/50',
                     // §5 Tab inactive
                     'bg-transparent text-muted-foreground hover:bg-accent hover:text-foreground',
-                    // §5 Tab active (darker, primary top-accent, owns its edges)
-                    'data-[state=active]:border-r-transparent data-[state=active]:bg-background data-[state=active]:text-foreground data-[state=active]:before:absolute data-[state=active]:before:inset-x-0 data-[state=active]:before:top-0 data-[state=active]:before:h-0.5 data-[state=active]:before:bg-primary',
+                    // §5 Tab active (darker, primary top-accent, owns its edges, bold label)
+                    'data-[state=active]:border-r-transparent data-[state=active]:bg-background data-[state=active]:font-medium data-[state=active]:text-foreground data-[state=active]:before:absolute data-[state=active]:before:inset-x-0 data-[state=active]:before:top-0 data-[state=active]:before:h-0.5 data-[state=active]:before:bg-primary',
                     // §5 Tab error (label tint)
                     'data-[status=error]:text-destructive'
                   )}

@@ -17,6 +17,29 @@
 import type { JiraStatusCategory, JiraUpdateFields } from '../../shared/jira'
 
 /**
+ * The renderer-local nav action a clickable `TicketCard` emits to open its detail
+ * (jira-ticket-detail-v1, FR-001/FR-002). DELIBERATELY NOT in the `jira.*`
+ * (`JiraBoundAction`) namespace — that namespace is reserved for actions MAIN intercepts
+ * at the `ui:action` boundary and dispatches as deterministic WRITES (transition/comment/
+ * create/update). This action is intercepted in the RENDERER (`JiraPanel.onAction`) and
+ * NEVER forwarded to main or the agent (plan contract-note recommendation B). It mirrors
+ * Slack's `SLACK_OPEN_CHANNEL_ACTION` — a dedicated, non-`jira.`-prefixed constant so the
+ * reserved write namespace stays unambiguous and a click can never be mistaken for a write.
+ */
+export const JIRA_OPEN_DETAIL_ACTION = 'jiraNav.openDetail'
+
+/**
+ * Whether a clicked `TicketCard` should emit the open-detail nav action
+ * (jira-ticket-detail-v1, FR-001 / edge case "ticket with no/empty key"). True ONLY when
+ * `issueKey` is a non-empty, non-whitespace string — the placeholder `—` card (absent or
+ * empty key) is non-actionable and emits nothing. Pure/node-testable; the component leans
+ * on this to decide whether to render the clickable `<button>` shell.
+ */
+export function isOpenDetailEmittable(issueKey: string | undefined): boolean {
+  return typeof issueKey === 'string' && issueKey.trim().length > 0
+}
+
+/**
  * The shadcn `Badge` variant + token classes for a normalized status category,
  * REUSED VERBATIM from the native `JiraPanel.StatusBadge` (design §3, the v2 color
  * win). `unknown` (or any unrecognized category) → an outline badge with no tint,

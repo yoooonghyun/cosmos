@@ -43,6 +43,7 @@ function makeClient(overrides?: Partial<ConfluenceClient>): ConfluenceClient {
   const ok = async (): Promise<ConfluenceResult<unknown>> => ({ ok: true, data: { items: [] } })
   return {
     searchContent: vi.fn(ok),
+    defaultFeed: vi.fn(ok),
     getPage: vi.fn(async () => ({ ok: true, data: { id: '1', title: 't', body: '' } })),
     createPage: vi.fn(async () => ({ ok: true, data: { id: '777', title: 'Notes' } })),
     ...overrides
@@ -161,6 +162,57 @@ describe('ConfluenceManager state machine (FR-A09, FR-A10, FR-A13, FR-A14, SC-00
   it('never exposes the token in the status (SC-009)', () => {
     const { store } = makeFakeStore(connectedTokens)
     expect(JSON.stringify(makeManager({ store }).manager.getStatus())).not.toContain('at-1')
+  })
+})
+
+describe('ConfluenceManager.defaultFeed (confluence-default-feed v1, FR-014, FR-015)', () => {
+  it('resolves ok and calls client.defaultFeed once when connected', async () => {
+    const { store } = makeFakeStore(connectedTokens)
+    const client = makeClient()
+    const { manager } = makeManager({ store, client })
+    const result = await manager.defaultFeed({})
+    expect(result.ok).toBe(true)
+    expect(client.defaultFeed).toHaveBeenCalledTimes(1)
+  })
+
+  it('returns not_connected without a client call when not connected (FR-015)', async () => {
+    const { store } = makeFakeStore(null)
+    const client = makeClient()
+    const { manager } = makeManager({ store, client })
+    const result = await manager.defaultFeed({})
+    expect(result.ok).toBe(false)
+    if (!result.ok) {
+      expect(result.kind).toBe('not_connected')
+    }
+    expect(client.defaultFeed).not.toHaveBeenCalled()
+  })
+
+  it('retries after a successful refresh when the client returns reconnect_needed once', async () => {
+    const { store } = makeFakeStore(connectedTokens)
+    const reconnectThenOk = vi
+      .fn<ConfluenceClient['defaultFeed']>()
+      .mockResolvedValueOnce({
+        ok: false,
+        kind: 'reconnect_needed',
+        message: 'expired'
+      })
+      .mockResolvedValueOnce({ ok: true, data: { items: [] } })
+    const client = makeClient({ defaultFeed: reconnectThenOk })
+    const refresh = vi.fn(refreshOk)
+    const { manager } = makeManager({ store, client, refresh })
+    const result = await manager.defaultFeed({})
+    expect(result.ok).toBe(true)
+    expect(refresh).toHaveBeenCalledTimes(1)
+    expect(reconnectThenOk).toHaveBeenCalledTimes(2)
+    expect(manager.getStatus().state).toBe('connected')
+  })
+
+  it('passes params.cursor to client.defaultFeed (cursor passthrough)', async () => {
+    const { store } = makeFakeStore(connectedTokens)
+    const client = makeClient()
+    const { manager } = makeManager({ store, client })
+    await manager.defaultFeed({ cursor: 'CUR42' })
+    expect(client.defaultFeed).toHaveBeenCalledWith({ token: 'at-1', cloudId: 'cloud-9' }, 'CUR42')
   })
 })
 

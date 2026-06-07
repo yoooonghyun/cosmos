@@ -3,8 +3,10 @@ import {
   diffUpdateFields,
   isCommentSubmittable,
   isCreateSubmittable,
+  isOpenDetailEmittable,
   isTransitionSubmittable,
   isUpdateSubmittable,
+  JIRA_OPEN_DETAIL_ACTION,
   statusBadgeLabel,
   statusBadgeStyle,
   ticketCardSummary
@@ -140,5 +142,25 @@ describe('isUpdateSubmittable (design §4.3 — mirrors validateJiraUpdate empty
   })
   it('is false for an empty diff (unchanged edit disables Save)', () => {
     expect(isUpdateSubmittable({})).toBe(false)
+  })
+})
+
+describe('isOpenDetailEmittable (jira-ticket-detail-v1, FR-001 — clickable only on a real key)', () => {
+  it('is true for a non-empty issueKey (an actionable card emits the nav action)', () => {
+    expect(isOpenDetailEmittable('PROJ-1')).toBe(true)
+    expect(isOpenDetailEmittable('ABC-123')).toBe(true)
+  })
+
+  it('is false for an absent/empty/whitespace key (the "—" placeholder card is inert)', () => {
+    expect(isOpenDetailEmittable(undefined)).toBe(false)
+    expect(isOpenDetailEmittable('')).toBe(false)
+    expect(isOpenDetailEmittable('   ')).toBe(false)
+  })
+})
+
+describe('JIRA_OPEN_DETAIL_ACTION (recommendation B — non-jira.* nav action)', () => {
+  it('is NOT in the reserved jira.* write namespace', () => {
+    expect(JIRA_OPEN_DETAIL_ACTION.startsWith('jira.')).toBe(false)
+    expect(JIRA_OPEN_DETAIL_ACTION).toBe('jiraNav.openDetail')
   })
 })

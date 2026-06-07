@@ -36,6 +36,13 @@ import {
 export const JIRA_CATALOG_ID = 'jira'
 
 /**
+ * The renderer-local open-detail nav action (jira-ticket-detail-v1, FR-001/FR-002),
+ * re-exported so the panel can intercept it in its `onAction` seam (mirrors Slack's
+ * `SLACK_OPEN_CHANNEL_ACTION` re-export).
+ */
+export { JIRA_OPEN_DETAIL_ACTION } from './logic'
+
+/**
  * The Jira custom catalog. The six contract components, the `Notice` block the
  * post-write re-push prepends (design §9.5), plus two generic passthroughs the
  * detail surface needs (design §1.1 permits Column/Text): the SDK's standard

@@ -40,8 +40,10 @@ import { ScrollArea } from '@/components/ui/scroll-area'
 import { Textarea } from '@/components/ui/textarea'
 import { slackCatalog, SLACK_CATALOG_ID, SLACK_OPEN_CHANNEL_ACTION } from './slackCatalog'
 import { PanelTabStrip, type PanelTab } from './PanelTabStrip'
+import { PanelFooter } from './PanelFooter'
 import { ActiveTabSurface } from './ActiveTabSurface'
 import { useGenerativePanelTabs } from './useGenerativePanelTabs'
+import { useTabShortcuts } from './useTabShortcuts'
 import type { AgentStatusPayload } from '../shared/ipc'
 import type {
   SlackChannel,
@@ -239,7 +241,7 @@ type View =
  * Connection bar (design §2.1)
  * ------------------------------------------------------------------------- */
 
-function ConnectionBar({
+function ConnectionStatus({
   status,
   onDisconnect
 }: {
@@ -247,27 +249,27 @@ function ConnectionBar({
   onDisconnect: () => void
 }): React.JSX.Element {
   return (
-    <div className="flex select-none items-center justify-between border-b border-border bg-popover px-3 py-2">
+    <>
       {status.state === 'not_connected' && (
-        <span className="text-xs text-muted-foreground">Not connected</span>
+        <span className="text-[11px] text-muted-foreground">Not connected</span>
       )}
       {status.state === 'connecting' && (
         <>
-          <span className="flex items-center gap-1.5 text-xs text-muted-foreground">
-            <Loader2 className="size-3.5 animate-spin" />
+          <span className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
+            <Loader2 className="size-3 animate-spin" />
             Validating token…
           </span>
-          <Button type="button" variant="ghost" size="sm" onClick={onDisconnect}>
+          <Button type="button" variant="ghost" size="xs" onClick={onDisconnect}>
             Cancel
           </Button>
         </>
       )}
       {status.state === 'connected' && (
         <>
-          <span className="truncate text-sm font-medium text-foreground">
+          <span className="truncate text-[11px] font-medium text-foreground">
             {status.workspaceName ?? 'Connected'}
           </span>
-          <Button type="button" variant="ghost" size="sm" onClick={onDisconnect}>
+          <Button type="button" variant="ghost" size="xs" onClick={onDisconnect}>
             Disconnect
           </Button>
         </>
@@ -277,7 +279,7 @@ function ConnectionBar({
           Reconnect needed
         </Badge>
       )}
-    </div>
+    </>
   )
 }
 
@@ -739,7 +741,7 @@ function PromptComposer({ onSubmit }: { onSubmit: (utterance: string) => void })
  * The panel
  * ------------------------------------------------------------------------- */
 
-export function SlackPanel(): React.JSX.Element {
+export function SlackPanel({ active }: { active: boolean }): React.JSX.Element {
   const [status, setStatus] = useState<SlackConnectionStatus>({ state: 'not_connected' })
   const [busy, setBusy] = useState(false)
   const [view, setView] = useState<View>({ kind: 'channels' })
@@ -748,10 +750,21 @@ export function SlackPanel(): React.JSX.Element {
   // tabs => the native channel/search browser base (FR-017).
   const { tabs, activeTabId, activeTab, setActive, submit, newTab, closeTab } =
     useGenerativePanelTabs({ target: 'slack' })
+  // Tab keyboard shortcuts act on THIS strip only while the Slack surface is active.
+  useTabShortcuts({ active, tabs, activeTabId, onActivate: setActive, onNewTab: newTab, onCloseTab: closeTab })
   // The native channel/search browser is the base shown not only at zero tabs but also
   // whenever the active tab has not composed a surface yet (a fresh `+` "Untitled" tab),
   // so a new tab lands on the same base screen instead of a blank panel.
   const showNativeBase = !activeTab || (!activeTab.surface && !activeTab.error)
+  // Always keep ≥1 tab (Terminal-unified layout): seed one on mount and reopen a fresh
+  // tab if the collection ever empties, so the tab strip is always the topmost element.
+  useEffect(() => {
+    if (tabs.length === 0) {
+      newTab()
+    }
+    // newTab is stable; only react to the count reaching 0.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tabs.length])
   // Cache of resolved display names so author ids resolve once (FR-014).
   const nameCache = useRef<Map<string, string>>(new Map())
 
@@ -850,20 +863,35 @@ export function SlackPanel(): React.JSX.Element {
 
   const isConnected = status.state === 'connected'
 
+  const stripTabs: PanelTab[] = tabs.map((t) => ({
+    id: t.id,
+    label: t.label,
+    kind: 'generative' as const,
+    status: t.inFlight ? 'in-flight' : t.error ? 'error' : 'idle',
+    untitled: t.untitled,
+    ...(t.error ? { errorMessage: t.error } : {})
+  }))
+  const activeStripTab = stripTabs.find((t) => t.id === activeTabId) ?? null
+
   return (
     <section
       className="flex h-full min-w-0 flex-col border-l border-border bg-card"
       aria-label="Slack"
     >
-      {/* Tab-strip-style header (matches Generated-UI panel chrome). */}
-      <div className="flex select-none items-center border-b border-border bg-popover px-3 py-2">
-        <span className="text-xs font-semibold tracking-wide text-muted-foreground">Slack</span>
-      </div>
+      {/* Terminal-unified layout: the tab strip is the topmost element (no title header).
+          The connection status moves to the footer; the not-connected CTA renders inside the
+          active tab's content region (FR-002). */}
+      <PanelTabStrip
+        tabs={stripTabs}
+        activeTabId={activeTabId}
+        onActivate={setActive}
+        onClose={closeTab}
+        onNewTab={newTab}
+        ariaLabel="Slack tabs"
+      />
 
-      <ConnectionBar status={status} onDisconnect={() => void disconnect()} />
-
-      {/* Content region */}
-      <div className="min-h-0 flex-1">
+      {/* Content region (the active tab's content). */}
+      <div className="flex min-h-0 flex-1 flex-col">
         {!isConnected ? (
           <div className="flex h-full flex-col items-center justify-center gap-3 px-6 text-center">
             <MessageSquare className="size-8 text-muted-foreground" />
@@ -882,26 +910,7 @@ export function SlackPanel(): React.JSX.Element {
             )}
           </div>
         ) : (
-          <div className="flex h-full flex-col">
-            {/* panel-tabs v1: the tab strip above the body (FR-002). */}
-            <PanelTabStrip
-              tabs={tabs.map(
-                (t): PanelTab => ({
-                  id: t.id,
-                  label: t.label,
-                  kind: 'generative',
-                  status: t.inFlight ? 'in-flight' : t.error ? 'error' : 'idle',
-                  untitled: t.untitled,
-                  ...(t.error ? { errorMessage: t.error } : {})
-                })
-              )}
-              activeTabId={activeTabId}
-              onActivate={setActive}
-              onClose={closeTab}
-              onNewTab={newTab}
-              ariaLabel="Slack tabs"
-            />
-
+          <>
             {/* Native channel/search browser — the base shown at zero tabs AND on an
                 uncomposed (new `+`) active tab (FR-017). */}
             {showNativeBase && (
@@ -985,13 +994,26 @@ export function SlackPanel(): React.JSX.Element {
                         <MessageList
                           key={`${view.channel.id}-${view.parent.ts}`}
                           emptyText="No replies."
-                          load={(cursor) =>
-                            window.cosmos.slack.getReplies({
+                          load={async (cursor) => {
+                            // conversations.replies returns the parent as the first item;
+                            // it's already shown as the thread header above, so drop it
+                            // here to avoid rendering the thread root twice.
+                            const r = await window.cosmos.slack.getReplies({
                               channelId: view.channel.id,
                               threadTs: view.parent.ts,
                               ...(cursor ? { cursor } : {})
                             })
-                          }
+                            if (!r.ok) {
+                              return r
+                            }
+                            return {
+                              ...r,
+                              data: {
+                                ...r.data,
+                                items: r.data.items.filter((m) => m.ts !== view.parent.ts)
+                              }
+                            }
+                          }}
                           onReconnect={() => void refreshStatus()}
                           resolveNames={resolveNames}
                         />
@@ -1030,11 +1052,18 @@ export function SlackPanel(): React.JSX.Element {
                 </A2UIProvider>
               </div>
             )}
-
-            <PromptComposer onSubmit={submit} />
-          </div>
+          </>
         )}
       </div>
+
+      {/* Composer docks above the footer, only when there is something to ask about. */}
+      {isConnected && <PromptComposer onSubmit={submit} />}
+
+      {/* Connection bar is the panel footer (Terminal-unified layout). */}
+      <PanelFooter
+        activeTab={activeStripTab}
+        right={<ConnectionStatus status={status} onDisconnect={() => void disconnect()} />}
+      />
     </section>
   )
 }

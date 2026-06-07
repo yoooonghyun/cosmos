@@ -6,9 +6,26 @@ For the authoritative design see `docs/ARCHITECTURE.md`.
 
 ## In progress
 
-- (nothing in flight — new-tab-base-view v1 cycle complete)
+_None._
 
 ## Next
+
+- [ ] Manual GUI verification of **Jira ticket detail on click v1** via `npm run dev` (**requires a
+  full restart, not HMR — preload changed**: new `jira:requestIssueDetail` channel): clicking a ticket
+  card opens that ticket's detail in place in the active tab; the card shows a hover/focus affordance
+  and is keyboard-activatable (Enter/Space), while a `—`/no-key card is inert (no cursor/hover/tab
+  stop); a native "← Back to list" row returns to the originating list (default view, or the prior JQL
+  search if that's where it was opened from); a failed `getIssue` shows a recoverable Notice; a
+  reconnect-needed routes to native Connect/Reconnect; clicking a ticket WHILE an NL compose is
+  awaiting a frame defers correctly; a transition/comment on the opened detail still re-pushes a detail
+  and the back row remains.
+
+- [ ] Manual GUI verification of **Jira JQL search box v1** via `npm run dev` (**requires a full
+  restart, not HMR — preload changed**: new `jira:requestSearchView` channel): the box placeholder
+  shows the my-tickets JQL `assignee = currentUser() ORDER BY updated DESC`; a valid JQL submit
+  filters the ACTIVE tab; an empty/whitespace submit returns the default view; an invalid JQL shows a
+  recoverable Notice (no crash); a search submitted WHILE an NL compose is awaiting a frame defers and
+  both results land in the right tab; the NL composer still works unchanged.
 
 - [ ] Manual GUI verification of **new-tab-base-view v1** via `npm run dev` (renderer-only, HMR is
   enough — no preload restart): a fresh `+` tab in every generative panel shows the panel's BASE, not
@@ -19,6 +36,12 @@ For the authoritative design see `docs/ARCHITECTURE.md`.
   pressed WHILE a compose is awaiting a frame DEFERS the default-view request (new tab shows base, no
   stuck skeleton) and flushes it once the run completes/errors; closing a default-loading tab does not
   crash. All unverified at runtime.
+- [ ] Manual GUI verification of **confluence-default-feed v1** via `npm run dev` (OAuth-gated,
+  preload restart already done): with Confluence connected and the search box empty, the panel base
+  shows the personal feed (pages you're mentioned on / watching / favorited, newest first) instead of
+  a blank panel; typing a query swaps to search and clearing it returns to the feed; an empty feed
+  shows "No mentions, watched, or favorited pages yet."; cursor "load more" pagination works;
+  reconnect_needed recovery. Unverified at runtime.
 - [ ] Manual GUI verification of **panel-tabs v1** via `npm run dev` (requires the preload
   restart, not HMR): open ≥2 generated-UI tabs in a generative panel and switch between them
   with each surface preserved; `+` opens a tab, utterance fills the ACTIVE tab, submit with
@@ -73,6 +96,45 @@ For the authoritative design see `docs/ARCHITECTURE.md`.
 
 ## Done
 
+- [x] **Jira ticket detail on click v1** (`jira-ticket-detail-v1`) — clicking a `TicketCard` in the
+  Jira `IssueList` opens that ticket's full detail IN-PLACE in the active tab, with a native
+  "← Back to list" row (Confluence `ChevronLeft` precedent) that re-runs the originating read (default
+  view / last JQL search). Deterministic + read-only: the clickable card emits a renderer-local nav
+  action (`jiraNav.openDetail`, non-`jira.*`) intercepted by the panel's `onAction` (returns `true`,
+  never forwarded to main/agent — the Slack open-channel seam); the new sibling channel
+  `jira:requestIssueDetail { issueKey }` runs `getIssue` → `JiraSurfaceBuilder.buildIssueDetailSurface`
+  → unsolicited `target:'jira'` frame into the active tab (reuses the §4.11 fire-or-defer
+  `requestDefaultInActiveTab` seam). No new OAuth scope, no token on payload/surface; `jira.*` write
+  actions still flow to main (`onAction` returns `false`). No new tokens/components. 619/619 tests
+  green, typecheck clean. GUI verification pending (preload restart). See `docs/ARCHITECTURE.md` §4.9.
+- [x] **Jira JQL search box v1** (`jira-jql-search-v1`) — a native deterministic JQL search box on the
+  connected Jira panel, kept ALONGSIDE the NL composer. Placeholder = the my-tickets JQL `assignee =
+  currentUser() ORDER BY updated DESC`; empty/whitespace submit ⇒ default view, non-empty ⇒ a native
+  `jira:searchIssues` read (NOT an `AgentRunner` run) → `JiraSurfaceBuilder` `IssueList` → an
+  unsolicited `target:'jira'` frame replacing the ACTIVE tab. New sibling channel
+  `jira:requestSearchView` `{ jql }` (the zero-payload `requestDefaultView` trigger was NOT
+  overloaded); main shares one `handleJiraView(jql)` helper between default-view and search (helper
+  does empty⇒default fallback); renderer reuses the unsolicited-frame fire-or-defer correlation-slot
+  discipline in place via a new hook method `requestDefaultInActiveTab` (in-place analog of
+  `newTabWithDefault`, sharing a private `fireOrDeferDefault` core). Read-only — no new OAuth scope, no
+  token on payload/surface. 603/603 tests green (11 new `validateRequestSearchView` cases), typecheck
+  clean. GUI verification pending (preload restart). See `docs/ARCHITECTURE.md` §4.9.
+- [x] **Equipped the SDD agents with codegraph + agentmemory** — added the `codegraph_*` +
+  agentmemory `memory_*` MCP tools to `.claude/agents/{architect,developer,designer}.md` `tools:`
+  frontmatter (they previously lacked them, so the architect fell back to raw Read/Grep), plus a
+  grounding principle in each agent file, a CLAUDE.md Workflow rule, and an sdd skill Step 0
+  clarification: SDD subagents ground their OWN investigation via codegraph/agentmemory — the
+  orchestrator delegates the investigation, NOT pre-gathered context embedded in the prompt.
+- [x] **Confluence default feed v1** — the Confluence panel's idle base (native search box empty) now
+  shows a **default personal feed** instead of a blank panel: a deterministic native read
+  (`ConfluenceClient.defaultFeed` → `ConfluenceManager.defaultFeed` → new `confluence:defaultFeed` IPC
+  channel, NOT an `AgentRunner` run, no bridge/MCP) over the fixed CQL `(mention = currentUser() or
+  watcher = currentUser() or favourite = currentUser()) and type = page order by lastmodified desc` —
+  the closest 3LO-reachable approximation of the notification/bell feed (Confluence Cloud exposes no
+  OAuth-3LO notifications API/scope). Generalized `ContentList` in `ConfluencePanel.tsx` to take a
+  `fetcher`/`reloadKey`/`emptyLabel`, reused by both idle-feed and search branches; reuses the v1
+  search endpoint + opaque-cursor pagination + `ConfluenceResult<…>` shape. 592 tests green, typecheck
+  clean. See `docs/ARCHITECTURE.md` §4.9.
 - [x] **New tab base view v1** — a fresh `+` tab (or any empty/uncomposed active tab) now shows the
   panel's base screen instead of a blank panel. Generalized each generative panel's base gate from
   `tabs.length === 0` to "active tab is empty" (`!activeTab || (!activeTab.surface && !activeTab.error)`);

@@ -208,26 +208,39 @@ export class ConfluenceClient {
     if (!r.ok) {
       return r.error
     }
-    const results = Array.isArray(r.body.results) ? r.body.results : []
-    const items: ConfluenceSearchResult[] = results.filter(isRecord).map((hit) => {
-      const content = isRecord(hit.content) ? hit.content : {}
-      const space = isRecord(hit.resultGlobalContainer) ? hit.resultGlobalContainer : {}
-      const title =
-        typeof hit.title === 'string'
-          ? stripHighlight(hit.title)
-          : typeof content.title === 'string'
-            ? content.title
-            : ''
-      return {
-        id: typeof content.id === 'string' ? content.id : String(content.id ?? ''),
-        title,
-        ...(typeof space.title === 'string' ? { space: space.title } : {}),
-        excerpt: typeof hit.excerpt === 'string' ? stripHighlight(hit.excerpt) : ''
-      }
-    })
-    const links = isRecord(r.body._links) ? r.body._links : {}
-    const nextCursor = cursorFromNextLink(links.next)
-    return { ok: true, data: { items, ...(nextCursor ? { nextCursor } : {}) } }
+    return { ok: true, data: mapSearchResultsPage(r.body) }
+  }
+
+  /**
+   * The default personal activity feed (confluence-default-feed v1, FR-001, FR-006).
+   * GET /wiki/rest/api/search with the FIXED personal-scope CQL — pages the user
+   * @mentions, watches, or favorited, most-recently-modified first — authorized by the
+   * same `search:confluence` scope as text search. The CQL string lives ONLY here
+   * (SC-008): the renderer/IPC payload carry only an optional cursor. Same hit-mapping
+   * and cursor pagination as {@link searchContent}, returning the identical
+   * `ConfluencePage<ConfluenceSearchResult>` DTO so the panel renders either source
+   * unchanged.
+   */
+  async defaultFeed(
+    auth: ConfluenceCallAuth,
+    cursor?: string
+  ): Promise<ConfluenceResult<ConfluencePage<ConfluenceSearchResult>>> {
+    const url = new URL(`${this.base(auth.cloudId)}/wiki/rest/api/search`)
+    // Let `searchParams` URL-encode the CQL (do NOT hand-concatenate the query string).
+    url.searchParams.set(
+      'cql',
+      '(mention = currentUser() or watcher = currentUser() or favourite = currentUser())' +
+        ' and type = page order by lastmodified desc'
+    )
+    url.searchParams.set('limit', '25')
+    if (cursor) {
+      url.searchParams.set('cursor', cursor)
+    }
+    const r = await this.call(url.toString(), auth.token)
+    if (!r.ok) {
+      return r.error
+    }
+    return { ok: true, data: mapSearchResultsPage(r.body) }
   }
 
   /**
@@ -326,6 +339,38 @@ export class ConfluenceClient {
     const title = typeof r.body.title === 'string' && r.body.title !== '' ? r.body.title : params.title
     return { ok: true, data: { id, title } }
   }
+}
+
+/**
+ * Map a v1 CQL search response body to a `ConfluencePage<ConfluenceSearchResult>`
+ * (pure). Shared by {@link ConfluenceClient.searchContent} and
+ * {@link ConfluenceClient.defaultFeed} — both consume the same `/wiki/rest/api/search`
+ * hit shape, so the title/space/excerpt extraction and the `_links.next` → `nextCursor`
+ * pagination are identical.
+ */
+function mapSearchResultsPage(
+  body: Record<string, unknown>
+): ConfluencePage<ConfluenceSearchResult> {
+  const results = Array.isArray(body.results) ? body.results : []
+  const items: ConfluenceSearchResult[] = results.filter(isRecord).map((hit) => {
+    const content = isRecord(hit.content) ? hit.content : {}
+    const space = isRecord(hit.resultGlobalContainer) ? hit.resultGlobalContainer : {}
+    const title =
+      typeof hit.title === 'string'
+        ? stripHighlight(hit.title)
+        : typeof content.title === 'string'
+          ? content.title
+          : ''
+    return {
+      id: typeof content.id === 'string' ? content.id : String(content.id ?? ''),
+      title,
+      ...(typeof space.title === 'string' ? { space: space.title } : {}),
+      excerpt: typeof hit.excerpt === 'string' ? stripHighlight(hit.excerpt) : ''
+    }
+  })
+  const links = isRecord(body._links) ? body._links : {}
+  const nextCursor = cursorFromNextLink(links.next)
+  return { items, ...(nextCursor ? { nextCursor } : {}) }
 }
 
 /**

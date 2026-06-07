@@ -18,6 +18,7 @@ import type {
   ConfluenceConnectionStatus,
   ConfluenceCreateParams,
   ConfluenceCreateResult,
+  ConfluenceDefaultFeedParams,
   ConfluenceGetPageParams,
   ConfluencePage,
   ConfluencePageDetail,
@@ -187,6 +188,19 @@ export class ConfluenceManager {
     params: ConfluenceSearchParams
   ): Promise<ConfluenceResult<ConfluencePage<ConfluenceSearchResult>>> {
     return this.run((auth) => this.deps.client.searchContent(auth, params.query, params.cursor))
+  }
+
+  /**
+   * The default personal activity feed (confluence-default-feed v1, FR-014). Routes
+   * through `run()` so it inherits the same proactive/reactive token refresh +
+   * `reconnect_needed` handling as the other reads and returns the same
+   * `ConfluenceResult<ConfluencePage<ConfluenceSearchResult>>` shape. Read-only — no
+   * scope/write logic (FR-012); the fixed personal CQL lives in the client.
+   */
+  defaultFeed(
+    params: ConfluenceDefaultFeedParams
+  ): Promise<ConfluenceResult<ConfluencePage<ConfluenceSearchResult>>> {
+    return this.run((auth) => this.deps.client.defaultFeed(auth, params.cursor))
   }
 
   getPage(params: ConfluenceGetPageParams): Promise<ConfluenceResult<ConfluencePageDetail>> {

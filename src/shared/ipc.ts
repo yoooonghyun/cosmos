@@ -420,6 +420,25 @@ export const JiraChannelName = {
    * switch never blocks on the read.
    */
   RequestDefaultView: 'jira:requestDefaultView',
+  /**
+   * R->M (send): the Jira panel's native JQL search box was submitted; main runs the
+   * SAME bounded read/compose/push as the default view but for the supplied JQL
+   * (jira-jql-search-v1, FR-003). Carries `{ jql }`; main trims it and falls back to the
+   * my-tickets default JQL when empty/whitespace (FR-005). Deterministic — NOT an
+   * `AgentRunner` run. Fire-and-forget — the surface arrives via `ui:render`
+   * (`target: 'jira'`) as an unsolicited frame into the active tab; never blocks.
+   */
+  RequestSearchView: 'jira:requestSearchView',
+  /**
+   * R->M (send): a `TicketCard` in the Jira panel's `IssueList` was clicked to open its
+   * full detail in place (jira-ticket-detail-v1, FR-003/FR-010). Carries `{ issueKey }`;
+   * main runs the deterministic native `getIssue` read and composes the result through
+   * `buildIssueDetailSurface`, pushed with `target: 'jira'` as an UNSOLICITED frame into
+   * the active tab. Read-only — NOT an `AgentRunner` run, no new OAuth scope, no token on
+   * the payload (FR-010). Fire-and-forget — the surface arrives via `ui:render`
+   * (`target: 'jira'`); never blocks. Parallels `RequestSearchView`.
+   */
+  RequestIssueDetail: 'jira:requestIssueDetail',
   /** M->R (event): connection status changed. FR-A12. */
   StatusChanged: 'jira:statusChanged'
 } as const
@@ -434,6 +453,29 @@ export type JiraChannelNameValue =
  * compose. NO secret-bearing field (v2 FR-017).
  */
 export type JiraRequestDefaultViewPayload = Record<string, never>
+
+/**
+ * R->M. The Jira panel's native JQL search submit (jira-jql-search-v1, FR-003). Carries
+ * ONLY the raw `jql` string the user typed (FR-011 — no token/secret). An empty or
+ * whitespace-only `jql` is the valid "clear to default" case, resolved in MAIN (it
+ * trims and falls back to `JIRA_DEFAULT_VIEW_JQL`, FR-005); the payload type itself just
+ * requires a string.
+ */
+export interface JiraRequestSearchViewPayload {
+  /** The raw JQL the user typed. Empty/whitespace ⇒ default view (resolved in main). */
+  jql: string
+}
+
+/**
+ * R->M. The Jira panel's click-to-open ticket-detail request (jira-ticket-detail-v1,
+ * FR-003/FR-010). Carries ONLY the clicked `issueKey` — the ONLY field; NO token/secret
+ * (FR-010). A non-empty `issueKey` is enforced by the boundary validator (an empty key is
+ * invalid here — there is no "default detail", unlike the search view's empty⇒default).
+ */
+export interface JiraRequestIssueDetailPayload {
+  /** The clicked ticket's key (e.g. `PROJ-123`). Non-empty — enforced by the validator. */
+  issueKey: string
+}
 
 /**
  * The Jira API surface exposed to the renderer via `contextBridge` as
@@ -460,6 +502,22 @@ export interface JiraApi {
    */
   requestDefaultView(): void
   /**
+   * R->M. Submit the native JQL search box (jira-jql-search-v1, FR-003). Sends the raw
+   * `jql` the user typed; main trims it and runs the same read/compose/push as the
+   * default view (empty/whitespace ⇒ the my-tickets default view, FR-005).
+   * Fire-and-forget; the surface arrives via `ui:render` (`target: 'jira'`) into the
+   * active tab. Never blocks. No token on the payload (FR-011).
+   */
+  requestSearchView(payload: JiraRequestSearchViewPayload): void
+  /**
+   * R->M. Open a clicked ticket's full detail in place (jira-ticket-detail-v1,
+   * FR-003/FR-010). Sends only the `issueKey`; main runs the deterministic `getIssue`
+   * read and composes `buildIssueDetailSurface`, pushing it via `ui:render`
+   * (`target: 'jira'`) into the active tab. Fire-and-forget; never blocks. Read-only —
+   * no new scope, no token on the payload (FR-010). Mirrors `requestSearchView`.
+   */
+  requestIssueDetail(payload: JiraRequestIssueDetailPayload): void
+  /**
    * M->R. Subscribe to connection-status changes. Returns an unsubscribe fn so
    * the panel can detach on unmount (avoids leaks / double-binding on HMR). FR-A12.
    */
@@ -473,6 +531,7 @@ export interface JiraApi {
 
 import type {
   ConfluenceConnectionStatus,
+  ConfluenceDefaultFeedParams,
   ConfluenceGetPageParams,
   ConfluencePage,
   ConfluencePageDetail,
@@ -495,6 +554,13 @@ export const ConfluenceChannelName = {
   Disconnect: 'confluence:disconnect',
   /** R->M (invoke): search content (paginated). FR-C04. */
   SearchContent: 'confluence:searchContent',
+  /**
+   * R->M (invoke): the default personal activity feed — pages the user @mentions,
+   * watches, or favorited, most-recently-modified first (paginated). The fixed
+   * personal-scope CQL lives only in the main-process client; this channel's payload
+   * carries only an optional cursor (confluence-default-feed v1, FR-006, FR-016).
+   */
+  DefaultFeed: 'confluence:defaultFeed',
   /** R->M (invoke): read one page's detail. FR-C04. */
   GetPage: 'confluence:getPage',
   /** M->R (event): connection status changed. FR-A12. */
@@ -520,6 +586,15 @@ export interface ConfluenceApi {
   /** R->M. Search content (paginated). FR-C04. */
   searchContent(
     params: ConfluenceSearchParams
+  ): Promise<ConfluenceResult<ConfluencePage<ConfluenceSearchResult>>>
+  /**
+   * R->M. The default personal activity feed (paginated) — mentions / watches /
+   * favorites, most-recently-modified first (confluence-default-feed v1, FR-001,
+   * FR-006). Cursor-only params; the personal CQL stays in main. Same result DTO as
+   * `searchContent` so the panel's `ContentList` renders either source unchanged.
+   */
+  defaultFeed(
+    params: ConfluenceDefaultFeedParams
   ): Promise<ConfluenceResult<ConfluencePage<ConfluenceSearchResult>>>
   /** R->M. Read one page's detail. FR-C04. */
   getPage(params: ConfluenceGetPageParams): Promise<ConfluenceResult<ConfluencePageDetail>>
@@ -600,6 +675,64 @@ export interface AgentApi {
   onStatus(listener: (payload: AgentStatusPayload) => void): () => void
 }
 
+/**
+ * Channel for global tab/window keyboard shortcuts (Chrome-style). Key combos
+ * are matched in MAIN (via `before-input-event`) so they fire regardless of DOM
+ * focus (incl. an xterm-focused terminal) and can be `preventDefault`'d before
+ * the renderer/window sees them; main then forwards the resolved command here.
+ */
+export const ShortcutChannel = {
+  /** M->R: a matched shortcut command (e.g. open a tab, switch surface). */
+  Trigger: 'shortcut:trigger'
+} as const
+
+export type ShortcutChannelName = (typeof ShortcutChannel)[keyof typeof ShortcutChannel]
+
+/**
+ * A resolved tab/window shortcut command, dispatched from main to the renderer.
+ *  - `tab:new`      — open a new tab in the active rail surface (Cmd+T).
+ *  - `tab:close`    — close the active tab in the active rail surface (Cmd+W).
+ *  - `tab:next`     — activate the next tab, wrapping (Ctrl+Tab, Cmd+Opt+Right).
+ *  - `tab:prev`     — activate the previous tab, wrapping (Ctrl+Shift+Tab, Cmd+Opt+Left).
+ *  - `tab:jump`     — activate the tab at `index` (Cmd+1..8 ⇒ index 0..7).
+ *  - `tab:last`     — activate the last tab (Cmd+9).
+ *  - `surface:next` — switch to the next left-rail surface (Cmd+Shift+]).
+ *  - `surface:prev` — switch to the previous left-rail surface (Cmd+Shift+[).
+ */
+export type ShortcutCommand =
+  | 'tab:new'
+  | 'tab:close'
+  | 'tab:next'
+  | 'tab:prev'
+  | 'tab:jump'
+  | 'tab:last'
+  | 'surface:next'
+  | 'surface:prev'
+
+/**
+ * M->R. A matched shortcut. `index` is present only for `tab:jump` (0-based: the
+ * Nth tab to activate). No other payload — the renderer maps the command onto the
+ * active surface's existing tab ops.
+ */
+export interface ShortcutTriggerPayload {
+  /** The resolved command. */
+  command: ShortcutCommand
+  /** 0-based tab index for `tab:jump`; absent for every other command. */
+  index?: number
+}
+
+/**
+ * Shortcut API exposed to the renderer as `window.cosmos.shortcuts`. Renderer is
+ * receive-only here; the key matching lives in main.
+ */
+export interface ShortcutApi {
+  /**
+   * M->R. Subscribe to resolved shortcut commands. Returns an unsubscribe fn so
+   * subscribers can detach on unmount (avoids leaks / double-binding on HMR).
+   */
+  onTrigger(listener: (payload: ShortcutTriggerPayload) => void): () => void
+}
+
 /** Shape attached to `window` by the preload. */
 export interface CosmosApi {
   pty: PtyApi
@@ -608,4 +741,5 @@ export interface CosmosApi {
   jira: JiraApi
   confluence: ConfluenceApi
   agent: AgentApi
+  shortcuts: ShortcutApi
 }

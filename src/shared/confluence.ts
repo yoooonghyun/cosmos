@@ -161,6 +161,17 @@ export interface ConfluenceSearchParams {
   cursor?: string
 }
 
+/**
+ * Params for the default personal activity feed (confluence-default-feed v1, FR-006,
+ * FR-016). Cursor-only: it carries NO query and NO CQL/mode string. The fixed
+ * personal-scope CQL lives ONLY in `ConfluenceClient.defaultFeed` (SC-008); the
+ * renderer and IPC payload never carry a CQL or a feed-mode discriminator.
+ */
+export interface ConfluenceDefaultFeedParams {
+  /** Cursor for the next page; absent for the first page. */
+  cursor?: string
+}
+
 /** Params for reading a single page's detail (FR-C04, FR-C06). */
 export interface ConfluenceGetPageParams {
   /** The page id to read. */

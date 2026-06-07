@@ -32,7 +32,12 @@ builds on what already exists instead of rediscovering it:
   codegraph indexes every symbol/edge/file and is sub-millisecond — prefer one `codegraph_explore`
   call over a grep/read sweep. If it reports no project loaded, run `codegraph init .` once.
 
-Carry the findings into Step 1 (Specify) and Step 2 (Plan).
+This primes the orchestrator's own understanding so it can frame the delegation and judge
+ambiguity. It does **not** replace each agent's own grounding: the `architect`, `developer`,
+and `designer` are themselves equipped with codegraph + agentmemory and MUST investigate
+directly when they own a step. Delegate the *investigation*, not just the writing — do not
+pre-gather findings here and paste them into a subagent's prompt as a substitute for it
+grounding itself (a subagent's fresh context is rebuilt with these same tools, sub-millisecond).
 
 ## Step 1 — Specify
 

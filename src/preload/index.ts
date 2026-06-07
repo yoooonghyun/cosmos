@@ -11,6 +11,7 @@ import {
   ConfluenceChannelName,
   JiraChannelName,
   PtyChannel,
+  ShortcutChannel,
   SlackChannelName,
   UiChannel,
   type AgentApi,
@@ -19,11 +20,15 @@ import {
   type ConfluenceApi,
   type CosmosApi,
   type JiraApi,
+  type JiraRequestIssueDetailPayload,
+  type JiraRequestSearchViewPayload,
   type PtyApi,
   type PtyDataPayload,
   type PtyExitPayload,
   type PtyInputPayload,
   type PtyResizePayload,
+  type ShortcutApi,
+  type ShortcutTriggerPayload,
   type SlackApi,
   type UiApi,
   type UiActionPayload,
@@ -44,6 +49,7 @@ import type {
 } from '../shared/jira'
 import type {
   ConfluenceConnectionStatus,
+  ConfluenceDefaultFeedParams,
   ConfluenceGetPageParams,
   ConfluenceSearchParams
 } from '../shared/confluence'
@@ -161,6 +167,18 @@ const jiraApi: JiraApi = {
     // object) accepts the trigger; the payload carries no field (D4 / v2 FR-002).
     ipcRenderer.send(JiraChannelName.RequestDefaultView, {})
   },
+  // jira-jql-search-v1 (FR-003): fire-and-forget R->M signal carrying the raw JQL the
+  // user submitted in the native search box; main trims + does empty⇒default and runs
+  // the same read/compose/push as the default view. No payload return, no token.
+  requestSearchView(payload: JiraRequestSearchViewPayload): void {
+    ipcRenderer.send(JiraChannelName.RequestSearchView, payload)
+  },
+  // jira-ticket-detail-v1 (FR-003/FR-010): fire-and-forget R->M signal carrying the
+  // clicked ticket's key; main runs the deterministic `getIssue` read and pushes the
+  // composed detail surface (`target: 'jira'`) into the active tab. No return, no token.
+  requestIssueDetail(payload: JiraRequestIssueDetailPayload): void {
+    ipcRenderer.send(JiraChannelName.RequestIssueDetail, payload)
+  },
   onStatusChanged(listener: (status: JiraConnectionStatus) => void): () => void {
     const handler = (_event: IpcRendererEvent, status: JiraConnectionStatus): void =>
       listener(status)
@@ -184,6 +202,9 @@ const confluenceApi: ConfluenceApi = {
   },
   searchContent(params: ConfluenceSearchParams) {
     return ipcRenderer.invoke(ConfluenceChannelName.SearchContent, params)
+  },
+  defaultFeed(params: ConfluenceDefaultFeedParams) {
+    return ipcRenderer.invoke(ConfluenceChannelName.DefaultFeed, params)
   },
   getPage(params: ConfluenceGetPageParams) {
     return ipcRenderer.invoke(ConfluenceChannelName.GetPage, params)
@@ -212,13 +233,25 @@ const agentApi: AgentApi = {
   }
 }
 
+// Global tab/window shortcuts: receive-only in the renderer. Main matches the key
+// combo (via `before-input-event`) and forwards the resolved command here.
+const shortcutApi: ShortcutApi = {
+  onTrigger(listener: (payload: ShortcutTriggerPayload) => void): () => void {
+    const handler = (_event: IpcRendererEvent, payload: ShortcutTriggerPayload): void =>
+      listener(payload)
+    ipcRenderer.on(ShortcutChannel.Trigger, handler)
+    return () => ipcRenderer.removeListener(ShortcutChannel.Trigger, handler)
+  }
+}
+
 const api: CosmosApi = {
   pty: ptyApi,
   ui: uiApi,
   slack: slackApi,
   jira: jiraApi,
   confluence: confluenceApi,
-  agent: agentApi
+  agent: agentApi,
+  shortcuts: shortcutApi
 }
 
 contextBridge.exposeInMainWorld('cosmos', api)

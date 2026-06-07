@@ -155,10 +155,16 @@ export function ReconnectState({
 }
 
 /* ------------------------------------------------------------------------- *
- * Connection bar (design §2.2)
+ * Connection status (design §2.2 — now the PanelFooter right slot)
  * ------------------------------------------------------------------------- */
 
-export function ConnectionBar({
+/**
+ * The connection-status cluster shown in the panel footer's right slot. Returns the
+ * status indicator (+ Disconnect/Cancel control) only — the surrounding footer bar
+ * (border, bg, layout) is owned by `PanelFooter`, which pairs this with the active-tab
+ * label on the left so every panel shares one footer row.
+ */
+export function ConnectionStatus({
   status,
   onDisconnect
 }: {
@@ -166,30 +172,30 @@ export function ConnectionBar({
   onDisconnect: () => void
 }): React.JSX.Element {
   return (
-    <div className="flex select-none items-center justify-between border-b border-border bg-popover px-3 py-2">
+    <>
       {status.state === 'not_connected' && (
-        <span className="text-xs text-muted-foreground">Not connected</span>
+        <span className="text-[11px] text-muted-foreground">Not connected</span>
       )}
       {status.state === 'connecting' && (
         <>
-          <span className="flex items-center gap-1.5 text-xs text-muted-foreground">
-            <Loader2 className="size-3.5 animate-spin" />
+          <span className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
+            <Loader2 className="size-3 animate-spin" />
             Connecting…
           </span>
-          <Button type="button" variant="ghost" size="sm" onClick={onDisconnect}>
+          <Button type="button" variant="ghost" size="xs" onClick={onDisconnect}>
             Cancel
           </Button>
         </>
       )}
       {status.state === 'connected' && (
         <>
-          <span className="min-w-0 truncate text-sm font-medium text-foreground">
+          <span className="min-w-0 truncate text-[11px] font-medium text-foreground">
             {status.siteName ?? 'Connected'}
             {status.accountName && (
               <span className="text-muted-foreground"> · {status.accountName}</span>
             )}
           </span>
-          <Button type="button" variant="ghost" size="sm" onClick={onDisconnect}>
+          <Button type="button" variant="ghost" size="xs" onClick={onDisconnect}>
             Disconnect
           </Button>
         </>
@@ -199,7 +205,7 @@ export function ConnectionBar({
           Reconnect needed
         </Badge>
       )}
-    </div>
+    </>
   )
 }
 

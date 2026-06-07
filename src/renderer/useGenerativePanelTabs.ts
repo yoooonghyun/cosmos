@@ -76,6 +76,20 @@ export interface GenerativePanelTabs extends PanelTabsController<GenerativeTab> 
    * Generic: the hook stays free of Jira specifics beyond the injected `request`.
    */
   newTabWithDefault: (request: () => void) => void
+  /**
+   * The IN-PLACE analog of `newTabWithDefault` (jira-jql-search-v1 FR-004/FR-006/FR-009):
+   * "filter the current tab" rather than open a new one. Marks the ACTIVE tab
+   * `loadingDefault: true` + clears its prior error (or, if there is no active tab,
+   * auto-creates one marked `loadingDefault` to hold the result), then fires-or-defers the
+   * supplied `request()` against the shared `originatingTabIdRef` slot — exactly like
+   * `newTabWithDefault` (the two share the private `fireOrDeferDefault` core). `request()`
+   * pushes an UNSOLICITED `target` frame (Jira passes
+   * `() => window.cosmos.jira.requestSearchView({ jql }))`), so it MUST NOT race a solicited
+   * compose: fire now if the correlation is idle, else DEFER until the in-flight run
+   * resolves. The landed surface (or a Notice) clears `loadingDefault` via the render
+   * subscription.
+   */
+  requestDefaultInActiveTab: (request: () => void) => void
   /** Close a tab, cancelling any unresolved blocking surface + dropping correlation. */
   closeTab: (tabId: string) => void
 }
@@ -248,6 +262,20 @@ export function useGenerativePanelTabs(
     })
   }, [open])
 
+  // The shared fire-or-defer core of `newTabWithDefault`/`requestDefaultInActiveTab`
+  // (new-tab-base-view-v1 OQ-1 / FR-011; jira-jql-search-v1 FR-009): `request()` pushes an
+  // UNSOLICITED frame for this panel's `target`, so fire it NOW only if no compose is
+  // awaiting a frame, else DEFER until the in-flight run resolves — the two frame kinds
+  // must never race the shared `originatingTabIdRef` slot. The loading tab never hangs:
+  // loadingDefault + no surface still shows the panel's base. Stateless beyond the refs.
+  const fireOrDeferDefault = useCallback((request: () => void) => {
+    if (defaultRequestDecision(originatingTabIdRef.current) === 'fire') {
+      request()
+    } else {
+      deferredDefaultRequestRef.current = request
+    }
+  }, [])
+
   const newTabWithDefault = useCallback(
     (request: () => void) => {
       // Open a fresh active tab that wants a base/default surface, marked
@@ -260,17 +288,34 @@ export function useGenerativePanelTabs(
         inFlight: false,
         loadingDefault: true
       })
-      // OQ-1 / FR-011: `request()` pushes an UNSOLICITED frame; fire it now only if no
-      // compose is awaiting a frame, else DEFER until the in-flight run resolves so the
-      // two frame kinds never race the shared `originatingTabIdRef` slot. The new tab
-      // never hangs — loadingDefault + no surface still shows the panel's base.
-      if (defaultRequestDecision(originatingTabIdRef.current) === 'fire') {
-        request()
-      } else {
-        deferredDefaultRequestRef.current = request
-      }
+      fireOrDeferDefault(request)
     },
-    [open]
+    [open, fireOrDeferDefault]
+  )
+
+  const requestDefaultInActiveTab = useCallback(
+    (request: () => void) => {
+      // jira-jql-search-v1 FR-004/FR-006: "filter the current tab". Mark the ACTIVE tab
+      // loadingDefault + clear its prior error so its per-tab skeleton shows while the
+      // read is outstanding; if there is no active tab (zero tabs), auto-create one to
+      // hold the result (FR-004). Then fire-or-defer the unsolicited frame exactly like
+      // `newTabWithDefault` (shared core).
+      const activeId = activeTabIdRef.current
+      if (activeId && tabIdsRef.current.has(activeId)) {
+        update(activeId, { loadingDefault: true, error: undefined })
+      } else {
+        open({
+          id: crypto.randomUUID(),
+          label: UNTITLED_LABEL,
+          untitled: true,
+          surface: null,
+          inFlight: false,
+          loadingDefault: true
+        })
+      }
+      fireOrDeferDefault(request)
+    },
+    [open, update, fireOrDeferDefault]
   )
 
   const closeTab = useCallback(
@@ -295,5 +340,12 @@ export function useGenerativePanelTabs(
     [tabs, close, cancelOnClose]
   )
 
-  return { ...controller, submit, newTab, newTabWithDefault, closeTab }
+  return {
+    ...controller,
+    submit,
+    newTab,
+    newTabWithDefault,
+    requestDefaultInActiveTab,
+    closeTab
+  }
 }

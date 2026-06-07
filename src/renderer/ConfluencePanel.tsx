@@ -36,7 +36,7 @@ import { Skeleton } from '@/components/ui/skeleton'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { Textarea } from '@/components/ui/textarea'
 import {
-  ConnectionBar,
+  ConnectionStatus,
   ConnectForm,
   EmptyLine,
   ErrorState,
@@ -44,12 +44,15 @@ import {
 } from './atlassianPanelBits'
 import { confluenceCatalog, CONFLUENCE_CATALOG_ID } from './confluenceCatalog'
 import { PanelTabStrip, type PanelTab } from './PanelTabStrip'
+import { PanelFooter } from './PanelFooter'
 import { ActiveTabSurface } from './ActiveTabSurface'
 import { useGenerativePanelTabs } from './useGenerativePanelTabs'
+import { useTabShortcuts } from './useTabShortcuts'
 import type { AgentStatusPayload } from '../shared/ipc'
 import type {
   ConfluenceConnectionStatus,
   ConfluenceError,
+  ConfluencePage,
   ConfluencePageDetail,
   ConfluenceResult,
   ConfluenceSearchResult
@@ -100,12 +103,27 @@ type ConfluenceView = { kind: 'search' } | { kind: 'page'; pageId: string; title
  * Search results list (§5.1 / §5.2)
  * ------------------------------------------------------------------------- */
 
+/**
+ * Generalized content list (confluence-default-feed v1, FR-002). Renders any paginated
+ * `ConfluenceSearchResult` source — text search OR the default personal feed — via the
+ * same five states, "Load more" pagination, and row-click drill-in. The source is
+ * injected as `fetcher`; `reloadKey` drives the re-load `useEffect` (the submitted
+ * `query` for search, a stable constant for the feed); `emptyLabel` is the per-source
+ * empty line. The personal CQL never reaches here — the feed's `fetcher` calls the
+ * cursor-only `defaultFeed` IPC method (SC-008).
+ */
 function ContentList({
-  query,
+  fetcher,
+  reloadKey,
+  emptyLabel,
   onOpen,
   onReconnect
 }: {
-  query: string
+  fetcher: (
+    cursor?: string
+  ) => Promise<ConfluenceResult<ConfluencePage<ConfluenceSearchResult>>>
+  reloadKey: string
+  emptyLabel: string
   onOpen: (result: ConfluenceSearchResult) => void
   onReconnect: () => void
 }): React.JSX.Element {
@@ -124,11 +142,7 @@ function ContentList({
         setLoading(true)
         setError(null)
       }
-      const result: ConfluenceResult<{ items: ConfluenceSearchResult[]; nextCursor?: string }> =
-        await window.cosmos.confluence.searchContent({
-          query,
-          ...(next ? { cursor: next } : {})
-        })
+      const result = await fetcher(next)
       if (result.ok) {
         setItems((prev) => (next ? [...prev, ...result.data.items] : result.data.items))
         setCursor(result.data.nextCursor)
@@ -139,13 +153,13 @@ function ContentList({
       setLoading(false)
       setLoadingMore(false)
     },
-    [query]
+    [fetcher]
   )
 
   useEffect(() => {
     void run()
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [query])
+  }, [reloadKey])
 
   if (error?.kind === 'reconnect_needed') {
     return <ReconnectState provider="Confluence" onReconnect={onReconnect} />
@@ -157,7 +171,7 @@ function ContentList({
     return <ErrorState provider="Confluence" error={error} onRetry={() => void run()} />
   }
   if (loaded && items.length === 0) {
-    return <EmptyLine>No content matches this query.</EmptyLine>
+    return <EmptyLine>{emptyLabel}</EmptyLine>
   }
   return (
     <ScrollArea className="h-full">
@@ -402,7 +416,7 @@ function PromptComposer({ onSubmit }: { onSubmit: (utterance: string) => void })
  * The panel
  * ------------------------------------------------------------------------- */
 
-export function ConfluencePanel(): React.JSX.Element {
+export function ConfluencePanel({ active }: { active: boolean }): React.JSX.Element {
   const [status, setStatus] = useState<ConfluenceConnectionStatus>({ state: 'not_connected' })
   const [busy, setBusy] = useState(false)
   const [view, setView] = useState<ConfluenceView>({ kind: 'search' })
@@ -413,10 +427,21 @@ export function ConfluencePanel(): React.JSX.Element {
   // Zero tabs => the native search/page browser base (FR-017).
   const { tabs, activeTabId, activeTab, setActive, submit, newTab, closeTab } =
     useGenerativePanelTabs({ target: 'confluence' })
+  // Tab keyboard shortcuts act on THIS strip only while the Confluence surface is active.
+  useTabShortcuts({ active, tabs, activeTabId, onActivate: setActive, onNewTab: newTab, onCloseTab: closeTab })
   // The native search/page browser is the base shown not only at zero tabs but also
   // whenever the active tab has not composed a surface yet (a fresh `+` "Untitled" tab),
   // so a new tab lands on the same base screen instead of a blank panel.
   const showNativeBase = !activeTab || (!activeTab.surface && !activeTab.error)
+  // Always keep ≥1 tab (Terminal-unified layout): seed one on mount and reopen a fresh
+  // tab if the collection ever empties, so the tab strip is always the topmost element.
+  useEffect(() => {
+    if (tabs.length === 0) {
+      newTab()
+    }
+    // newTab is stable; only react to the count reaching 0.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tabs.length])
 
   // Initial status + live updates (FR-A12).
   useEffect(() => {
@@ -469,20 +494,35 @@ export function ConfluencePanel(): React.JSX.Element {
 
   const isConnected = status.state === 'connected'
 
+  const stripTabs: PanelTab[] = tabs.map((t) => ({
+    id: t.id,
+    label: t.label,
+    kind: 'generative' as const,
+    status: t.inFlight ? 'in-flight' : t.error ? 'error' : 'idle',
+    untitled: t.untitled,
+    ...(t.error ? { errorMessage: t.error } : {})
+  }))
+  const activeStripTab = stripTabs.find((t) => t.id === activeTabId) ?? null
+
   return (
     <section
       className="flex h-full min-w-0 flex-col border-l border-border bg-card"
       aria-label="Confluence"
     >
-      <div className="flex select-none items-center border-b border-border bg-popover px-3 py-2">
-        <span className="text-xs font-semibold tracking-wide text-muted-foreground">
-          Confluence
-        </span>
-      </div>
+      {/* Terminal-unified layout: the tab strip is the topmost element (no title header).
+          The connection status moves to the footer; the not-connected CTA renders inside the
+          active tab's content region (FR-002). */}
+      <PanelTabStrip
+        tabs={stripTabs}
+        activeTabId={activeTabId}
+        onActivate={setActive}
+        onClose={closeTab}
+        onNewTab={newTab}
+        ariaLabel="Confluence tabs"
+      />
 
-      <ConnectionBar status={status} onDisconnect={() => void disconnect()} />
-
-      <div className="min-h-0 flex-1">
+      {/* Content region (the active tab's content). */}
+      <div className="flex min-h-0 flex-1 flex-col">
         {!isConnected ? (
           <div className="flex h-full flex-col items-center justify-center gap-3 px-6 text-center">
             <BookText className="size-8 text-muted-foreground" />
@@ -502,26 +542,7 @@ export function ConfluencePanel(): React.JSX.Element {
             )}
           </div>
         ) : (
-          <div className="flex h-full flex-col">
-            {/* panel-tabs v1: the tab strip above the body (FR-002). */}
-            <PanelTabStrip
-              tabs={tabs.map(
-                (t): PanelTab => ({
-                  id: t.id,
-                  label: t.label,
-                  kind: 'generative',
-                  status: t.inFlight ? 'in-flight' : t.error ? 'error' : 'idle',
-                  untitled: t.untitled,
-                  ...(t.error ? { errorMessage: t.error } : {})
-                })
-              )}
-              activeTabId={activeTabId}
-              onActivate={setActive}
-              onClose={closeTab}
-              onNewTab={newTab}
-              ariaLabel="Confluence tabs"
-            />
-
+          <>
             {/* Native search/page browser — the base shown at zero tabs AND on an
                 uncomposed (new `+`) active tab (FR-017). */}
             {showNativeBase && (
@@ -533,7 +554,7 @@ export function ConfluencePanel(): React.JSX.Element {
                       <Input
                         value={searchText}
                         onChange={(e) => setSearchText(e.target.value)}
-                        placeholder="Search Confluence"
+                        placeholder="(mention = currentUser() or watcher = currentUser() or favourite = currentUser()) and type = page order by lastmodified desc"
                         className="h-8 pl-8 text-sm"
                         aria-label="Search Confluence content"
                       />
@@ -561,14 +582,29 @@ export function ConfluencePanel(): React.JSX.Element {
                 <div className="min-h-0 flex-1">
                   {view.kind === 'search' &&
                     (query === '' ? (
-                      <div className="flex h-full flex-col items-center justify-center gap-3 px-6 text-center">
-                        <BookText className="size-8 text-muted-foreground" />
-                        <EmptyLine>Search Confluence to find pages.</EmptyLine>
-                      </div>
+                      <ContentList
+                        key="default-feed"
+                        reloadKey="default-feed"
+                        fetcher={(cursor) =>
+                          window.cosmos.confluence.defaultFeed(cursor ? { cursor } : {})
+                        }
+                        emptyLabel="No mentions, watched, or favorited pages yet."
+                        onOpen={(result) =>
+                          setView({ kind: 'page', pageId: result.id, title: result.title })
+                        }
+                        onReconnect={() => void refreshStatus()}
+                      />
                     ) : (
                       <ContentList
                         key={query}
-                        query={query}
+                        reloadKey={query}
+                        fetcher={(cursor) =>
+                          window.cosmos.confluence.searchContent({
+                            query,
+                            ...(cursor ? { cursor } : {})
+                          })
+                        }
+                        emptyLabel="No content matches this query."
                         onOpen={(result) =>
                           setView({ kind: 'page', pageId: result.id, title: result.title })
                         }
@@ -610,11 +646,18 @@ export function ConfluencePanel(): React.JSX.Element {
                 </A2UIProvider>
               </div>
             )}
-
-            <PromptComposer onSubmit={submit} />
-          </div>
+          </>
         )}
       </div>
+
+      {/* Composer docks above the footer, only when there is something to ask about. */}
+      {isConnected && <PromptComposer onSubmit={submit} />}
+
+      {/* Connection bar is the panel footer (Terminal-unified layout). */}
+      <PanelFooter
+        activeTab={activeStripTab}
+        right={<ConnectionStatus status={status} onDisconnect={() => void disconnect()} />}
+      />
     </section>
   )
 }

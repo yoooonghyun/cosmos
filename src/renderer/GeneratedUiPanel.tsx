@@ -29,8 +29,10 @@ import type { AgentStatusPayload } from '../shared/ipc'
 import { Button } from '@/components/ui/button'
 import { Textarea } from '@/components/ui/textarea'
 import { PanelTabStrip, type PanelTab } from './PanelTabStrip'
+import { PanelFooter } from './PanelFooter'
 import { ActiveTabSurface } from './ActiveTabSurface'
 import { useGenerativePanelTabs } from './useGenerativePanelTabs'
+import { useTabShortcuts } from './useTabShortcuts'
 
 /**
  * Bottom-docked composer. Submitting calls `onSubmit(utterance)` (the panel hook owns
@@ -139,9 +141,23 @@ function PromptComposer({ onSubmit }: { onSubmit: (utterance: string) => void })
   )
 }
 
-export function GeneratedUiPanel(): React.JSX.Element {
+export function GeneratedUiPanel({ active }: { active: boolean }): React.JSX.Element {
   const { tabs, activeTabId, activeTab, setActive, submit, newTab, closeTab } =
     useGenerativePanelTabs({ target: 'generated-ui', cancelOnClose: true })
+
+  // Tab keyboard shortcuts act on THIS strip only while the Generated UI surface is active.
+  useTabShortcuts({ active, tabs, activeTabId, onActivate: setActive, onNewTab: newTab, onCloseTab: closeTab })
+
+  // Always keep ≥1 tab (Terminal-unified layout): seed one on mount and reopen a fresh
+  // tab if the collection ever empties, so the tab strip is never a zero-tab empty state.
+  useEffect(() => {
+    if (tabs.length === 0) {
+      newTab()
+    }
+    // newTab is stable; only react to the count reaching 0.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tabs.length])
+
   // The idle placeholder is the base shown not only at zero tabs but also whenever the
   // active tab has not composed a surface yet (a fresh `+` "Untitled" tab), so a new tab
   // lands on the same base screen instead of a blank panel.
@@ -156,17 +172,13 @@ export function GeneratedUiPanel(): React.JSX.Element {
     ...(t.error ? { errorMessage: t.error } : {})
   }))
 
+  const activeStripTab = stripTabs.find((t) => t.id === activeTabId) ?? null
+
   return (
     <section
       className="flex h-full min-w-0 flex-col border-l border-border bg-card"
       aria-label="Generated UI"
     >
-      <div className="flex select-none items-center border-b border-border bg-popover px-3 py-2">
-        <span className="text-xs font-semibold tracking-wide text-muted-foreground">
-          Generated UI
-        </span>
-      </div>
-
       <PanelTabStrip
         tabs={stripTabs}
         activeTabId={activeTabId}
@@ -205,6 +217,7 @@ export function GeneratedUiPanel(): React.JSX.Element {
       </div>
 
       <PromptComposer onSubmit={submit} />
+      <PanelFooter activeTab={activeStripTab} />
     </section>
   )
 }

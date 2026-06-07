@@ -1,9 +1,12 @@
 import { describe, it, expect, vi } from 'vitest'
 import {
   validateAgentPrompt,
+  validateConfluenceDefaultFeed,
   validateDispose,
   validateInput,
   validateRequestDefaultView,
+  validateRequestIssueDetail,
+  validateRequestSearchView,
   validateResize,
   validateRestart,
   validateStart,
@@ -310,6 +313,126 @@ describe('validateRequestDefaultView (Jira generative-UI v2, D4 / FR-002)', () =
     (raw) => {
       const warn = vi.fn()
       expect(validateRequestDefaultView(raw as unknown, warn)).toBeNull()
+      expect(warn).toHaveBeenCalledOnce()
+    }
+  )
+})
+
+describe('validateRequestSearchView (jira-jql-search-v1, FR-012)', () => {
+  it('accepts a non-empty jql string (the happy path)', () => {
+    const warn = vi.fn()
+    expect(validateRequestSearchView({ jql: 'project = ABC' }, warn)).toEqual({
+      jql: 'project = ABC'
+    })
+    expect(warn).not.toHaveBeenCalled()
+  })
+
+  it('accepts an EMPTY jql string (the valid clear-to-default case, FR-005)', () => {
+    const warn = vi.fn()
+    expect(validateRequestSearchView({ jql: '' }, warn)).toEqual({ jql: '' })
+    expect(warn).not.toHaveBeenCalled()
+  })
+
+  it('accepts a whitespace-only jql string (resolved to default in main)', () => {
+    const warn = vi.fn()
+    expect(validateRequestSearchView({ jql: '   ' }, warn)).toEqual({ jql: '   ' })
+    expect(warn).not.toHaveBeenCalled()
+  })
+
+  it.each([null, undefined, 'nope', 7])(
+    'warns and returns null for non-object payload %p (malformed frame triggers no read)',
+    (raw) => {
+      const warn = vi.fn()
+      expect(validateRequestSearchView(raw as unknown, warn)).toBeNull()
+      expect(warn).toHaveBeenCalledOnce()
+    }
+  )
+
+  it.each([{ jql: 7 }, { jql: null }, {}, { notJql: 'x' }])(
+    'warns and returns null when "jql" is missing or not a string (%p)',
+    (raw) => {
+      const warn = vi.fn()
+      expect(validateRequestSearchView(raw as unknown, warn)).toBeNull()
+      expect(warn).toHaveBeenCalledOnce()
+    }
+  )
+})
+
+describe('validateRequestIssueDetail (jira-ticket-detail-v1, FR-011)', () => {
+  it('accepts a non-empty issueKey (the happy path)', () => {
+    const warn = vi.fn()
+    expect(validateRequestIssueDetail({ issueKey: 'PROJ-1' }, warn)).toEqual({
+      issueKey: 'PROJ-1'
+    })
+    expect(warn).not.toHaveBeenCalled()
+  })
+
+  it('carries ONLY issueKey through, dropping any extra keys (no token/secret, FR-010)', () => {
+    const warn = vi.fn()
+    expect(
+      validateRequestIssueDetail({ issueKey: 'ABC-9', token: 'secret', extra: 1 } as unknown, warn)
+    ).toEqual({ issueKey: 'ABC-9' })
+    expect(warn).not.toHaveBeenCalled()
+  })
+
+  it.each([null, undefined, 'PROJ-1', 7])(
+    'warns and returns null for non-object payload %p (malformed frame triggers no read)',
+    (raw) => {
+      const warn = vi.fn()
+      expect(validateRequestIssueDetail(raw as unknown, warn)).toBeNull()
+      expect(warn).toHaveBeenCalledOnce()
+    }
+  )
+
+  it.each([{ issueKey: 7 }, { issueKey: null }, {}, { notIssueKey: 'x' }])(
+    'warns and returns null when "issueKey" is missing or not a string (%p)',
+    (raw) => {
+      const warn = vi.fn()
+      expect(validateRequestIssueDetail(raw as unknown, warn)).toBeNull()
+      expect(warn).toHaveBeenCalledOnce()
+    }
+  )
+
+  it.each([{ issueKey: '' }, { issueKey: '   ' }, { issueKey: '\t\n' }])(
+    'warns and returns null for an EMPTY/whitespace issueKey %p (no "default detail" — invalid)',
+    (raw) => {
+      const warn = vi.fn()
+      expect(validateRequestIssueDetail(raw as unknown, warn)).toBeNull()
+      expect(warn).toHaveBeenCalledOnce()
+    }
+  )
+})
+
+describe('validateConfluenceDefaultFeed (confluence-default-feed v1, FR-006, FR-016)', () => {
+  it('accepts the empty object (first page — cursor optional)', () => {
+    const warn = vi.fn()
+    expect(validateConfluenceDefaultFeed({}, warn)).toEqual({})
+    expect(warn).not.toHaveBeenCalled()
+  })
+
+  it('accepts undefined as the empty trigger (first page)', () => {
+    const warn = vi.fn()
+    expect(validateConfluenceDefaultFeed(undefined, warn)).toEqual({})
+    expect(warn).not.toHaveBeenCalled()
+  })
+
+  it('accepts a string cursor', () => {
+    const warn = vi.fn()
+    expect(validateConfluenceDefaultFeed({ cursor: 'abc' }, warn)).toEqual({ cursor: 'abc' })
+    expect(warn).not.toHaveBeenCalled()
+  })
+
+  it('warns and returns null for a non-string cursor', () => {
+    const warn = vi.fn()
+    expect(validateConfluenceDefaultFeed({ cursor: 5 } as unknown, warn)).toBeNull()
+    expect(warn).toHaveBeenCalledOnce()
+  })
+
+  it.each([null, 'nope', 7])(
+    'warns and returns null for a non-object payload %p',
+    (raw) => {
+      const warn = vi.fn()
+      expect(validateConfluenceDefaultFeed(raw as unknown, warn)).toBeNull()
       expect(warn).toHaveBeenCalledOnce()
     }
   )

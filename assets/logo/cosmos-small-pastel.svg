@@ -1,0 +1,14 @@
+<svg width="512" height="512" viewBox="0 0 512 512" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="cosmos app icon pastel small">
+  <defs>
+    <radialGradient id="space" cx="0.5" cy="0.4" r="0.78">
+      <stop offset="0" stop-color="#241f54"/><stop offset="1" stop-color="#0b0a1b"/>
+    </radialGradient>
+    <linearGradient id="pastel" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#f9a8d4"/><stop offset="1" stop-color="#d8b4fe"/>
+    </linearGradient>
+  </defs>
+  <rect x="0" y="0" width="512" height="512" rx="114" fill="url(#space)"/>
+  <g transform="translate(256,256) scale(2.78)" fill="url(#pastel)">
+    <path d="M 0.00 -60.00 Q 9.55 -47.99 9.18 -22.17 Q 27.18 -40.68 42.43 -42.43 Q 40.68 -27.18 22.17 -9.18 Q 47.99 -9.55 60.00 0.00 Q 47.99 9.55 22.17 9.18 Q 40.68 27.18 42.43 42.43 Q 27.18 40.68 9.18 22.17 Q 9.55 47.99 0.00 60.00 Q -9.55 47.99 -9.18 22.17 Q -27.18 40.68 -42.43 42.43 Q -40.68 27.18 -22.17 9.18 Q -47.99 9.55 -60.00 0.00 Q -47.99 -9.55 -22.17 -9.18 Q -40.68 -27.18 -42.43 -42.43 Q -27.18 -40.68 -9.18 -22.17 Q -9.55 -47.99 0.00 -60.00 Z"/>
+  </g>
+</svg>
