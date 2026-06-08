@@ -21,15 +21,24 @@
  */
 
 import { useCallback, useEffect, useRef } from 'react'
-import type { AgentStatusPayload, UiRenderPayload, UiRenderTarget } from '../shared/ipc'
+import type {
+  AgentStatusPayload,
+  GenerativePanelSnapshot,
+  UiRenderPayload,
+  UiRenderTarget
+} from '../shared/ipc'
 import { usePanelTabs, type PanelTabsController } from './usePanelTabs'
 import {
   defaultRequestDecision,
   labelFromUtterance,
+  panelTabLabel,
+  seedEverOpenedFrom,
   shouldApplyAutoLabel,
-  shouldFlushDeferredDefault,
-  UNTITLED_LABEL
+  shouldFlushDeferredDefault
 } from './panelTabs'
+import { buildGenerativePanel, hydrateGenerativeTabs } from './sessionSnapshot'
+import { useReportPanel } from './SessionProvider'
+import type { GenerativePanelKey } from '../shared/ipc'
 
 /** A rendered surface stored on a tab: the spec to (re)process + its requestId. */
 export interface TabSurface {
@@ -57,6 +66,14 @@ export interface GenerativeTab {
    * Slack/Confluence/Generated UI tabs never carry it.
    */
   loadingDefault?: boolean
+  /**
+   * True when this tab's surface came from a user compose (a solicited render frame
+   * correlated via `originatingTabIdRef`), as opposed to an unsolicited deterministic
+   * push (Jira's default board / search results / ticket detail). Lets a panel tell a
+   * generated-UI surface apart from a native data view — e.g. Jira hides its JQL search
+   * box on composed surfaces but keeps it for ticket browsing. Session-only.
+   */
+  composed?: boolean
   /**
    * True once the user manually renamed this tab (tab-rename-v1 FR-007). A renamed
    * tab keeps its custom label — the generative auto-relabel path below
@@ -106,12 +123,25 @@ export interface GenerativePanelTabsOptions {
   /** This panel's render target — only matching `ui:render` frames are filed. */
   target: UiRenderTarget
   /**
+   * This panel's display name (e.g. "Jira", "Generated UI"). Seeds the unified tab
+   * label for a not-yet-composed tab via `panelTabLabel`: the bare name for the first
+   * tab, then "<Panel> N" for later tabs. A compose then relabels from its utterance.
+   */
+  panelName: string
+  /**
    * Whether a `generated-ui`-style blocking surface should be cancelled when its tab
    * is closed. Only `'generated-ui'` keeps blocking in main (CLAUDE.md); the other
    * targets are settled immediately by `UiBridge`, so closing their tabs needs no
    * cancel. Defaults to `false`.
    */
   cancelOnClose?: boolean
+  /**
+   * session-persistence-v1 (FR-008/FR-012): the restored panel slice to seed the tab
+   * collection + the monotonic `everOpened` counter from. Composed surfaces are
+   * re-instated with a FRESH requestId (FR-013); live-data views were never persisted
+   * (FR-015). Absent for a clean session.
+   */
+  initial?: GenerativePanelSnapshot
 }
 
 /**
@@ -122,9 +152,41 @@ export interface GenerativePanelTabsOptions {
 export function useGenerativePanelTabs(
   options: GenerativePanelTabsOptions
 ): GenerativePanelTabs {
-  const { target, cancelOnClose = false } = options
-  const controller = usePanelTabs<GenerativeTab>()
+  const { target, panelName, cancelOnClose = false, initial } = options
+  // session-persistence-v1: seed the collection from the restored slice (composed
+  // surfaces re-instated with a fresh requestId — FR-013). PURE lazy initializer, so a
+  // StrictMode double-invoke is idempotent (mintRequestId returns fresh ids, but the
+  // initializer result is taken once by useState).
+  const controller = usePanelTabs<GenerativeTab>(
+    initial ? hydrateGenerativeTabs(initial, () => crypto.randomUUID()) : undefined
+  )
   const { tabs, activeTabId, open, close, update } = controller
+
+  // Monotonic count of tabs ever opened in THIS panel, for the unified seed-tab label
+  // (first tab = bare panel name, then "<Panel> N"). Like the Terminal counter it does
+  // not renumber on close. Advanced only from event handlers / the seed effect — never
+  // render-phase — so React StrictMode's render double-invoke cannot double-advance it.
+  // Seeded from the restored counter so a new `+` after restore never collides (FR-010).
+  const everOpenedRef = useRef(
+    initial ? seedEverOpenedFrom(initial.everOpened, initial.tabs.length) : 0
+  )
+  // session-persistence-v1 (FR-007/FR-012): report this panel's contribution to the
+  // debounced save coordinator on every tab-state change. Only composed surfaces are
+  // persisted (buildGenerativePanel strips the rest). `target` is one of the four
+  // generative panel keys. Reads `everOpenedRef.current` at report time (the counter
+  // is event-advanced, so it is current here).
+  const report = useReportPanel()
+  useEffect(() => {
+    report(
+      target as GenerativePanelKey,
+      buildGenerativePanel({ tabs, activeTabId }, everOpenedRef.current)
+    )
+  }, [tabs, activeTabId, target, report])
+
+  const mintLabel = useCallback(
+    () => panelTabLabel(panelName, (everOpenedRef.current += 1)),
+    [panelName]
+  )
 
   // The tab that was active at submit time — where the next ui:render (and any
   // error) for this target must land, even after a tab switch (FR-013/FR-015).
@@ -159,6 +221,9 @@ export function useGenerativePanelTabs(
       }
       let tabId = originatingTabIdRef.current
       originatingTabIdRef.current = null
+      // A solicited frame (one a submit was awaiting) is a composed surface; an
+      // unsolicited push (default board / search / detail) is a native data view.
+      const wasSolicited = tabId !== null
 
       if (tabId) {
         // Solicited: a submit is awaiting this frame.
@@ -173,10 +238,11 @@ export function useGenerativePanelTabs(
           const id = crypto.randomUUID()
           open({
             id,
-            label: UNTITLED_LABEL,
+            label: mintLabel(),
             untitled: true,
             surface: { requestId: payload.requestId, spec: payload.spec },
-            inFlight: false
+            inFlight: false,
+            composed: false
           })
           return
         }
@@ -198,13 +264,16 @@ export function useGenerativePanelTabs(
         error: undefined,
         // new-tab-base-view-v1 FR-008/FR-010: a landed surface (default board OR a
         // recoverable Notice) clears this tab's default-loading skeleton.
-        loadingDefault: false
+        loadingDefault: false,
+        // Mark composed vs. native data view so panels (Jira) can hide compose-only
+        // chrome on generated surfaces while keeping it for ticket browsing.
+        composed: wasSolicited
       })
     })
     return off
-    // stable: update/open are useCallback; reads go through refs.
+    // stable: update/open/mintLabel are useCallback; reads go through refs.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [target, open, update])
+  }, [target, open, update, mintLabel])
 
   // Panel-level agent:status:
   //  - on `error`: surface the failure in the originating tab (FR-015) + clear the
@@ -259,8 +328,13 @@ export function useGenerativePanelTabs(
         })
         targetTabId = id
       } else {
-        // FR-014: mark the active tab in-flight; drop any prior error.
-        update(targetTabId, { inFlight: true, error: undefined })
+        // FR-014: mark the active tab in-flight; drop any prior error. Also CLEAR the prior
+        // surface so the panel blanks to just the send-spinner until the new surface lands
+        // (composer-send-animation-v1: "panel goes blank, only the spinner spins"). Safe for
+        // every target: a blocking `generated-ui` surface can only be re-submitted over once
+        // its run has completed (the single-run guard blocks submit while it awaits an
+        // action), and the other targets settle immediately, so no pending call is orphaned.
+        update(targetTabId, { inFlight: true, error: undefined, surface: null })
       }
       originatingTabIdRef.current = targetTabId
       pendingUtteranceRef.current.set(targetTabId, utterance)
@@ -270,15 +344,16 @@ export function useGenerativePanelTabs(
   )
 
   const newTab = useCallback(() => {
-    // FR-005/FR-009: a `+`-created tab is "Untitled" until it composes.
+    // FR-005/FR-009: a `+`-created tab shows the unified panel-name label until it
+    // composes (first tab = bare panel name, then "<Panel> N").
     open({
       id: crypto.randomUUID(),
-      label: UNTITLED_LABEL,
+      label: mintLabel(),
       untitled: true,
       surface: null,
       inFlight: false
     })
-  }, [open])
+  }, [open, mintLabel])
 
   // The shared fire-or-defer core of `newTabWithDefault`/`requestDefaultInActiveTab`
   // (new-tab-base-view-v1 OQ-1 / FR-011; jira-jql-search-v1 FR-009): `request()` pushes an
@@ -300,7 +375,7 @@ export function useGenerativePanelTabs(
       // `loadingDefault` for its per-tab skeleton (FR-008/FR-009).
       open({
         id: crypto.randomUUID(),
-        label: UNTITLED_LABEL,
+        label: mintLabel(),
         untitled: true,
         surface: null,
         inFlight: false,
@@ -308,7 +383,7 @@ export function useGenerativePanelTabs(
       })
       fireOrDeferDefault(request)
     },
-    [open, fireOrDeferDefault]
+    [open, fireOrDeferDefault, mintLabel]
   )
 
   const requestDefaultInActiveTab = useCallback(
@@ -324,7 +399,7 @@ export function useGenerativePanelTabs(
       } else {
         open({
           id: crypto.randomUUID(),
-          label: UNTITLED_LABEL,
+          label: mintLabel(),
           untitled: true,
           surface: null,
           inFlight: false,
@@ -333,7 +408,7 @@ export function useGenerativePanelTabs(
       }
       fireOrDeferDefault(request)
     },
-    [open, update, fireOrDeferDefault]
+    [open, update, fireOrDeferDefault, mintLabel]
   )
 
   const closeTab = useCallback(

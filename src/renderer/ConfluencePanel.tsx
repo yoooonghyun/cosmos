@@ -20,13 +20,7 @@
  * over `window.cosmos.confluence`; main attaches the token.
  */
 
-import {
-  useCallback,
-  useEffect,
-  useState,
-  type FormEvent,
-  type KeyboardEvent
-} from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { A2UIProvider } from '@a2ui-sdk/react/0.9'
 import { BookText, ChevronLeft, Loader2, Search } from 'lucide-react'
 import { Button } from '@/components/ui/button'
@@ -34,7 +28,6 @@ import { Input } from '@/components/ui/input'
 import { Badge } from '@/components/ui/badge'
 import { Skeleton } from '@/components/ui/skeleton'
 import { ScrollArea } from '@/components/ui/scroll-area'
-import { Textarea } from '@/components/ui/textarea'
 import {
   ConnectionStatus,
   ConnectForm,
@@ -46,10 +39,13 @@ import { confluenceCatalog, CONFLUENCE_CATALOG_ID } from './confluenceCatalog'
 import { PanelTabStrip, type PanelTab } from './PanelTabStrip'
 import { PanelFooter } from './PanelFooter'
 import { ActiveTabSurface } from './ActiveTabSurface'
+import { PromptComposer } from './PromptComposer'
+import { SurfaceSpinner } from './SurfaceSpinner'
 import { useGenerativePanelTabs } from './useGenerativePanelTabs'
+import { useRestoredGenerativePanel } from './SessionProvider'
+import { surfaceSpinnerVisible } from './promptComposerLogic'
 import { usePerTabNav } from './usePerTabNav'
 import { useTabShortcuts } from './useTabShortcuts'
-import type { AgentStatusPayload } from '../shared/ipc'
 import type {
   ConfluenceConnectionStatus,
   ConfluenceError,
@@ -323,114 +319,6 @@ function PageDetail({
  * NO writes, NO action dispatch.
  * ------------------------------------------------------------------------- */
 
-/**
- * Bottom-docked Confluence prompt composer (design §4). Submitting calls `onSubmit`
- * (the panel hook owns the originating-tab bookkeeping + agent.submit with target
- * 'confluence'). Enter submits, Shift+Enter newlines, empty/whitespace is a no-op,
- * submit ignored while a run is in flight (FR-003).
- */
-function PromptComposer({ onSubmit }: { onSubmit: (utterance: string) => void }): React.JSX.Element {
-  const [value, setValue] = useState('')
-  const [running, setRunning] = useState(false)
-  const [error, setError] = useState<string | null>(null)
-
-  useEffect(() => {
-    const off = window.cosmos.agent.onStatus((status: AgentStatusPayload) => {
-      switch (status.state) {
-        case 'started':
-          setRunning(true)
-          setError(null)
-          break
-        case 'completed':
-          setRunning(false)
-          break
-        case 'error':
-          setRunning(false)
-          setError(status.message ?? 'The run failed.')
-          break
-      }
-    })
-    return off
-  }, [])
-
-  const submit = (): void => {
-    if (running || value.trim().length === 0) {
-      return
-    }
-    onSubmit(value)
-    setRunning(true)
-    setError(null)
-    setValue('')
-  }
-
-  const handleSubmit = (event: FormEvent<HTMLFormElement>): void => {
-    event.preventDefault()
-    submit()
-  }
-
-  const handleKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>): void => {
-    if (event.key === 'Enter' && !event.shiftKey) {
-      event.preventDefault()
-      submit()
-    }
-  }
-
-  const canSubmit = !running && value.trim().length > 0
-
-  return (
-    <form
-      className="shrink-0 border-t border-border bg-popover px-3 py-3"
-      aria-label="Ask about Confluence"
-      onSubmit={handleSubmit}
-    >
-      <Textarea
-        value={value}
-        onChange={(e) => setValue(e.target.value)}
-        onKeyDown={handleKeyDown}
-        disabled={running}
-        placeholder="Ask about your Confluence pages…"
-        aria-label="Ask about Confluence"
-        className="max-h-[9rem] min-h-[2.5rem] resize-none"
-      />
-      {error && (
-        <p
-          className="mt-2 rounded-md border border-destructive/40 bg-destructive/15 px-2.5 py-2 text-[13px] text-destructive"
-          role="alert"
-        >
-          Couldn&apos;t do that: {error}
-        </p>
-      )}
-      <div className="mt-2 flex items-center justify-between">
-        <span className="text-[11px] text-muted-foreground" role="status" aria-live="polite">
-          {running ? (
-            <span className="inline-flex items-center gap-1.5 text-primary">
-              <Loader2 className="size-3.5 animate-spin" aria-hidden="true" />
-              <span className="text-muted-foreground">Generating…</span>
-            </span>
-          ) : (
-            'Enter to send · Shift+Enter for newline'
-          )}
-        </span>
-        <Button
-          type="submit"
-          variant="default"
-          size="sm"
-          disabled={!canSubmit}
-          aria-label={running ? 'Generating' : 'Send'}
-        >
-          {running ? (
-            <>
-              <Loader2 className="size-3.5 animate-spin" aria-hidden="true" />
-              Generating…
-            </>
-          ) : (
-            'Send'
-          )}
-        </Button>
-      </div>
-    </form>
-  )
-}
 
 /* ------------------------------------------------------------------------- *
  * The panel
@@ -441,8 +329,13 @@ export function ConfluencePanel({ active }: { active: boolean }): React.JSX.Elem
   const [busy, setBusy] = useState(false)
   // panel-tabs v1: the per-tab generative surfaces (read-only, target 'confluence').
   // Zero tabs => the native search/page browser base (FR-017).
+  const restoredConfluencePanel = useRestoredGenerativePanel('confluence')
   const { tabs, activeTabId, activeTab, setActive, submit, newTab, closeTab, update } =
-    useGenerativePanelTabs({ target: 'confluence' })
+    useGenerativePanelTabs({
+      target: 'confluence',
+      panelName: 'Confluence',
+      ...(restoredConfluencePanel ? { initial: restoredConfluencePanel } : {})
+    })
   // The native-base browser nav is held PER-TAB, keyed by the active tab id
   // (bug panel-shared-tab-nav-state-v1), so each tab keeps its own view + search + query.
   const {
@@ -470,7 +363,18 @@ export function ConfluencePanel({ active }: { active: boolean }): React.JSX.Elem
   // The native search/page browser is the base shown not only at zero tabs but also
   // whenever the active tab has not composed a surface yet (a fresh `+` "Untitled" tab),
   // so a new tab lands on the same base screen instead of a blank panel.
-  const showNativeBase = !activeTab || (!activeTab.surface && !activeTab.error)
+  // The surface send-spinner gate, scoped to the ACTIVE tab (composer-send-animation-v1
+  // FR-005/FR-008): in-flight without a landed surface/error → show the spinner.
+  const showSpinner = !!activeTab &&
+    surfaceSpinnerVisible({
+      inFlight: activeTab.inFlight,
+      hasSurface: activeTab.surface != null,
+      hasError: activeTab.error != null,
+      loadingDefault: activeTab.loadingDefault
+    })
+  // The native search/page browser is the base; while a submitted compose is in flight the
+  // send-spinner takes the region instead (it lands a surface or error there next).
+  const showNativeBase = (!activeTab || (!activeTab.surface && !activeTab.error)) && !showSpinner
   // Always keep ≥1 tab (Terminal-unified layout): seed one on mount and reopen a fresh
   // tab if the collection ever empties, so the tab strip is always the topmost element.
   useEffect(() => {
@@ -663,6 +567,15 @@ export function ConfluencePanel({ active }: { active: boolean }): React.JSX.Elem
               </>
             )}
 
+            {/* Surface send-spinner: the busy state of this region while a submitted run
+                is in flight, until its surface lands (composer-send-animation-v1
+                FR-005/FR-006). Replaces the native base for the duration of the run. */}
+            {showSpinner && (
+              <div className="min-h-0 flex-1 overflow-auto p-3 text-card-foreground" role="tabpanel">
+                <SurfaceSpinner />
+              </div>
+            )}
+
             {/*
               Generative A2UI host (per-tab). Only the ACTIVE tab's provider is mounted;
               keyed by tab id so a switch remounts + re-processes that tab's stored
@@ -692,7 +605,14 @@ export function ConfluencePanel({ active }: { active: boolean }): React.JSX.Elem
       </div>
 
       {/* Composer docks above the footer, only when there is something to ask about. */}
-      {isConnected && <PromptComposer onSubmit={submit} />}
+      {isConnected && (
+        <PromptComposer
+          onSubmit={submit}
+          placeholder="Ask about your Confluence pages…"
+          ariaLabel="Ask about Confluence"
+          busy={showSpinner}
+        />
+      )}
 
       {/* Connection bar is the panel footer (Terminal-unified layout). */}
       <PanelFooter

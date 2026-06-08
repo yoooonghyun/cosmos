@@ -11,6 +11,7 @@ import {
   ConfluenceChannelName,
   JiraChannelName,
   PtyChannel,
+  SessionChannel,
   ShortcutChannel,
   SlackChannelName,
   UiChannel,
@@ -27,6 +28,8 @@ import {
   type PtyExitPayload,
   type PtyInputPayload,
   type PtyResizePayload,
+  type SessionApi,
+  type SessionSnapshot,
   type ShortcutApi,
   type ShortcutTriggerPayload,
   type SlackApi,
@@ -233,6 +236,19 @@ const agentApi: AgentApi = {
   }
 }
 
+// session-persistence-v1 (FR-003): the persisted-session surface reaches the
+// renderer ONLY through this dedicated `window.cosmos.session` channel set. `load`
+// is request/response (`invoke`) read once at startup; `save` is fire-and-forget.
+// The snapshot is non-secret structure — no token/secret crosses this surface (FR-006).
+const sessionApi: SessionApi = {
+  load(): Promise<SessionSnapshot | null> {
+    return ipcRenderer.invoke(SessionChannel.Load)
+  },
+  save(snapshot: SessionSnapshot): void {
+    ipcRenderer.send(SessionChannel.Save, snapshot)
+  }
+}
+
 // Global tab/window shortcuts: receive-only in the renderer. Main matches the key
 // combo (via `before-input-event`) and forwards the resolved command here.
 const shortcutApi: ShortcutApi = {
@@ -251,7 +267,8 @@ const api: CosmosApi = {
   jira: jiraApi,
   confluence: confluenceApi,
   agent: agentApi,
-  shortcuts: shortcutApi
+  shortcuts: shortcutApi,
+  session: sessionApi
 }
 
 contextBridge.exposeInMainWorld('cosmos', api)

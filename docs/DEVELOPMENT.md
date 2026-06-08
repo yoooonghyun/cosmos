@@ -18,6 +18,11 @@ catalogue of conventions and hard-won gotchas. The file-by-file source map lives
   `window.cosmos.*` method (e.g. a new `pty.*` channel) while `npm run dev` is running makes the
   HMR'd renderer call a method the stale in-memory preload doesn't have yet → `window.cosmos.X is
   not a function`. Restart `npm run dev` to pick up preload edits; the error is not a code bug.
+- **Run only ONE `npm run dev` at a time.** A second instance binds the next port (`5173` →
+  `5174`) and opens its OWN Electron window wired to its OWN Vite server. If two are running, the
+  window you're looking at may be the stale one, so HMR edits appear to "do nothing" no matter what
+  you change. Symptom: code/CSS clearly correct but the app never updates. Check `lsof -iTCP:5173-5174
+  -sTCP:LISTEN` / `ps aux | grep electron-vite`, kill the extras, keep a single instance.
 
 ## Security & IPC boundary
 
@@ -147,6 +152,62 @@ catalogue of conventions and hard-won gotchas. The file-by-file source map lives
   sessions + scrollback survive tab/rail switches) and always keeps ≥1 terminal (closing the last
   opens a fresh one).
 
+## Session persistence (session-persistence-v1)
+
+The working session (all rail panel tabs, composed generated-UI surfaces, terminal `claude`
+sessions) is snapshotted to disk in main so a full quit/relaunch restores it. The contract is the
+single new `window.cosmos.session` namespace in `src/shared/ipc.ts` (`session:load` via `invoke`,
+`session:save` via `send`).
+
+- **Plain UNENCRYPTED JSON, atomic, under `userData`.** The snapshot is `session.json` in
+  `app.getPath('userData')`, written by `SessionStore` (`src/main/sessionStore.ts`) as
+  `session.json.tmp` then `renameSync` over the target (atomic, never a half-written file). NO
+  `safeStorage` — the snapshot is non-secret by construction (decision D1). `SessionStore` takes an
+  injectable `SessionFsLike` (the tokenStore `FsLike` shape + `renameSync`) so it is node-testable.
+- **No secrets in the snapshot, EVER — enforced structurally, not by a filter.** The schema
+  (`SessionSnapshot`, `schemaVersion = SESSION_SCHEMA_VERSION`) only has fields for non-secret
+  tab/terminal structure + composed-surface specs. A generative tab's surface is persisted ONLY when
+  `composed === true` (the structural discriminator): live integration-data views (`composed:false`,
+  Jira/Slack/Confluence default/search) are NOT a storable shape, so they rehydrate to base and
+  re-fetch. Tokens, the Atlassian `client_secret`, and OAuth material live only in main's tokenStore
+  and never enter any session payload. `sessionStore.test.ts` SC-004 asserts no
+  `accessToken`/`refreshToken`/`client_secret`/`Authorization` ever reaches disk.
+- **Validate at BOTH boundaries; never crash, never clobber a good snapshot.** `validateSnapshot`
+  lives in `src/main/sessionSnapshot.ts` (NOT `src/shared/validate.ts` — shared cannot import main,
+  and snapshot validation is a main-only boundary concern; this is a deliberate deviation from the
+  plan's checklist). On `save`, an invalid/old-schema/corrupt payload → warn + ignore + KEEP the
+  existing file. On `load`, a missing/corrupt/unknown-version file → warn + clean empty session
+  (`emptySnapshot`). Bad individual tabs are dropped, not fatal.
+- **Main owns the terminal session id (decision D2).** The renderer never mints or sees the `claude`
+  session UUID. Main keeps `terminalSessionMap` (paneId → `{sessionId, cwd}`) and `terminalResumeMap`
+  (paneId → queued resume). `paneSpawnFor(paneId, sandboxDir)`: if a resume is queued (re-seeded from
+  the loaded snapshot's terminal tabs) it spawns `claude --resume <id>` with `resume:true`; otherwise
+  it mints `randomUUID()` and spawns `claude --session-id <uuid>`. On `session:save` the renderer
+  sends terminal tabs WITHOUT sessionId/cwd; `enrichSnapshotForSave` fills them from
+  `terminalSessionMap`, DROPS tabs whose pane has no live session (not resumable), prunes a dangling
+  `activeTabId`, then runs `validateSnapshot`. (Renderer-can't-know-the-id is why enrichment is a
+  second deviation from the plan's "renderer assembles the whole snapshot" wording.)
+- **Resume-failure fallback (OQ-1).** If a `--resume`d pane exits abnormally inside
+  `RESUME_FAILURE_WINDOW_MS` (4s), `PtyManager` suppresses the normal `onExit` and calls
+  `onResumeFailure(paneId)`; main re-mints a fresh `--session-id` and restarts ONCE. The restored
+  read-only scrollback stays visible. `PtyManager` takes injectable `spawn`/`now` for testing.
+- **Scrollback via `@xterm/addon-serialize`, capped 256KB (D4/D5).** Each `TerminalView` registers a
+  serializer (`() => capScrollback(serializeAddon.serialize())`); `capScrollback` keeps the
+  most-recent ≤256KB on a UTF-8 boundary. On restore, scrollback is pre-written before `pty:start`.
+- **Renderer save coordinator.** `SessionProvider.tsx` builds one `SessionRegistry`
+  (`sessionRegistry.ts`): each panel calls a stable `report(key, contribution)` (`useReportPanel`);
+  contributions are merged by `assembleSnapshot` and trailing-debounced (`SAVE_DEBOUNCE_MS=600`)
+  before `window.cosmos.session.save`. `flush()` forces an immediate save on `pagehide`/`beforeunload`.
+  Panels read their slice via `useRestoredGenerativePanel(key)` / `useRestoredTerminalPanel()`; App
+  loads once via `useLoadSession()` and shows a `CosmosSpinner` ("Restoring your session…") while
+  loading (decision D3).
+- **Restore seeding must stay StrictMode-pure.** Tabs are seeded from the snapshot via the lazy
+  `useState`/`useRef` initializers only — `hydrateGenerativeTabs`/`hydrateTerminalTabs` are pure, and
+  the monotonic `everOpened` counter is initialized AT `seedEverOpenedFrom(everOpened, tabCount)`
+  (pure: floors to `max(tabCount, n≥0)`), never advanced in a render-phase initializer (see the
+  terminal-tab-index-skip-v1 invariant below). `hydrateGenerativeTabs` re-instates each composed
+  surface with a FRESH `requestId` (FR-013).
+
 ## React renderer
 
 - **Never mutate persistent state from a render-phase `useState`/`useMemo`/`useReducer` lazy
@@ -172,6 +233,34 @@ catalogue of conventions and hard-won gotchas. The file-by-file source map lives
   won't win (tailwind-merge can't dedupe a variant-prefixed vs unprefixed class, and the variant
   rule applies at runtime) — override with the **same** vertical variant
   (`group-data-[orientation=vertical]/tabs:justify-center`) to center icons in a vertical rail.
+- **Nested Radix triggers collide on `data-state`.** Both `Tabs.Trigger` and `Tooltip.Trigger`
+  write a `data-state` attribute; when one wraps the other with `asChild` (e.g. the rail in
+  `App.tsx`: `TooltipTrigger asChild` → `TabsTrigger`), the outer trigger's props are spread AFTER
+  the inner's explicit `data-state`, so the rendered `<button>` ends up with the *tooltip's*
+  state (`closed`/`delayed-open`), NEVER `active`. Every `data-[state=active]:*` class then
+  silently never matches (no specificity/`!important` can fix it — the attribute is just wrong).
+  Drive such state from React instead (e.g. `surface === id`) and apply the active classes
+  conditionally; don't rely on `data-[state=active]` on a tooltip-wrapped tab. Symptom: hover
+  styling works (real `:hover`) but the selected/active styling does nothing.
+- **Tailwind v4 `scale-*`/`translate-*`/`rotate-*` are NOT `transform`.** v4 compiles them to the
+  standalone CSS `scale:` / `translate:` / `rotate:` properties, so `transition-[opacity,transform]`
+  will NOT animate a scale or translate — only opacity moves and the size/position jumps. List the
+  real properties: `transition-[opacity,scale,filter]` (add `filter` for `blur-*`). Symptom when
+  wrong: an element fades but its size snaps instantly.
+- **CSS enter/exit transitions need a persistent element.** Conditionally mounting/unmounting a node
+  skips its transition (there is no "before" frame to animate from). To animate open/close, keep
+  BOTH states always mounted in one slot and toggle classes via a flag; make the hidden one
+  non-interactive and a11y-inert with `inert` + `pointer-events-none` + `tabIndex={-1}` +
+  `aria-hidden` so focus/clicks/AT only reach the visible state (see `PromptComposer.tsx`).
+- **Inline-SVG gradient ids must be per-instance.** A `<linearGradient id="…">` with a static id
+  collides when the SVG is mounted more than once (all four panels mount `CosmosMark` at once);
+  `url(#id)` resolves to the first/hidden def and the visible mark paints transparent. Derive the id
+  from React `useId()`.
+- **Brand pastel is a token, not inline hex.** The cosmos pink→purple identity lives in
+  `--brand-pink` / `--brand-purple` / `--brand-foreground` (index.css); consume via `brand-*`
+  utilities or `var(--brand-…)` (the `cosmos` Button variant, `CosmosMark`). Colors, type sizes, and
+  z-order are design-system foundations — define them in the theme, never as one-off hex/arbitrary
+  values in a component.
 
 ## Testing
 

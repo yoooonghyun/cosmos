@@ -80,6 +80,17 @@ import * as pty from 'node-pty'
 import { PtyManager } from './ptyManager'
 import type { PtyDataPayload, PtyExitPayload } from '../shared/ipc'
 
+/** Capture the args/cwd each spawn was called with (session-persistence-v1 D2). */
+function lastSpawnCall(): { command: string; args: string[]; cwd?: string } {
+  const calls = (pty.spawn as Mock).mock.calls
+  const [command, args, options] = calls[calls.length - 1] as [
+    string,
+    string[],
+    { cwd?: string }
+  ]
+  return { command, args, cwd: options?.cwd }
+}
+
 /** A command that always resolves on PATH so the pre-check passes (absolute). */
 const PRESENT_CMD = process.execPath
 /** A bare name virtually guaranteed absent from PATH so the pre-check fails. */
@@ -253,5 +264,95 @@ describe('PtyManager missing-binary pre-check, per pane (edge case)', () => {
     expect(manager.isRunning('a')).toBe(false)
     // The error exit carried pane a's id; the map is clean for other panes.
     expect(exit[0].paneId).toBe('a')
+  })
+})
+
+/* ------------------------------------------------------------------------- *
+ * session-persistence-v1 — per-pane args (D2) + resume-failure (OQ-1/FR-022)
+ * ------------------------------------------------------------------------- */
+
+/** A manager whose base args + an optional resume-failure sink are configurable. */
+function makeResumeManager(now: () => number = Date.now): {
+  manager: PtyManager
+  exit: PtyExitPayload[]
+  resumeFailures: string[]
+} {
+  const exit: PtyExitPayload[] = []
+  const resumeFailures: string[] = []
+  const manager = new PtyManager(
+    {
+      onData: () => {},
+      onExit: (p) => exit.push(p),
+      onResumeFailure: (paneId) => resumeFailures.push(paneId)
+    },
+    { cwd: '/work', command: PRESENT_CMD, args: ['--mcp-config', '/cfg'] },
+    now
+  )
+  return { manager, exit, resumeFailures }
+}
+
+describe('PtyManager per-pane args (session-persistence-v1 D2, FR-019/FR-020)', () => {
+  it('appends per-pane args after base args and uses the per-pane cwd', () => {
+    const { manager } = makeResumeManager()
+    manager.start('p1', { args: ['--session-id', 'uuid-1'], cwd: '/proj' })
+    const call = lastSpawnCall()
+    expect(call.args).toEqual(['--mcp-config', '/cfg', '--session-id', 'uuid-1'])
+    expect(call.cwd).toBe('/proj')
+  })
+
+  it('spawns --resume on relaunch, base args first', () => {
+    const { manager } = makeResumeManager()
+    manager.start('p1', { args: ['--resume', 'sess-1'], resume: true })
+    expect(lastSpawnCall().args).toEqual(['--mcp-config', '/cfg', '--resume', 'sess-1'])
+  })
+
+  it('falls back to the manager cwd + base-only args with no pane options', () => {
+    const { manager } = makeResumeManager()
+    manager.start('p1')
+    const call = lastSpawnCall()
+    expect(call.args).toEqual(['--mcp-config', '/cfg'])
+    expect(call.cwd).toBe('/work')
+  })
+})
+
+describe('PtyManager resume-failure detection (session-persistence-v1 OQ-1/FR-022)', () => {
+  it('fires onResumeFailure on an abnormal early exit of a --resume session and suppresses onExit', () => {
+    let t = 1000
+    const { manager, exit, resumeFailures } = makeResumeManager(() => t)
+    manager.start('p1', { args: ['--resume', 'sess-1'], resume: true })
+    t = 1500 // 500ms later — inside the failure window
+    spawned[spawned.length - 1].exitCb?.({ exitCode: 1 })
+    expect(resumeFailures).toEqual(['p1'])
+    expect(exit).toEqual([])
+  })
+
+  it('treats a clean exit(0) of a --resume session as a normal exit', () => {
+    let t = 1000
+    const { manager, exit, resumeFailures } = makeResumeManager(() => t)
+    manager.start('p1', { args: ['--resume', 'sess-1'], resume: true })
+    t = 1500
+    spawned[spawned.length - 1].exitCb?.({ exitCode: 0 })
+    expect(resumeFailures).toEqual([])
+    expect(exit).toEqual([{ paneId: 'p1', exitCode: 0, signal: undefined }])
+  })
+
+  it('treats a late abnormal exit (outside the window) as a normal exit', () => {
+    let t = 1000
+    const { manager, exit, resumeFailures } = makeResumeManager(() => t)
+    manager.start('p1', { args: ['--resume', 'sess-1'], resume: true })
+    t = 1000 + 60_000
+    spawned[spawned.length - 1].exitCb?.({ exitCode: 1 })
+    expect(resumeFailures).toEqual([])
+    expect(exit).toHaveLength(1)
+  })
+
+  it('never treats a non-resume session as a resume failure', () => {
+    let t = 1000
+    const { manager, exit, resumeFailures } = makeResumeManager(() => t)
+    manager.start('p1', { args: ['--session-id', 'u'], resume: false })
+    t = 1100
+    spawned[spawned.length - 1].exitCb?.({ exitCode: 1 })
+    expect(resumeFailures).toEqual([])
+    expect(exit).toHaveLength(1)
   })
 })

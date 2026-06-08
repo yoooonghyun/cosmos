@@ -302,12 +302,24 @@ export function shouldApplyAutoLabel(tab: { renamed?: boolean } | null | undefin
 }
 
 /**
- * The label for a Terminal tab at a given 1-based index (FR-011): "Terminal N".
- * A non-finite / non-positive index degrades to "Terminal 1" (safe fallback).
+ * The label for a panel tab at a given 1-based creation index: the BARE panel name
+ * for the first tab, then "<Panel> N" for N ≥ 2. This is the unified seed-tab naming
+ * convention shared by every rail panel (Terminal and the four generative panels) —
+ * the first tab reads just the panel's name, subsequent tabs append their index. A
+ * non-finite / non-positive index degrades to the bare panel name (safe fallback).
+ */
+export function panelTabLabel(panelName: string, index: number): string {
+  const n = Number.isFinite(index) && index >= 1 ? Math.floor(index) : 1
+  return n === 1 ? panelName : `${panelName} ${n}`
+}
+
+/**
+ * The label for a Terminal tab at a given 1-based index (FR-011): "Terminal" for the
+ * first tab, then "Terminal N" for N ≥ 2 (the unified convention via `panelTabLabel`).
+ * A non-finite / non-positive index degrades to "Terminal" (safe fallback).
  */
 export function terminalLabel(index: number): string {
-  const n = Number.isFinite(index) && index >= 1 ? Math.floor(index) : 1
-  return `Terminal ${n}`
+  return panelTabLabel('Terminal', index)
 }
 
 /**
@@ -339,4 +351,19 @@ export function nextTerminalIndex(everOpenedCount: number): number {
  */
 export function seedTerminalIndex(): number {
   return 1
+}
+
+/**
+ * Seed the monotonic `everOpened` counter from a restored snapshot value
+ * (session-persistence-v1, FR-010). PURE + StrictMode-safe — used inside a render-
+ * phase `useRef`/`useState` lazy initializer (never mutates anything), so a
+ * double-invoke yields the same constant. Floors to at least the restored tab
+ * count and a non-negative integer so a new `+` after restore never collides with
+ * an existing tab index. A missing/garbage value degrades to `tabCount` (the safe
+ * fallback — at least one-per-tab), matching `reconcileEverOpened` in main.
+ */
+export function seedEverOpenedFrom(everOpened: unknown, tabCount: number): number {
+  const safeCount = Number.isFinite(tabCount) && tabCount >= 0 ? Math.floor(tabCount) : 0
+  const n = typeof everOpened === 'number' && Number.isFinite(everOpened) ? Math.floor(everOpened) : 0
+  return Math.max(safeCount, n < 0 ? 0 : n)
 }

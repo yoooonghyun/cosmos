@@ -18,7 +18,7 @@ import {
   type MenuItemConstructorOptions
 } from 'electron'
 import { fileURLToPath } from 'node:url'
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { randomUUID } from 'node:crypto'
 import {
@@ -26,10 +26,12 @@ import {
   ConfluenceChannelName,
   JiraChannelName,
   PtyChannel,
+  SessionChannel,
   ShortcutChannel,
   SlackChannelName,
   UiChannel,
   type AgentStatusPayload,
+  type SessionSnapshot,
   type UiRenderPayload
 } from '../shared/ipc'
 import { matchShortcut } from './shortcutMatch'
@@ -64,6 +66,8 @@ import {
   validateUiAction
 } from '../shared/validate'
 import { PtyManager } from './ptyManager'
+import { SessionStore } from './sessionStore'
+import { validateSnapshot } from './sessionSnapshot'
 import { AgentRunner } from './agentRunner'
 import {
   CONFLUENCE_RENDER_UI_SERVER_NAME,
@@ -123,6 +127,89 @@ let jiraActionDispatcher: JiraActionDispatcher | null = null
 let confluenceManager: ConfluenceManager | null = null
 let confluenceBridge: ConfluenceBridge | null = null
 let agentRunner: AgentRunner | null = null
+
+/* ------------------------------------------------------------------------- *
+ * session-persistence-v1 — main-owned snapshot store + terminal session map
+ * ------------------------------------------------------------------------- */
+
+let sessionStore: SessionStore | null = null
+
+/** The resolved sandbox cwd, cached so IPC handlers can mint fresh sessions in it. */
+let sandboxDirCached = ''
+
+/**
+ * Main owns each terminal pane's `claude` session id + cwd (D2). Populated on
+ * every `pty:start` (mint or resume) and read by the `session:save` boundary to
+ * ENRICH the renderer-built snapshot's terminal tabs with their sessionId/cwd (the
+ * renderer never sees the session id). Cleared per-pane on dispose.
+ */
+const terminalSessionMap = new Map<string, { sessionId: string; cwd: string }>()
+
+/**
+ * Terminal sessions to RESUME on the next `pty:start` for that paneId (FR-020),
+ * seeded from the snapshot at `session:load`. A paneId present here means its
+ * `pty:start` should spawn `claude --resume <sessionId>` (in the persisted cwd)
+ * rather than mint a fresh session. Consumed once per pane (deleted on use) so a
+ * later manual restart starts fresh.
+ */
+const terminalResumeMap = new Map<string, { sessionId: string; cwd: string }>()
+
+/**
+ * Build the per-pane spawn options for a `pty:start` (D2/FR-019/FR-020/FR-022).
+ * A pane queued for resume spawns `--resume <id>` (resume:true so an abnormal early
+ * exit triggers the fallback); otherwise a fresh `--session-id <uuid>` is minted.
+ * Either way `terminalSessionMap` records the pane's session id + cwd for save.
+ */
+function paneSpawnFor(paneId: string, sandboxDir: string): {
+  args: string[]
+  resume: boolean
+  cwd: string
+} {
+  const resume = terminalResumeMap.get(paneId)
+  if (resume) {
+    terminalResumeMap.delete(paneId)
+    terminalSessionMap.set(paneId, { sessionId: resume.sessionId, cwd: resume.cwd })
+    return { args: ['--resume', resume.sessionId], resume: true, cwd: resume.cwd }
+  }
+  const sessionId = randomUUID()
+  terminalSessionMap.set(paneId, { sessionId, cwd: sandboxDir })
+  return { args: ['--session-id', sessionId], resume: false, cwd: sandboxDir }
+}
+
+/**
+ * Enrich a renderer-sent snapshot's terminal tabs with their MAIN-owned sessionId
+ * + cwd from `terminalSessionMap` before persisting (D2/FR-019). The renderer sends
+ * terminal tabs WITHOUT sessionId/cwd (it never sees them); a tab whose pane has no
+ * live session mapping (already exited/disposed) is dropped — only resumable tabs
+ * are persisted. Returns the enriched snapshot, or `null` when the payload is not a
+ * snapshot-shaped object (warned + ignored upstream). Never throws.
+ */
+function enrichSnapshotForSave(raw: unknown): SessionSnapshot | null {
+  if (typeof raw !== 'object' || raw === null) {
+    console.warn('[session] session:save payload is not an object; ignoring')
+    return null
+  }
+  const snap = raw as SessionSnapshot
+  const terminal = snap.panels?.terminal
+  if (terminal && Array.isArray(terminal.tabs)) {
+    terminal.tabs = terminal.tabs
+      .map((t) => {
+        const session = terminalSessionMap.get(t.id)
+        if (!session) {
+          return null // pane has no live session — not resumable, drop it
+        }
+        return { ...t, sessionId: session.sessionId, cwd: session.cwd }
+      })
+      .filter((t): t is NonNullable<typeof t> => t !== null)
+    // Prune a dangling active id after dropping dead tabs (FR-008/FR-011).
+    if (terminal.activeTabId && !terminal.tabs.some((t) => t.id === terminal.activeTabId)) {
+      terminal.activeTabId = terminal.tabs.length > 0 ? terminal.tabs[0].id : null
+    }
+  }
+  // `validateSnapshot` runs again inside `sessionStore.save`; this pre-validate keeps
+  // the enrichment honest (a wrong-version payload is rejected before we touch it).
+  return validateSnapshot(snap)
+}
 
 /**
  * Isolated working directory for the embedded `claude`. The host (cosmos) is
@@ -354,9 +441,24 @@ function createPtyManager(window: BrowserWindow, sandboxDir: string): PtyManager
       },
       // FR-007: signal exit/error to the renderer.
       onExit: (payload) => {
+        // The pane is gone (or about to be re-minted) — drop its session mapping so a
+        // stale id is never persisted (FR-018/FR-019).
+        terminalSessionMap.delete(payload.paneId)
         if (!window.isDestroyed()) {
           window.webContents.send(PtyChannel.Exit, payload)
         }
+      },
+      // session-persistence-v1 OQ-1/FR-022: a `--resume` spawn died abnormally too
+      // soon (resume failed). Re-mint a FRESH session and re-start this pane ONCE in
+      // its persisted cwd; the renderer keeps the restored scrollback as read-only
+      // history. No hang/crash — the tab gets a working fresh `claude`.
+      onResumeFailure: (paneId) => {
+        const prior = terminalSessionMap.get(paneId)
+        const cwd = prior?.cwd ?? sandboxDir
+        const sessionId = randomUUID()
+        terminalSessionMap.set(paneId, { sessionId, cwd })
+        console.warn(`[session] resume failed for pane ${paneId}; starting a fresh session`)
+        ptyManager?.start(paneId, { args: ['--session-id', sessionId], resume: false, cwd })
       }
     },
     {
@@ -376,7 +478,10 @@ function registerIpcHandlers(): void {
     if (!payload) {
       return // invalid -> warned + ignored (SC-005)
     }
-    ptyManager?.start(payload.paneId)
+    // session-persistence-v1 D2/FR-019/FR-020: main owns the pane's `claude` session
+    // id. A pane queued for resume (seeded at session:load) spawns `--resume`; else a
+    // fresh `--session-id` is minted. Either way the id+cwd are recorded for save.
+    ptyManager?.start(payload.paneId, paneSpawnFor(payload.paneId, sandboxDirCached))
   })
 
   // FR-004 (panel-tabs v1 FR-021): forward keyboard input to the addressed pane
@@ -415,7 +520,39 @@ function registerIpcHandlers(): void {
     if (!payload) {
       return // invalid -> warned + ignored (SC-005)
     }
+    // session-persistence-v1: a closed tab's session is gone — drop its mapping so it
+    // is never persisted or resumed (FR-018).
+    terminalSessionMap.delete(payload.paneId)
+    terminalResumeMap.delete(payload.paneId)
     ptyManager?.kill(payload.paneId)
+  })
+
+  // session-persistence-v1 (FR-001/FR-003/FR-005): read the persisted snapshot once
+  // at startup. Seeds the per-pane resume map from the terminal tabs so each tab's
+  // first `pty:start` resumes its `claude` session (FR-020). Returns null on a
+  // missing/corrupt/wrong-version file so the renderer falls back to a clean session.
+  ipcMain.handle(SessionChannel.Load, () => {
+    const snapshot = sessionStore?.load() ?? null
+    terminalResumeMap.clear()
+    if (snapshot) {
+      for (const tab of snapshot.panels.terminal.tabs) {
+        terminalResumeMap.set(tab.id, { sessionId: tab.sessionId, cwd: tab.cwd })
+      }
+    }
+    return snapshot
+  })
+
+  // session-persistence-v1 (FR-001/FR-004/FR-006/FR-007): persist the renderer's
+  // debounced snapshot. The renderer cannot know each terminal tab's MAIN-owned
+  // sessionId/cwd (D2), so ENRICH the terminal tabs from `terminalSessionMap` here
+  // before validating + writing. An invalid payload is warned + ignored by the store
+  // (never overwrites a good file). NO secret crosses this boundary (FR-006).
+  ipcMain.on(SessionChannel.Save, (_event: IpcMainEvent, raw: unknown) => {
+    const enriched = enrichSnapshotForSave(raw)
+    if (!enriched) {
+      return // not a usable snapshot -> warned + ignored
+    }
+    sessionStore?.save(enriched)
   })
 
   // FR-006/FR-010: receive the user's interaction from the Generated-UI panel.
@@ -824,7 +961,17 @@ function createWindow(): void {
   // The embedded agent and the bridge socket share one isolated cwd so the
   // socket the MCP server connects to matches the one main listens on.
   const sandboxDir = resolveSandboxDir()
+  sandboxDirCached = sandboxDir
   ptyManager = createPtyManager(mainWindow, sandboxDir)
+
+  // session-persistence-v1 (D1/FR-001): plain (unencrypted) JSON snapshot under
+  // userData, written atomically. The snapshot is non-secret structure — NO token,
+  // OAuth material, or client_secret is ever placed here (FR-006).
+  sessionStore = new SessionStore({
+    filePath: join(app.getPath('userData'), 'session.json'),
+    dirPath: app.getPath('userData'),
+    fs: { existsSync, readFileSync, writeFileSync, mkdirSync, renameSync, rmSync }
+  })
 
   // FR-004/FR-012: main hosts the render_ui bridge socket and owns surface
   // pushes + pending-call state. Start it with the window.

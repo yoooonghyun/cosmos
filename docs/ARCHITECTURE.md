@@ -89,7 +89,10 @@ Generated UI, Slack, Jira, Confluence — and exactly **one fills the main area 
 (Terminal is the default). All five stay **mounted** when hidden (`forceMount` + a
 `data-state`-driven hide) so switching only toggles visibility — never tearing down the
 Terminal's live PTY session or a pending `render_ui` surface. (The §3 diagram shows the two
-data *channels*, not the on-screen layout.)
+data *channels*, not the on-screen layout.) The selected rail item is clearly highlighted — a
+`--secondary` filled pill behind a full-brightness icon plus a 3px full-height `--primary` left
+bar — driven by React `surface` state, **not** `data-[state=active]` (each trigger is wrapped by
+a `Tooltip` whose `data-state` clobbers the tab's; see DEVELOPMENT.md "Nested Radix triggers").
 
 **Within each panel, VS Code-style tabs (§4.11).** Each rail panel hosts its OWN independent,
 session-only ordered set of tabs (a side-by-side variable-width strip — click-to-switch,
@@ -210,6 +213,27 @@ env var (`COSMOS_BRIDGE_SOCKET` for both render entry scripts, which share the o
   processes the active tab's stored spec, carries a per-tab error boundary, and forwards SDK
   actions). Inactive tabs keep their last surface in state and are restored — not re-composed — on
   switch, so only one provider ever contends for the single `ui:render` channel.
+- **Shared collapsible prompt composer (`src/renderer/PromptComposer.tsx`).** All four generative
+  panels share ONE composer (per-panel copy only — `onSubmit`/`placeholder`/`ariaLabel`), not four
+  inlined copies. It defaults COLLAPSED to a bottom-center cosmos-logo button (`CosmosMark`) and
+  EXPANDS to a centered `max-w-2xl` card that floats as an overlay (zero-height in-flow slot +
+  `absolute bottom-0`, transparent `pointer-events-none` surround) so a tall composer never pushes
+  the tickets behind it. Open-only logo; collapses on submit / Esc / click-outside; draft preserved
+  until a successful submit. Both states stay mounted and cross-fade via an `expanded` flag (so the
+  open/close animation fires) with the hidden one `inert`. Pure decision logic lives in
+  `promptComposerLogic.ts` (the `.ts`/`.test.ts` split). **Submit vs. dismiss are distinct exits**
+  (composer-send-animation-v1): a successful submit sets a `launching` flag that animates the card
+  GROWING to fill and fading out (`scale-[2.6]`, `transition-[opacity,scale,filter]`) — a "launch
+  into the surface" — whereas Esc / click-outside is a gentle `scale-95` dismiss. During a generation
+  the composer takes a `busy` prop (= the panel's surface-spinner gate) that hides BOTH states,
+  including the logo button, so no compose affordance shows mid-run; the logo reappears only when the
+  run's surface lands (or errors). The busy affordance is the **surface spinner** (`SurfaceSpinner` /
+  `CosmosSpinner`), rendered in the active tab's content region and gated by `surfaceSpinnerVisible`
+  (`inFlight && !surface && !error && !loadingDefault`) — the stop condition is the per-tab surface
+  landing, not the agent `completed` status. The Send control uses the `cosmos` Button
+  variant; the cosmos brand pink→purple identity is single-sourced as the `--brand-pink` /
+  `--brand-purple` / `--brand-foreground` theme tokens (index.css), consumed by both the variant and
+  `CosmosMark`'s gradient.
 - An unknown/invalid component degrades to that tab's surface error boundary (a safe
   fallback), never a white-screen, and never affects sibling tabs.
 
@@ -420,9 +444,16 @@ serving **both** surfaces:
   (`{ issueKey }`) → main `getIssue` → `JiraSurfaceBuilder.buildIssueDetailSurface` → an unsolicited
   `target:'jira'` frame that replaces the ACTIVE tab's surface (the §4.11 unsolicited-frame +
   fire-or-defer discipline, reused in place). A **native back row** (panel chrome outside the A2UI
-  host, the Confluence `ChevronLeft` precedent) returns to the originating list by re-running its read
-  (`jira:requestDefaultView` for a default-view origin, `jira:requestSearchView` for a search origin;
-  default view as the fallback). It is read-only — no new OAuth scope, no token on the payload/surface. It renders
+  host, the Confluence `ChevronLeft` precedent) returns to the originating list. Because the
+  unsolicited detail frame OVERWRITES the active tab's surface (and flips `composed`→`false`), a
+  detail opened on top of a **pinned generated-UI (`composed`) surface** cannot be re-read — so the
+  origin is tracked by the pure `backNavTarget` helper (`src/renderer/jiraBackNav.ts`) over a
+  `JiraBackOrigin` union: a `composed` origin snapshots the surface AT detail-open time and back
+  **restores the snapshot verbatim** (`update(tab,{surface,composed:true})`, no read, no skeleton),
+  while `default`/`search` origins re-run their read (`jira:requestDefaultView` /
+  `jira:requestSearchView`; default view as the fallback). Lesson: an unsolicited target-routed frame
+  clobbers a pinned `composed` surface, so any pinned generated UI must be snapshotted at
+  overlay-open time, never recovered afterward. It is read-only — no new OAuth scope, no token on the payload/surface. It renders
   with the **Jira custom catalog** (`src/renderer/jiraCatalog/` — a real A2UI `Catalog` of cosmos React components:
   TicketCard, StatusBadge, TransitionPicker, IssueList, CommentList, AddCommentControl, plus
   v1 create/edit forms). Because catalog components are plain cosmos React, they use any Tailwind
@@ -556,7 +587,7 @@ trailing `+` new-tab affordance, and horizontal overflow scroll. Tabs are render
   **adjacent** tab (right-else-left, the VS Code rule); closing a non-active tab leaves the active
   one unchanged. A generative panel shows its base screen whenever the active tab is
   **empty/uncomposed** — `showBase = !activeTab || (!activeTab.surface && !activeTab.error)` — not
-  only when zero tabs are open, so a fresh `+` "Untitled" tab lands on the same base as zero tabs;
+  only when zero tabs are open, so a fresh `+` not-yet-composed tab lands on the same base as zero tabs;
   the per-tab A2UI host is gated on `activeTab && (activeTab.surface || activeTab.error)`. The base
   differs per panel: Slack/Confluence show their native browser, Generated UI shows its idle
   placeholder, and **Jira shows an agent-generated my-tickets default board view** (it has no static
@@ -585,7 +616,17 @@ trailing `+` new-tab affordance, and horizontal overflow scroll. Tabs are render
   is filed into it (discarded if that tab was closed before the frame arrives; the panel stays
   usable). An **unsolicited** frame with no originating tab — Jira's default-view request and the
   deterministic `jira.*` write re-push (§4.9) — lands in the active tab, auto-creating one if none
-  are open. An `agent:status` `error` surfaces in the originating tab.
+  are open. An `agent:status` `error` surfaces in the originating tab. A landed surface is tagged
+  with a per-tab **`composed`** flag — `true` for a solicited compose frame, `false` for an
+  unsolicited deterministic push — so a panel can tell a generated-UI surface apart from a native
+  data view: Jira hides its JQL search box on `composed` surfaces but keeps it for ticket browsing.
+- **Unified seed-tab naming.** A not-yet-composed tab's label follows ONE convention across every
+  rail panel via `panelTabLabel(panelName, index)` (`panelTabs.ts`): the **bare panel name** for the
+  first tab, then `"<Panel> N"` for later tabs (`Terminal`, `Terminal 2`; `Jira`, `Jira 2`; etc.).
+  `terminalLabel` delegates to it; the generative hook mints labels from a per-panel monotonic
+  `everOpened` counter (no renumber on close, advanced only off render-phase so StrictMode cannot
+  double-count — cf. terminal-tab-index-skip-v1). A compose then relabels the tab from its utterance
+  (`labelFromUtterance`); a manual rename pins it (`renamed`).
 - **Deferred default-view request — protecting the correlation slot.** A Jira default-view request
   (first activation or a `+` tab, §4.9) is a deterministic main read, NOT an `AgentRunner` run, so
   it does NOT consume the single-run guard — but its unsolicited frame and a solicited compose's

@@ -7,6 +7,7 @@ import {
   MAX_LABEL_LENGTH,
   nextTerminalIndex,
   normalizeRenameInput,
+  panelTabLabel,
   renameCommitDecision,
   seedTerminalIndex,
   openTab,
@@ -316,16 +317,30 @@ describe('updateTab + renamed flag (tab-rename-v1 FR-007 — reuse existing patc
   })
 })
 
+describe('panelTabLabel (unified seed-tab naming)', () => {
+  it('uses the BARE panel name for the first tab, then "<Panel> N"', () => {
+    expect(panelTabLabel('Jira', 1)).toBe('Jira')
+    expect(panelTabLabel('Jira', 2)).toBe('Jira 2')
+    expect(panelTabLabel('Generated UI', 3)).toBe('Generated UI 3')
+  })
+
+  it('degrades a non-positive / non-finite index to the bare panel name (safe fallback)', () => {
+    expect(panelTabLabel('Slack', 0)).toBe('Slack')
+    expect(panelTabLabel('Slack', -5)).toBe('Slack')
+    expect(panelTabLabel('Slack', NaN)).toBe('Slack')
+  })
+})
+
 describe('terminalLabel / nextTerminalIndex (FR-011)', () => {
-  it('formats a 1-based terminal label', () => {
-    expect(terminalLabel(1)).toBe('Terminal 1')
+  it('uses the bare "Terminal" for the first tab, then "Terminal N"', () => {
+    expect(terminalLabel(1)).toBe('Terminal')
     expect(terminalLabel(2)).toBe('Terminal 2')
   })
 
-  it('degrades a non-positive / non-finite index to "Terminal 1" (safe fallback)', () => {
-    expect(terminalLabel(0)).toBe('Terminal 1')
-    expect(terminalLabel(-5)).toBe('Terminal 1')
-    expect(terminalLabel(NaN)).toBe('Terminal 1')
+  it('degrades a non-positive / non-finite index to "Terminal" (safe fallback)', () => {
+    expect(terminalLabel(0)).toBe('Terminal')
+    expect(terminalLabel(-5)).toBe('Terminal')
+    expect(terminalLabel(NaN)).toBe('Terminal')
   })
 
   it('nextTerminalIndex is monotonic over the ever-opened count (no renumber)', () => {
@@ -378,9 +393,9 @@ describe('terminal panel seeding is StrictMode-idempotent (terminal-tab-index-sk
     return { counter, label }
   }
 
-  it('the seed reads "Terminal 1" and leaves the counter at 1', () => {
+  it('the seed reads "Terminal" and leaves the counter at 1', () => {
     const { counter, label } = seed()
-    expect(label).toBe('Terminal 1')
+    expect(label).toBe('Terminal')
     expect(counter.value).toBe(1)
   })
 
@@ -389,8 +404,8 @@ describe('terminal panel seeding is StrictMode-idempotent (terminal-tab-index-sk
     const first = seed()
     const second = seed()
     // Both invokes are idempotent — neither moves the counter past the seed index.
-    expect(first.label).toBe('Terminal 1')
-    expect(second.label).toBe('Terminal 1')
+    expect(first.label).toBe('Terminal')
+    expect(second.label).toBe('Terminal')
     expect(second.counter.value).toBe(1)
 
     // The kept counter is from a single seed; the first `+` mints index 2, not 3.

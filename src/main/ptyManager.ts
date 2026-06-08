@@ -28,7 +28,7 @@
  */
 
 import * as pty from 'node-pty'
-import type { IPty } from 'node-pty'
+import type { IPty, IPtyForkOptions } from 'node-pty'
 import { accessSync, constants } from 'node:fs'
 import { delimiter, isAbsolute, join } from 'node:path'
 import type {
@@ -37,12 +37,27 @@ import type {
   PtyResizePayload
 } from '../shared/ipc'
 
+/** The node-pty `spawn` signature — injectable so tests run without a real PTY. */
+export type SpawnPtyFn = (
+  command: string,
+  args: string[],
+  options: IPtyForkOptions
+) => IPty
+
 /** Sinks the manager pushes events into; wired to IPC by the caller. */
 export interface PtyManagerSinks {
   /** FR-002: deliver a chunk of raw output to the renderer. */
   onData(payload: PtyDataPayload): void
   /** FR-007: deliver an exit/error event to the renderer. */
   onExit(payload: PtyExitPayload): void
+  /**
+   * session-persistence-v1 OQ-1/FR-022: a session that was spawned with `--resume`
+   * exited abnormally (non-zero code / killed signal) too soon to be a normal exit,
+   * i.e. the resume failed. Main reacts by re-minting a fresh `--session-id` and
+   * re-starting this pane ONCE, keeping the restored scrollback as read-only history.
+   * Optional — absent in non-persistence callers (plain start has no resume).
+   */
+  onResumeFailure?(paneId: string): void
 }
 
 export interface PtyManagerOptions {
@@ -50,12 +65,38 @@ export interface PtyManagerOptions {
   cwd: string
   /** The command to spawn. Defaults to `claude`. */
   command?: string
-  /** Extra args passed to the command. Defaults to none. */
+  /** Base args prepended to every pane's per-pane args (e.g. `--mcp-config <path>`). */
   args?: string[]
   /** Initial terminal size. */
   cols?: number
   rows?: number
+  /** Injectable node-pty spawn (defaults to `pty.spawn`), for unit tests. */
+  spawn?: SpawnPtyFn
 }
+
+/**
+ * Per-pane spawn options (session-persistence-v1, D2). The renderer mints `paneId`;
+ * MAIN mints the `claude` session id and passes the resume flags here.
+ *  - `args`: per-pane extra args appended after the base `options.args` (e.g.
+ *    `['--session-id', <uuid>]` on first start or `['--resume', <id>]` on relaunch).
+ *  - `resume`: true when these args are a `--resume` (so an abnormal early exit is a
+ *    resume-failure → `onResumeFailure`, FR-022/OQ-1).
+ *  - `cwd`: per-pane working directory (the persisted session cwd), overriding the
+ *    manager default when restoring a tab in a different directory (FR-019).
+ */
+export interface PaneSpawnOptions {
+  args?: string[]
+  resume?: boolean
+  cwd?: string
+}
+
+/**
+ * How quickly (ms) after a `--resume` spawn an abnormal exit is treated as a
+ * resume-failure rather than a user-driven exit (OQ-1). A resume that fails does so
+ * almost immediately; a long-lived session that the user later exits is NOT a resume
+ * failure. Conservative window.
+ */
+const RESUME_FAILURE_WINDOW_MS = 4000
 
 const DEFAULT_COLS = 80
 const DEFAULT_ROWS = 24
@@ -95,6 +136,10 @@ interface PtySession {
   proc: IPty
   cols: number
   rows: number
+  /** True when this session was spawned with `--resume` (OQ-1 failure detection). */
+  resume: boolean
+  /** Epoch ms when this session was spawned (for the resume-failure window). */
+  startedAtMs: number
 }
 
 export class PtyManager {
@@ -108,12 +153,17 @@ export class PtyManager {
     PtyManagerOptions
   private readonly defaultCols: number
   private readonly defaultRows: number
+  private readonly spawn: SpawnPtyFn
+  /** Injectable clock (ms) for the resume-failure window; defaults to Date.now. */
+  private readonly now: () => number
 
-  constructor(sinks: PtyManagerSinks, options: PtyManagerOptions) {
+  constructor(sinks: PtyManagerSinks, options: PtyManagerOptions, now: () => number = Date.now) {
     this.sinks = sinks
     this.options = options
     this.defaultCols = options.cols ?? DEFAULT_COLS
     this.defaultRows = options.rows ?? DEFAULT_ROWS
+    this.spawn = options.spawn ?? ((c, a, o) => pty.spawn(c, a, o))
+    this.now = now
   }
 
   /** True when a live PTY process is attached for `paneId` (panel-tabs v1, FR-021). */
@@ -128,16 +178,19 @@ export class PtyManager {
    * touched. If the binary cannot be found, emits a per-pane exit event with an
    * `error` rather than throwing (edge case: do not crash).
    */
-  start(paneId: string): void {
+  start(paneId: string, pane: PaneSpawnOptions = {}): void {
     const existing = this.sessions.get(paneId)
     if (existing) {
       this.kill(paneId)
     }
 
     const command = this.options.command ?? 'claude'
-    const args = this.options.args ?? []
+    // Base args (e.g. `--mcp-config <path>`) + this pane's resume/session flags (D2).
+    const args = [...(this.options.args ?? []), ...(pane.args ?? [])]
+    const cwd = pane.cwd ?? this.options.cwd
     const cols = existing?.cols ?? this.defaultCols
     const rows = existing?.rows ?? this.defaultRows
+    const resume = pane.resume === true
 
     // Edge case (per pane): `claude` not found on PATH. node-pty does not reject a
     // missing binary synchronously on this platform (it exits with code 1 and no
@@ -153,11 +206,11 @@ export class PtyManager {
 
     let proc: IPty
     try {
-      proc = pty.spawn(command, args, {
+      proc = this.spawn(command, args, {
         name: 'xterm-256color',
         cols,
         rows,
-        cwd: this.options.cwd,
+        cwd,
         env: process.env as { [key: string]: string }
       })
     } catch (err) {
@@ -167,7 +220,7 @@ export class PtyManager {
       return
     }
 
-    const session: PtySession = { proc, cols, rows }
+    const session: PtySession = { proc, cols, rows, resume, startedAtMs: this.now() }
     this.sessions.set(paneId, session)
 
     proc.onData((data: string) => {
@@ -180,8 +233,31 @@ export class PtyManager {
       if (this.sessions.get(paneId) === session) {
         this.sessions.delete(paneId)
       }
+      // OQ-1/FR-022: a `--resume` session that died abnormally within the failure
+      // window is a resume-failure → ask main to re-mint a fresh session ONCE. The
+      // normal exit event is suppressed in that case so the renderer doesn't flash a
+      // spurious "claude exited" before the fresh session attaches.
+      if (
+        session.resume &&
+        this.sinks.onResumeFailure &&
+        this.isAbnormalExit(exitCode, signal) &&
+        this.now() - session.startedAtMs <= RESUME_FAILURE_WINDOW_MS
+      ) {
+        this.sinks.onResumeFailure(paneId)
+        return
+      }
       this.sinks.onExit({ paneId, exitCode, signal })
     })
+  }
+
+  /**
+   * Whether an exit looks abnormal (resume failed) vs. a clean user-driven exit
+   * (OQ-1): a non-zero exit code or a terminating signal. A clean `exit 0` is NOT a
+   * resume failure.
+   */
+  private isAbnormalExit(exitCode: number | undefined, signal: number | undefined): boolean {
+    if (typeof signal === 'number' && signal !== 0) return true
+    return typeof exitCode === 'number' && exitCode !== 0
   }
 
   /**

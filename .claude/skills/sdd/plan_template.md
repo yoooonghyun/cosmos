@@ -9,7 +9,7 @@
 
 ## Summary
 
-> One paragraph: what is being built and the chosen technical approach.
+> One paragraph: what built + chosen technical approach.
 
 ## Technical Context
 
@@ -24,13 +24,13 @@
 
 ## Implementation Checklist
 
-> Update this checklist as work progresses. Add notes inline when a step deviates from the original plan.
+> Update checklist as work progresses. Add inline notes when step deviates from plan.
 
 ### Phase 1 — Interface
 
-- [ ] Read spec document and confirm no open questions remain
+- [ ] Read spec doc, confirm no open questions remain
 - [ ] Define TypeScript types in `src/types.ts`
-- [ ] Review types with the spec — no invented properties
+- [ ] Review types vs spec — no invented properties
 
 ### Phase 2 — Testing
 
@@ -46,14 +46,14 @@
 
 ### Phase 4 — Docs
 
-- [ ] Mark item as done in `docs/roadmap.md`
-- [ ] Update this plan with any deviations
-- [ ] Update `docs/ARCHITECTURE.md` if new patterns or decisions were introduced
+- [ ] Mark item done in `docs/roadmap.md`
+- [ ] Update this plan with deviations
+- [ ] Update `docs/ARCHITECTURE.md` if new patterns/decisions introduced
 
 ---
 
 ## Deviations & Notes
 
-> Record here anything that differed from the plan during implementation. Date each entry.
+> Record anything that differed from plan during implementation. Date each entry.
 
-- **YYYY-MM-DD**: [What changed and why]
+- **YYYY-MM-DD**: [What changed + why]

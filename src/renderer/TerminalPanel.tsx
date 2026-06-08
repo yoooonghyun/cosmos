@@ -21,9 +21,10 @@
  * FR-005 debounced resize, FR-007 exit indication, FR-008 restart control.
  */
 
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
+import { SerializeAddon } from '@xterm/addon-serialize'
 import { SquareTerminal } from 'lucide-react'
 import '@xterm/xterm/css/xterm.css'
 import type { PtyExitPayload } from '../shared/ipc'
@@ -31,7 +32,9 @@ import { PanelTabStrip, type PanelTab } from './PanelTabStrip'
 import { PanelFooter } from './PanelFooter'
 import { usePanelTabs } from './usePanelTabs'
 import { useTabShortcuts } from './useTabShortcuts'
-import { nextTerminalIndex, seedTerminalIndex, terminalLabel } from './panelTabs'
+import { nextTerminalIndex, seedEverOpenedFrom, seedTerminalIndex, terminalLabel } from './panelTabs'
+import { useReportPanel, useRestoredTerminalPanel } from './SessionProvider'
+import { buildTerminalDraft, capScrollback, hydrateTerminalTabs } from './sessionSnapshot'
 import './TerminalPanel.css'
 
 type ExitState = { kind: 'running' } | { kind: 'exited'; payload: PtyExitPayload }
@@ -67,7 +70,19 @@ function formatExit(payload: PtyExitPayload): string {
  * kept mounted for the tab's lifetime (FR-025). `active` only toggles visibility +
  * triggers a re-fit/focus when it becomes visible (a hidden container can't measure).
  */
-function TerminalView({ paneId, active }: { paneId: string; active: boolean }): React.JSX.Element {
+function TerminalView({
+  paneId,
+  active,
+  initialScrollback,
+  registerSerializer
+}: {
+  paneId: string
+  active: boolean
+  /** Restored scrollback to pre-write as on-screen history before pty:start (FR-021). */
+  initialScrollback?: string
+  /** Register this pane's scrollback serializer with the panel; returns an unregister fn. */
+  registerSerializer: (paneId: string, serialize: () => string) => () => void
+}): React.JSX.Element {
   const containerRef = useRef<HTMLDivElement | null>(null)
   const termRef = useRef<Terminal | null>(null)
   const fitRef = useRef<FitAddon | null>(null)
@@ -87,10 +102,24 @@ function TerminalView({ paneId, active }: { paneId: string; active: boolean }): 
       allowProposedApi: true
     })
     const fitAddon = new FitAddon()
+    const serializeAddon = new SerializeAddon()
     term.loadAddon(fitAddon)
+    term.loadAddon(serializeAddon)
     term.open(container)
     termRef.current = term
     fitRef.current = fitAddon
+
+    // session-persistence-v1 FR-021: pre-write the restored scrollback as on-screen
+    // history BEFORE the live session attaches, so a resumed (or fresh-after-failed-
+    // resume) tab shows what was there at quit. It is plain history — the live PTY's
+    // own output follows it.
+    if (initialScrollback) {
+      term.write(initialScrollback)
+    }
+
+    // Register this pane's serializer so the panel can capture bounded scrollback on
+    // demand (at report/teardown) rather than on every keystroke (FR-021/FR-007).
+    const unregister = registerSerializer(paneId, () => capScrollback(serializeAddon.serialize()))
 
     const safeFit = (): void => {
       try {
@@ -147,6 +176,7 @@ function TerminalView({ paneId, active }: { paneId: string; active: boolean }): 
       offData()
       offExit()
       inputDisposable.dispose()
+      unregister()
       window.removeEventListener('resize', onWindowResize)
       resizeObserver.disconnect()
       if (resizeTimer) {
@@ -211,22 +241,51 @@ function TerminalView({ paneId, active }: { paneId: string; active: boolean }): 
 }
 
 export function TerminalPanel({ active }: { active: boolean }): React.JSX.Element {
-  // FR-024: always ≥1 terminal. Seed one default tab on first mount.
-  // The counter starts AT the seed index (1), not 0 — the seed must NOT advance it.
-  // `mintTab()` mutates this ref, so it must never run inside the render-phase
-  // `useState` initializer: StrictMode double-invokes that initializer in dev and the
-  // ref mutation persists across both calls, which skipped the first `+` to "Terminal
-  // 3" (terminal-tab-index-skip-v1). Advance the counter only from event handlers /
-  // the empty-refill effect, which StrictMode does not double-invoke for this purpose.
-  const everOpened = useRef(seedTerminalIndex())
+  // session-persistence-v1: the restored terminal slice (or undefined for a clean
+  // session). Read once; the lazy initializers below seed from it.
+  const restored = useRestoredTerminalPanel()
+  const report = useReportPanel()
+
+  // Restored scrollback by paneId, so each TerminalView pre-writes its history. Read
+  // once into a ref; consumed by render and never re-seeded (a re-render must not
+  // re-write history into a live terminal).
+  const restoredScrollbackRef = useRef<Map<string, string>>(
+    new Map((restored?.tabs ?? []).flatMap((t) => (t.scrollback ? [[t.id, t.scrollback] as const] : [])))
+  )
+
+  // Each pane's scrollback serializer, registered by its TerminalView on mount. Read
+  // at report/teardown to capture bounded scrollback on demand (not per keystroke).
+  const serializersRef = useRef<Map<string, () => string>>(new Map())
+  const registerSerializer = useCallback((paneId: string, serialize: () => string) => {
+    serializersRef.current.set(paneId, serialize)
+    return () => {
+      serializersRef.current.delete(paneId)
+    }
+  }, [])
+
+  // FR-024: always ≥1 terminal. Seed from the restored snapshot, else one default tab.
+  // The counter starts AT the seed index — the seed must NOT advance it (StrictMode
+  // double-invokes a `useState`/`useRef` initializer; a ref mutation there would skip
+  // the first `+`, terminal-tab-index-skip-v1). seedEverOpenedFrom is PURE.
+  const everOpened = useRef(
+    restored
+      ? seedEverOpenedFrom(restored.everOpened, restored.tabs.length)
+      : seedTerminalIndex()
+  )
   const mintTab = (): TerminalTab => {
     const index = nextTerminalIndex(everOpened.current)
     everOpened.current = index
     return { id: crypto.randomUUID(), label: terminalLabel(index) }
   }
-  // Lazy initial state — PURE: derive the seed tab's label directly from its index
-  // (no `mintTab()`, no ref mutation), so a StrictMode double-invoke is idempotent.
+  // Lazy initial state — PURE: hydrate the restored tabs, or derive the single seed
+  // tab's label directly from its index. No `mintTab()`, no ref mutation, so a
+  // StrictMode double-invoke is idempotent. A restored zero-tab/absent panel falls
+  // back to the default tab (FR-011/FR-024).
   const [initial] = useState(() => {
+    const hydrated = hydrateTerminalTabs(restored)
+    if (hydrated.tabs.length > 0) {
+      return hydrated
+    }
     const first: TerminalTab = {
       id: crypto.randomUUID(),
       label: terminalLabel(seedTerminalIndex())
@@ -234,6 +293,21 @@ export function TerminalPanel({ active }: { active: boolean }): React.JSX.Elemen
     return { tabs: [first], activeTabId: first.id }
   })
   const { tabs, activeTabId, open, close, setActive, update } = usePanelTabs<TerminalTab>(initial)
+
+  // Report the terminal contribution on any tab-state change (FR-007). Scrollback is
+  // captured lazily here via each pane's registered serializer; main enriches each
+  // tab with its sessionId/cwd at the save boundary (D2).
+  useEffect(() => {
+    const scrollbackByPane = new Map<string, string>()
+    for (const [paneId, serialize] of serializersRef.current) {
+      try {
+        scrollbackByPane.set(paneId, serialize())
+      } catch {
+        // a disposing terminal can throw mid-serialize; skip it
+      }
+    }
+    report('terminal', buildTerminalDraft({ tabs, activeTabId }, everOpened.current, scrollbackByPane))
+  }, [tabs, activeTabId, report])
 
   const handleNewTab = (): void => {
     // FR-022: mint a new pane + open a tab (its TerminalView issues pty:start).
@@ -289,7 +363,13 @@ export function TerminalPanel({ active }: { active: boolean }): React.JSX.Elemen
           (FR-025). Plain flex container so the active `.terminal-panel` fills it. */}
       <div className="flex min-h-0 flex-1 flex-col" role="tabpanel" aria-label="Terminal session">
         {tabs.map((t) => (
-          <TerminalView key={t.id} paneId={t.id} active={t.id === activeTabId} />
+          <TerminalView
+            key={t.id}
+            paneId={t.id}
+            active={t.id === activeTabId}
+            initialScrollback={restoredScrollbackRef.current.get(t.id)}
+            registerSerializer={registerSerializer}
+          />
         ))}
       </div>
       <PanelFooter surfaceName="Terminal" icon={SquareTerminal} activeTab={activeStripTab} />

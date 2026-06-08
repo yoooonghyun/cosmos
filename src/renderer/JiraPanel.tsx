@@ -31,20 +31,23 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { A2UIProvider, type A2UIAction } from '@a2ui-sdk/react/0.9'
-import { ChevronLeft, Loader2, Search, SquareKanban } from 'lucide-react'
+import { ChevronLeft, Search, SquareKanban } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
-import { Textarea } from '@/components/ui/textarea'
 import { Skeleton } from '@/components/ui/skeleton'
-import type { FormEvent, KeyboardEvent } from 'react'
+import type { FormEvent } from 'react'
 import { ConnectionStatus, ConnectForm } from './atlassianPanelBits'
 import { jiraCatalog, JIRA_CATALOG_ID, JIRA_OPEN_DETAIL_ACTION } from './jiraCatalog'
 import { PanelTabStrip, type PanelTab } from './PanelTabStrip'
 import { PanelFooter } from './PanelFooter'
 import { ActiveTabSurface } from './ActiveTabSurface'
+import { PromptComposer } from './PromptComposer'
+import { SurfaceSpinner } from './SurfaceSpinner'
 import { useGenerativePanelTabs } from './useGenerativePanelTabs'
+import { useRestoredGenerativePanel } from './SessionProvider'
+import { backNavTarget, type JiraBackOrigin } from './jiraBackNav'
+import { surfaceSpinnerVisible } from './promptComposerLogic'
 import { useTabShortcuts } from './useTabShortcuts'
-import type { AgentStatusPayload } from '../shared/ipc'
 import type { JiraConnectionStatus } from '../shared/jira'
 
 /**
@@ -74,116 +77,6 @@ function DefaultViewSkeleton(): React.JSX.Element {
   )
 }
 
-/**
- * Bottom-docked Jira prompt composer (design §9.2). Reuses GeneratedUiPanel's composer
- * structure verbatim; submitting calls `onSubmit` (the panel hook owns the
- * originating-tab bookkeeping + agent.submit with target 'jira', D2). Enter submits,
- * Shift+Enter newlines, empty/whitespace starts no run (FR-003).
- */
-function PromptComposer({ onSubmit }: { onSubmit: (utterance: string) => void }): React.JSX.Element {
-  const [value, setValue] = useState('')
-  const [running, setRunning] = useState(false)
-  const [error, setError] = useState<string | null>(null)
-
-  useEffect(() => {
-    const off = window.cosmos.agent.onStatus((status: AgentStatusPayload) => {
-      switch (status.state) {
-        case 'started':
-          setRunning(true)
-          setError(null)
-          break
-        case 'completed':
-          setRunning(false)
-          break
-        case 'error':
-          setRunning(false)
-          setError(status.message ?? 'The run failed.')
-          break
-      }
-    })
-    return off
-  }, [])
-
-  const submit = (): void => {
-    if (running || value.trim().length === 0) {
-      return
-    }
-    // D2: the panel hook threads target: 'jira' so the run is granted the Jira render
-    // tool and its surface lands back in the originating tab.
-    onSubmit(value)
-    setRunning(true)
-    setError(null)
-    setValue('')
-  }
-
-  const handleSubmit = (event: FormEvent<HTMLFormElement>): void => {
-    event.preventDefault()
-    submit()
-  }
-
-  const handleKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>): void => {
-    if (event.key === 'Enter' && !event.shiftKey) {
-      event.preventDefault()
-      submit()
-    }
-  }
-
-  const canSubmit = !running && value.trim().length > 0
-
-  return (
-    <form
-      className="shrink-0 border-t border-border bg-popover px-3 py-3"
-      aria-label="Ask about your Jira issues"
-      onSubmit={handleSubmit}
-    >
-      <Textarea
-        value={value}
-        onChange={(e) => setValue(e.target.value)}
-        onKeyDown={handleKeyDown}
-        disabled={running}
-        placeholder="Ask about your Jira issues…"
-        aria-label="Ask about your Jira issues"
-        className="max-h-[9rem] min-h-[2.5rem] resize-none"
-      />
-      {error && (
-        <p
-          className="mt-2 rounded-md border border-destructive/40 bg-destructive/15 px-2.5 py-2 text-[13px] text-destructive"
-          role="alert"
-        >
-          Couldn&apos;t do that: {error}
-        </p>
-      )}
-      <div className="mt-2 flex items-center justify-between">
-        <span className="text-[11px] text-muted-foreground" role="status" aria-live="polite">
-          {running ? (
-            <span className="inline-flex items-center gap-1.5 text-primary">
-              <Loader2 className="size-3.5 animate-spin" aria-hidden="true" />
-              <span className="text-muted-foreground">Generating…</span>
-            </span>
-          ) : (
-            'Enter to send · Shift+Enter for newline'
-          )}
-        </span>
-        <Button
-          type="submit"
-          variant="default"
-          size="sm"
-          disabled={!canSubmit}
-          aria-label={running ? 'Generating' : 'Send'}
-        >
-          {running ? (
-            <>
-              <Loader2 className="size-3.5 animate-spin" aria-hidden="true" />
-              Generating…
-            </>
-          ) : (
-            'Send'
-          )}
-        </Button>
-      </div>
-    </form>
-  )
-}
 
 /**
  * Native deterministic JQL search box (jira-jql-search-v1, design §1.2). Mirrors the
@@ -250,6 +143,10 @@ export function JiraPanel({ active }: { active: boolean }): React.JSX.Element {
 
   const isConnected = status.state === 'connected'
 
+  // session-persistence-v1: the restored Jira slice. Only composed surfaces persist;
+  // the live default/search/detail views (composed:false) re-fetch on restore.
+  const restoredJiraPanel = useRestoredGenerativePanel('jira')
+
   // panel-tabs v1: Jira tabs reuse the shared correlation. cancelOnClose=false because
   // jira.* actions are dispatched deterministically by main (never the blocking render
   // call's answer), so closing a tab needs no cancel.
@@ -263,19 +160,26 @@ export function JiraPanel({ active }: { active: boolean }): React.JSX.Element {
     requestDefaultInActiveTab,
     closeTab,
     update
-  } = useGenerativePanelTabs({ target: 'jira', cancelOnClose: false })
+  } = useGenerativePanelTabs({
+    target: 'jira',
+    panelName: 'Jira',
+    cancelOnClose: false,
+    ...(restoredJiraPanel ? { initial: restoredJiraPanel } : {})
+  })
 
   // jira-ticket-detail-v1 (FR-002/FR-004/FR-005): renderer-local navigation chrome over
   // the ACTIVE tab. `view` toggles the native back row (panel chrome OUTSIDE the A2UI host);
-  // `originList` remembers which list the open detail came from so "back" re-runs the
-  // originating read (FR-005). Both are reset to the list view whenever the active tab
-  // changes so detail chrome never bleeds across tabs (FR-013 edge: detail bleed).
+  // `originList` remembers which list the open detail came from so "back" returns to it
+  // (FR-005). For a `default`/`search` origin "back" re-runs the originating read; for a
+  // `composed` origin (a detail opened on top of a pinned generated-UI surface,
+  // jira-detail-back-loses-generated-ui-v1) it carries a snapshot of that surface so
+  // "back" RESTORES the generated UI verbatim (the detail frame overwrote it). Both are
+  // reset to the list view whenever the active tab changes so detail chrome never bleeds
+  // across tabs (FR-013 edge: detail bleed).
   const [view, setView] = useState<{ kind: 'list' } | { kind: 'detail'; issueKey: string }>({
     kind: 'list'
   })
-  const originListRef = useRef<{ kind: 'default' } | { kind: 'search'; jql: string }>({
-    kind: 'default'
-  })
+  const originListRef = useRef<JiraBackOrigin>({ kind: 'default' })
 
   // jira-ticket-detail-v1: a minimum-duration skeleton floor for in-place navigation
   // (list⇄detail, JQL search). The per-tab `loadingDefault` flag already gates the
@@ -334,7 +238,12 @@ export function JiraPanel({ active }: { active: boolean }): React.JSX.Element {
       activeTab &&
       !activeTab.surface &&
       !activeTab.loadingDefault &&
-      !activeTab.error
+      !activeTab.error &&
+      // A user compose clears the tab's surface and sets `inFlight` — that empty-but-in-flight
+      // state must NOT be mistaken for a fresh tab needing the default board, or it would fire a
+      // default read (loadingDefault) that hides the send-spinner and keeps the composer's logo
+      // visible. Only auto-load the default view when the empty tab is genuinely idle.
+      !activeTab.inFlight
     ) {
       requestDefaultInActiveTab(() => window.cosmos.jira.requestDefaultView())
     }
@@ -354,28 +263,50 @@ export function JiraPanel({ active }: { active: boolean }): React.JSX.Element {
       const ctx = (action.context ?? {}) as Record<string, unknown>
       const issueKey = typeof ctx.issueKey === 'string' ? ctx.issueKey : ''
       if (issueKey.trim().length > 0) {
+        // jira-detail-back-loses-generated-ui-v1: if the active tab is showing a PINNED
+        // generated-UI (`composed`) surface, snapshot it as the back origin NOW — the
+        // detail read fires an unsolicited frame that overwrites the tab's surface, so
+        // this is the only point the generated UI can be captured for "back" to restore.
+        // A native list (default board / search results) keeps the existing read origin.
+        if (activeTab?.surface && activeTab.composed) {
+          originListRef.current = { kind: 'composed', surface: activeTab.surface }
+        }
         setView({ kind: 'detail', issueKey })
         beginNavLoad()
         requestDefaultInActiveTab(() => window.cosmos.jira.requestIssueDetail({ issueKey }))
       }
       return true
     },
-    [requestDefaultInActiveTab, beginNavLoad]
+    [requestDefaultInActiveTab, beginNavLoad, activeTab]
   )
 
-  // jira-ticket-detail-v1 (FR-004/FR-005): the native back row re-runs the originating read
-  // — the last JQL search if the detail was opened from a search, else the default view
-  // (also the fallback when no origin was captured). Then flip back to the list view.
+  // jira-ticket-detail-v1 (FR-004/FR-005) + jira-detail-back-loses-generated-ui-v1: the
+  // native back row returns to the detail's origin. The pure `backNavTarget` decides:
+  //   - restore-surface — a detail opened on a PINNED generated-UI surface: re-file the
+  //     snapshot directly into the active tab (`surface` + `composed: true`) with NO read,
+  //     NO loadingDefault/skeleton flash. Restoring `composed: true` re-applies the
+  //     `onGeneratedUi` gate so the JQL search box stays hidden on the restored UI.
+  //   - read-search — re-run the last JQL search.
+  //   - read-default — re-run the default view (also the fallback when no origin captured).
+  // Then flip back to the list view.
   const goBackToList = useCallback(() => {
-    const origin = originListRef.current
+    const target = backNavTarget(originListRef.current)
     setView({ kind: 'list' })
+    if (target.kind === 'restore-surface') {
+      const tabId = activeTabId
+      if (tabId) {
+        update(tabId, { surface: target.surface, composed: true, loadingDefault: false })
+      }
+      originListRef.current = { kind: 'default' }
+      return
+    }
     beginNavLoad()
-    if (origin.kind === 'search') {
-      requestDefaultInActiveTab(() => window.cosmos.jira.requestSearchView({ jql: origin.jql }))
+    if (target.kind === 'read-search') {
+      requestDefaultInActiveTab(() => window.cosmos.jira.requestSearchView({ jql: target.jql }))
     } else {
       requestDefaultInActiveTab(() => window.cosmos.jira.requestDefaultView())
     }
-  }, [requestDefaultInActiveTab, beginNavLoad])
+  }, [requestDefaultInActiveTab, beginNavLoad, activeTabId, update])
 
   const stripTabs: PanelTab[] = tabs.map((t) => ({
     id: t.id,
@@ -386,6 +317,23 @@ export function JiraPanel({ active }: { active: boolean }): React.JSX.Element {
     ...(t.error ? { errorMessage: t.error } : {})
   }))
   const activeStripTab = stripTabs.find((t) => t.id === activeTabId) ?? null
+
+  // The surface send-spinner gate, scoped to the ACTIVE tab (composer-send-animation-v1
+  // FR-005/FR-008). A user compose sets `inFlight` (not `loadingDefault`), so it shows the
+  // spinner; a default/nav read sets `loadingDefault` (excluded here) and routes to the
+  // `DefaultViewSkeleton` branch first, so the two never co-render (design §4.1).
+  const showSpinner = !!activeTab &&
+    surfaceSpinnerVisible({
+      inFlight: activeTab.inFlight,
+      hasSurface: activeTab.surface != null,
+      hasError: activeTab.error != null,
+      loadingDefault: activeTab.loadingDefault
+    })
+
+  // True when the active tab is showing a COMPOSED (generated-UI) surface rather than a
+  // native ticket view (default board / search results / detail). The JQL search box is
+  // ticket-browsing chrome, so it is hidden on generated surfaces but kept otherwise.
+  const onGeneratedUi = !!(activeTab?.surface && activeTab.composed)
 
   // Tab keyboard shortcuts act on THIS strip only while the Jira surface is active.
   useTabShortcuts({ active, tabs, activeTabId, onActivate: setActive, onNewTab: newTab, onCloseTab: closeTab })
@@ -408,8 +356,12 @@ export function JiraPanel({ active }: { active: boolean }): React.JSX.Element {
         ariaLabel="Jira tabs"
       />
 
-      {/* Connection-only chrome: the JQL search row + back row only make sense connected. */}
-      {isConnected && (
+      {/* Connection-only chrome: the JQL search row + back row only make sense connected.
+          Hidden while a compose send-spinner is up so the panel blanks to JUST the spinner
+          (parity with Slack/Confluence), reappearing when the generated surface lands. The
+          search row belongs ONLY to the list view (default board / search results); the detail
+          view shows its own "← Back to list" row instead (the two are mutually exclusive). */}
+      {isConnected && !showSpinner && !onGeneratedUi && view.kind === 'list' && (
         <JqlSearchBox
           onSubmit={(jql) => {
             // jira-ticket-detail-v1 (FR-005): a search submit makes the active list a SEARCH
@@ -423,7 +375,7 @@ export function JiraPanel({ active }: { active: boolean }): React.JSX.Element {
         />
       )}
 
-      {isConnected && view.kind === 'detail' && (
+      {isConnected && !showSpinner && view.kind === 'detail' && (
         <div className="flex items-center gap-1.5 border-b border-border px-2 py-1.5">
           <Button
             type="button"
@@ -470,6 +422,10 @@ export function JiraPanel({ active }: { active: boolean }): React.JSX.Element {
               <DefaultViewSkeleton />
             ) : (
               <>
+                {/* Surface send-spinner: busy state while a submitted compose is in flight,
+                    until its surface lands (composer-send-animation-v1 FR-005/FR-006). The
+                    skeleton branch above already handled loadingDefault/navLoading. */}
+                {showSpinner && <SurfaceSpinner />}
                 {activeTab?.error && (
                   <p
                     className="rounded-md border border-destructive/40 bg-destructive/15 px-2.5 py-2 text-[13px] text-destructive"
@@ -498,7 +454,14 @@ export function JiraPanel({ active }: { active: boolean }): React.JSX.Element {
       </div>
 
       {/* Composer docks above the footer, only when there is something to ask about. */}
-      {isConnected && <PromptComposer onSubmit={submit} />}
+      {isConnected && (
+        <PromptComposer
+          onSubmit={submit}
+          placeholder="Ask about your Jira issues…"
+          ariaLabel="Ask about your Jira issues"
+          busy={showSpinner}
+        />
+      )}
 
       {/* Connection bar is the panel footer (Terminal-unified layout). */}
       <PanelFooter

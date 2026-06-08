@@ -1,105 +1,78 @@
 ---
 name: wrap-up
-description: "Final step of a work iteration. Propagates corrections and learnings that emerged during the iteration into the project's living documents — CLAUDE.md, docs/, Claude agent files, and Claude skill files — and reconciles the root TODO.md. Accepts the target documents to update as parameters."
-argument-hint: "[targets] — space/comma-separated docs or globs to update (e.g. \"CLAUDE.md docs/ARCHITECTURE.md\"), category keywords (claude-md | docs | agents | skills), or \"auto\" to scan all four categories"
+description: "Final step of work iteration. Propagate corrections + learnings from iteration into project living docs — CLAUDE.md, docs/, Claude agent files, Claude skill files — and reconcile root TODO.md. Target docs passed as params."
+argument-hint: "[targets] — space/comma-separated docs or globs (e.g. \"CLAUDE.md docs/ARCHITECTURE.md\"), category keywords (claude-md | docs | agents | skills), or \"auto\" to scan all four"
 ---
 
-You are running the **wrap-up** step at the end of a work iteration. Your job is to take
-the corrections, decisions, and learnings that emerged **during this iteration** and
-reflect them into the project's living documents so future sessions inherit them.
+Running **wrap-up** at end of work iteration. Job: take corrections, decisions, learnings from **this iteration** and reflect into project living docs so future sessions inherit them.
 
-This is not a generic "update the docs" pass. Only propagate things that actually changed
-or were learned in this iteration. Do not invent content, and do not restate what the
-documents already say.
+Not generic "update docs" pass. Only propagate what changed or got learned this iteration. No inventing content, no restating what docs already say.
 
 ## Input — Target Documents
 
-The documents to update are provided as arguments: `$ARGUMENTS`
+Docs to update passed as args: `$ARGUMENTS`
 
-Interpret the arguments as follows:
+Interpret args:
 - **Explicit paths or globs** (e.g. `CLAUDE.md`, `docs/ARCHITECTURE.md`, `docs/**`) — update exactly those.
-- **Category keywords** — expand to the matching set:
+- **Category keywords** — expand to matching set:
   - `claude-md` → `CLAUDE.md` and any nested `**/CLAUDE.md`
   - `docs` → files under `docs/`
   - `agents` → Claude agent files under `.claude/agents/**/*.md`
   - `skills` → Claude skill files under `.claude/skills/**/SKILL.md`
-- **`auto`** or **no arguments** — consider all four categories: CLAUDE.md, docs/, agents, skills.
+- **`auto`** or **no args** — consider all four categories: CLAUDE.md, docs/, agents, skills.
 
-If a requested target does not exist and the learning clearly belongs there, create it.
-Otherwise, skip silently rather than forcing an update.
+Requested target missing but learning clearly belongs there → create it. Else skip silently, no forced update.
 
 ## Step 1 — Collect corrections from the iteration
 
-Review the current iteration (this conversation and the changes made in it) and gather
-**durable, generalizable** items worth recording. Look for:
-- User corrections to your approach ("no, do it this way", "stop doing X")
-- Decisions made and the reasoning behind them
-- New conventions, patterns, or constraints that were established
-- Deviations from the original plan and why
-- Gotchas, pitfalls, or non-obvious facts discovered while working
-- New or renamed components, commands, agents, or skills
+Review current iteration (this conversation + changes in it). Gather **durable, generalizable** items worth recording. Look for:
+- User corrections to approach ("no, do it this way", "stop doing X")
+- Decisions made + reasoning behind them
+- New conventions, patterns, constraints established
+- Deviations from original plan + why
+- Gotchas, pitfalls, non-obvious facts found while working
+- New or renamed components, commands, agents, skills
 
-Exclude ephemeral task detail (in-progress state, one-off debugging, transient context).
-If nothing durable emerged, say so and stop — do not pad the documents.
+Exclude ephemeral task detail (in-progress state, one-off debugging, transient context). Nothing durable emerged → say so and stop. No padding docs.
 
 ## Step 2 — Map each learning to a target
 
-For every collected item, decide which target document it belongs in:
-- **CLAUDE.md** — project-wide conventions, build/test/run commands, repository rules,
-  gotchas that any contributor (human or agent) must know.
-- **docs/** — architecture, design decisions, component responsibilities, data flows.
-  Keep these in sync with what was actually built this iteration.
-- **Claude agent files** (`.claude/agents/**`) — adjustments to an agent's role,
-  scope, or instructions revealed by how it was actually used.
-- **Claude skill files** (`.claude/skills/**/SKILL.md`) — corrections to a skill's
-  steps, parameters, or guidance that this iteration proved necessary.
+For each item, decide target doc:
+- **CLAUDE.md** — project-wide conventions, build/test/run commands, repo rules, gotchas any contributor (human or agent) must know.
+- **docs/** — architecture, design decisions, component responsibilities, data flows. Keep synced with what got built this iteration.
+- **Claude agent files** (`.claude/agents/**`) — adjustments to agent role, scope, instructions revealed by actual use.
+- **Claude skill files** (`.claude/skills/**/SKILL.md`) — corrections to skill steps, params, guidance this iteration proved necessary.
 
-A single learning may map to more than one target. Avoid duplicating the same content
-across documents — put it where it is most authoritative and reference rather than repeat.
+Single learning may map to >1 target. Avoid duplicating same content across docs — put where most authoritative, reference rather than repeat.
 
 ## Step 3 — Apply the updates
 
-For each target document:
-1. Read the current content first.
-2. Make the minimal edit that records the learning — integrate it into the existing
-   structure rather than appending a changelog dump.
-3. Keep the document's existing tone and format.
-4. Match the repository's style; do not add commentary about this iteration ("added for
-   the cosmos work", "per the session on …") — write the durable fact only.
+Per target doc:
+1. Read current content first.
+2. Make minimal edit recording learning — integrate into existing structure, no changelog dump.
+3. Keep doc's existing tone + format.
+4. Match repo style; no commentary about this iteration ("added for the cosmos work", "per the session on …") — write durable fact only.
 
 ## Step 3.5 — Persist durable learnings to agentmemory
 
-In addition to the document edits, save the durable, cross-session learnings from Step 1 into
-**agentmemory** (the canonical memory consulted at the start of every sdd cycle — see the sdd
-skill's Step 0). For each generalizable item, call `memory_save` (agentmemory MCP) with the
-appropriate `type` (`preference`, `pattern`, `architecture`, `bug`, `workflow`, or `fact`),
-a concise `content` statement, and the relevant `concepts`/`files`. Save only durable items —
-the same exclusion of ephemeral task detail from Step 1 applies. This is what makes a learning
-available to future cycles even when it does not belong in any tracked document.
+Plus doc edits, save durable cross-session learnings from Step 1 into **agentmemory** (canonical memory consulted at start of every sdd cycle — see sdd skill Step 0). Per generalizable item, call `memory_save` (agentmemory MCP) with right `type` (`preference`, `pattern`, `architecture`, `bug`, `workflow`, or `fact`), concise `content` statement, relevant `concepts`/`files`. Save only durable items — same Step 1 ephemeral exclusion applies. This makes learning available to future cycles even when it belongs in no tracked document.
 
 ## Step 4 — Reconcile TODO.md
 
-Always update the project's root `TODO.md` to reflect where the work now stands —
-**regardless of the `$ARGUMENTS` targets**, since this is progress tracking, not learning
-propagation. (If `TODO.md` does not exist, create it with `In progress` / `Next` /
-`Deferred / future` / `Done` sections.)
+Always update root `TODO.md` to reflect where work stands — **regardless of `$ARGUMENTS` targets**, since this is progress tracking, not learning propagation. (No `TODO.md` → create with `In progress` / `Next` / `Deferred / future` / `Done` sections.)
 
 1. Read `TODO.md`.
-2. Check off (`[ ]` → `[x]`) every item this iteration actually completed; move finished
-   top-level items into the `Done` section.
-3. Add any new outstanding work this iteration surfaced (follow-ups, deferred decisions,
-   newly discovered tasks) under the appropriate section.
-4. Keep it a concise checklist — do not paste design detail that belongs in
-   `docs/ARCHITECTURE.md`; link to it instead. Do not duplicate the sdd plan's internal
-   checklist verbatim; track milestone-level progress only.
+2. Check off (`[ ]` → `[x]`) every item this iteration completed; move finished top-level items into `Done`.
+3. Add new outstanding work surfaced this iteration (follow-ups, deferred decisions, newly discovered tasks) under right section.
+4. Keep concise checklist — no design detail that belongs in `docs/ARCHITECTURE.md`; link instead. No duplicating sdd plan's internal checklist verbatim; track milestone-level progress only.
 
 ## Step 5 — Report
 
-Summarize concisely:
-- Which documents were updated and the one-line reason for each.
-- Which learnings were saved to agentmemory (type + one-line content).
+Summarize concise:
+- Which docs updated + one-line reason each.
+- Which learnings saved to agentmemory (type + one-line content).
 - How `TODO.md` changed (items checked off, items added).
-- Any learning you deliberately did NOT record, and why (e.g. too ephemeral).
-- Any target that was requested but skipped (and why).
+- Any learning deliberately NOT recorded + why (e.g. too ephemeral).
+- Any target requested but skipped + why.
 
-Do not commit changes unless the user explicitly asks.
+No committing changes unless user explicitly asks.

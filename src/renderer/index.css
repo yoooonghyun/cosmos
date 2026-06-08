@@ -43,6 +43,13 @@
   --color-status-progress-foreground: var(--status-progress-foreground);
   --color-status-done: var(--status-done);
   --color-status-done-foreground: var(--status-done-foreground);
+
+  /* cosmos brand identity tokens — single source of truth for the pastel
+     pink→purple gradient used in the logo mark and brand-styled controls.
+     Surfaces MUST reference these vars; no raw hex outside this block. */
+  --color-brand-pink: var(--brand-pink);
+  --color-brand-purple: var(--brand-purple);
+  --color-brand-foreground: var(--brand-foreground);
 }
 
 :root {
@@ -75,6 +82,12 @@
   --status-progress-foreground: #1e497a;
   --status-done: #dcf5e6;
   --status-done-foreground: #1d6b3f;
+
+  /* cosmos brand identity — light fallback (same pastel values; gradient is
+     brand-fixed and does not invert in light mode). */
+  --brand-pink: #f9a8d4;
+  --brand-purple: #d8b4fe;
+  --brand-foreground: #2e1065;
 }
 
 .dark {
@@ -107,6 +120,14 @@
   --status-progress-foreground: #9dc7ff;
   --status-done: #1f3d2b;
   --status-done-foreground: #7fd6a0;
+
+  /* cosmos brand identity — dark values (brand pastel gradient is intentionally
+     the SAME in dark mode; the light pastels are the brand identity and read
+     well on the dark popover surface). The on-pastel foreground stays dark violet
+     regardless of theme because it sits on the pastel gradient, not the dark bg. */
+  --brand-pink: #f9a8d4;
+  --brand-purple: #d8b4fe;
+  --brand-foreground: #2e1065;
 }
 
 @layer base {
@@ -115,6 +136,69 @@
   }
   body {
     @apply bg-background text-foreground;
+  }
+}
+
+/*
+ * CosmosSpinner animation (composer-send-animation-v1, design §5.2). The surface
+ * send-spinner's three groups: the 4-point star slowly orbits while two sub-sparkles
+ * pulse. Values copied verbatim from `assets/images/cosmos-spinner.svg`'s inline
+ * `<style>` (which `CosmosSpinner.tsx` drops in favor of these de-duplicated, uniquely
+ * named, reduced-motion-gateable rules).
+ *
+ * These are PLAIN UNLAYERED CSS (not inside `@layer`) on purpose: Tailwind v4 emits its
+ * utilities into `@layer utilities`, and an unlayered rule beats a layered one regardless
+ * of specificity (DEVELOPMENT.md "Tailwind v4 utilities lose to unlayered plain CSS"). So
+ * these `animation` rules always apply to the spinner's groups.
+ *
+ * The `animation` declarations are gated behind `prefers-reduced-motion: no-preference`,
+ * so under reduced motion the groups render static at their authored base
+ * transform/opacity — the orbit star fully opaque (legible), the sub-sparkles at their
+ * reduced base. The owning `SurfaceSpinner`'s "Generating…" label + `aria-busy` carry the
+ * busy meaning when motion is off (design §2).
+ */
+@keyframes cosmos-spinner-orbit {
+  to {
+    transform: rotate(360deg);
+  }
+}
+@keyframes cosmos-spinner-pulse-a {
+  0%,
+  100% {
+    opacity: 0.2;
+    transform: scale(0.45);
+  }
+  50% {
+    opacity: 1;
+    transform: scale(1.2);
+  }
+}
+@keyframes cosmos-spinner-pulse-b {
+  0%,
+  100% {
+    opacity: 0.25;
+    transform: scale(0.5);
+  }
+  45% {
+    opacity: 1;
+    transform: scale(1.3);
+  }
+}
+.cosmos-spinner-orbit,
+.cosmos-spinner-sparkA,
+.cosmos-spinner-sparkB {
+  transform-box: fill-box;
+  transform-origin: center;
+}
+@media (prefers-reduced-motion: no-preference) {
+  .cosmos-spinner-orbit {
+    animation: cosmos-spinner-orbit 4s linear infinite;
+  }
+  .cosmos-spinner-sparkA {
+    animation: cosmos-spinner-pulse-a 1.5s ease-in-out infinite;
+  }
+  .cosmos-spinner-sparkB {
+    animation: cosmos-spinner-pulse-b 2.1s ease-in-out infinite 0.5s;
   }
 }
 

@@ -10,6 +10,26 @@ _None._
 
 ## Next
 
+- [ ] Manual GUI verification of **composer send animation v1** + **unified tab naming** via
+  `npm run dev` (renderer-only, HMR is enough — but the StrictMode counter behavior only manifests in
+  dev): in all four generative panels a successful Send grows-and-vanishes the composer (`scale-[2.6]`
+  launch, not the old shrink-to-logo), the panel blanks to JUST the surface spinner, and the
+  cosmos-logo button stays hidden until the generated surface lands (reappears on land/error);
+  Esc/click-outside still does the gentle dismiss; Jira's JQL search box disappears on a generated-UI
+  surface but stays for the default board / search results. Tab naming: each panel's FIRST tab reads
+  the bare panel name (`Terminal`, `Generated UI`, `Jira`, `Slack`, `Confluence`), the next `+` reads
+  `<Panel> 2` then `<Panel> 3` (no skip, no renumber on close); a generative compose relabels its tab
+  from the utterance. Logic locked by `panelTabs.test.ts` + `promptComposerLogic.test.ts`; live launch
+  not exercised by the agent (Electron window, not browser-automatable).
+
+- [ ] Manual GUI verification of **collapsible prompt composer v1** via `npm run dev` (renderer-only,
+  HMR is enough): in all four generative panels (under their composer-visible condition) the default is
+  a single bottom-center cosmos-logo button and no textarea; clicking it morphs/expands into a centered
+  `max-w-2xl` composer with focus in the textarea; Enter submits + auto-collapses, Shift+Enter newlines,
+  empty submit is a no-op; Esc and click-outside collapse without a run and return focus to the logo;
+  the draft is preserved across dismiss and cleared only on a successful submit; run/error status still
+  shows via the tab strip + footer glyphs after auto-collapse; the open/close animation plays both ways.
+
 - [ ] Manual GUI verification of **Jira ticket detail on click v1** via `npm run dev` (**requires a
   full restart, not HMR — preload changed**: new `jira:requestIssueDetail` channel): clicking a ticket
   card opens that ticket's detail in place in the active tab; the card shows a hover/focus affordance
@@ -18,7 +38,9 @@ _None._
   search if that's where it was opened from); a failed `getIssue` shows a recoverable Notice; a
   reconnect-needed routes to native Connect/Reconnect; clicking a ticket WHILE an NL compose is
   awaiting a frame defers correctly; a transition/comment on the opened detail still re-pushes a detail
-  and the back row remains.
+  and the back row remains. **Plus (bug `jira-detail-back-loses-generated-ui-v1`):** compose a generated
+  UI, click a ticket card in it, press Back → the GENERATED UI is restored (not the default board /
+  search list), no skeleton flash, and the JQL search box stays hidden.
 
 - [ ] Manual GUI verification of **Jira JQL search box v1** via `npm run dev` (**requires a full
   restart, not HMR — preload changed**: new `jira:requestSearchView` channel): the box placeholder
@@ -55,9 +77,10 @@ _None._
 
 - [ ] Manual GUI verification of **terminal tab numbering** (bug `terminal-tab-index-skip-v1`) via
   `npm run dev` (renderer-only, HMR — but the StrictMode double-invoke only manifests in dev): seed
-  tab reads "Terminal 1", first `+` → "Terminal 2" (NOT "Terminal 3"), next `+` → "Terminal 3"; close
-  a middle terminal and the counter still climbs monotonically (no renumber). Logic is locked by the
-  idempotence cases in `panelTabs.test.ts`; the live dev launch was not exercised by the agent.
+  tab reads "Terminal" (unified naming), first `+` → "Terminal 2" (NOT "Terminal 3"), next `+` →
+  "Terminal 3"; close a middle terminal and the counter still climbs monotonically (no renumber).
+  Logic is locked by the idempotence cases in `panelTabs.test.ts`; the live dev launch was not
+  exercised by the agent. (Folds into the unified-tab-naming verification above.)
 - [ ] Manual GUI verification of **per-tab native-base nav** (bug `panel-shared-tab-nav-state-v1`) via
   `npm run dev` (renderer-only, HMR — OAuth-gated): with Slack/Confluence connected, drill into a
   channel/page/search in one tab, open a `+` tab → the new tab shows its own fresh base (channel list /
@@ -107,6 +130,68 @@ _None._
 
 ## Done
 
+- [x] **Jira back-nav loses pinned generated UI** (bug `jira-detail-back-loses-generated-ui-v1`) — Back
+  from a ticket detail opened on top of a PINNED generated-UI (`composed`) surface returned to the
+  default board / last search instead of restoring the generated UI. Cause: the unsolicited detail
+  frame OVERWRITES the active tab's surface (flips `composed`→`false`) and the back-nav origin had no
+  `composed` variant, so the generated UI could not be recovered. Fixed renderer-only with a pure
+  helper `src/renderer/jiraBackNav.ts` (`JiraBackOrigin` adds a `composed` variant carrying a
+  `TabSurface` snapshot; `backNavTarget` → `restore-surface`/`read-search`/`read-default`, malformed
+  composed safe-falls-back, never throws); `JiraPanel.tsx` snapshots the surface AT detail-open time in
+  `handleSurfaceAction` and `goBackToList` restores it verbatim via `update(tab,{surface,composed:true,
+  loadingDefault:false})` (no read, no skeleton). 698 tests green (new `jiraBackNav.test.ts`), typecheck
+  clean. Bug report `.sdd/bugs/jira-detail-back-loses-generated-ui-v1.md`; `docs/ARCHITECTURE.md` §4.9
+  back-row gotcha added. GUI verification pending.
+- [x] **Composer send animation v1** (`composer-send-animation-v1`) — Send now animates the shared
+  composer GROWING to fill and fading out (`launching` flag → `scale-[2.6]`,
+  `transition-[opacity,scale,filter]`) instead of shrinking into the logo; Esc/click-outside stays a
+  gentle `scale-95` dismiss. During a run the composer takes a `busy` prop (= the panel's surface-
+  spinner gate) that hides BOTH composer states INCLUDING the cosmos-logo button — the logo reappears
+  only when the run's surface lands/errors (supersedes the spec's "re-open mid-run"). New
+  `SurfaceSpinner`/`CosmosSpinner` render in the active tab's content region, gated by
+  `surfaceSpinnerVisible` (`inFlight && !surface && !error && !loadingDefault`); submit sets
+  `surface:null` so the panel blanks to just the spinner. Added a per-tab `composed` flag so Jira
+  hides its JQL search box on generated surfaces but keeps it for ticket browsing; Jira's default-load
+  effect gained an `!inFlight` guard. Renderer-only, no contract change; typecheck clean, 693 tests
+  green. Spec/plan/design at `.sdd/{specs,plans,designs}/composer-send-animation-v1.md`;
+  `docs/ARCHITECTURE.md` §4 composer + originating-tab sections updated. GUI verification pending.
+- [x] **Unified seed-tab naming** — one convention across every rail panel via
+  `panelTabLabel(panelName, index)`: the bare panel name for the first tab, then `<Panel> N`
+  (`Terminal`/`Terminal 2`; `Jira`/`Jira 2`; etc.). `terminalLabel` delegates to it; the generative
+  hook mints labels from a per-panel monotonic `everOpened` counter (no renumber on close, advanced
+  off render-phase so StrictMode can't double-count). Replaced the old `Untitled` placeholder + the
+  `Terminal 1` first-tab label. `docs/ARCHITECTURE.md` originating-tab section updated; 693 tests green.
+- [x] **Sidebar selected-panel highlight** (`sidebar-selected-panel-highlight-v1`) — the active item
+  in the left icon rail (`App.tsx`) now reads as clearly selected via three redundant cues: a
+  `--secondary` (`#3a3a3c`) filled pill behind the icon, the icon at full `--foreground` brightness,
+  and a 3px full-height `--primary` left bar. ROOT CAUSE of the long-running "highlight never shows"
+  failure (no CSS/`!important` attempt worked): each `TabsTrigger` is wrapped by `TooltipTrigger
+  asChild`, and the Tooltip's `data-state` is spread AFTER the Tabs `data-state` onto the same
+  `<button>`, so its `data-state` is never `"active"` — every `data-[state=active]:*` class was dead.
+  Fixed by driving the highlight from React state (`isActive = surface === id`) and applying the cues
+  conditionally; `bg-secondary!`/`text-foreground!` keep the trailing-`!` to beat the line variant's
+  `bg-transparent` and the `dark:text-muted-foreground` idle color. Uses existing theme tokens (no new
+  token, no inline hex). Renderer-only, no contract change; typecheck clean; GUI-verified by the user.
+  Corrected spec FR-008's wrong assumption. Spec/plan/design at
+  `.sdd/{specs,plans,designs}/sidebar-selected-panel-highlight-v1.md`; gotcha in `docs/DEVELOPMENT.md`
+  (Styling "Nested Radix triggers"), `docs/ARCHITECTURE.md` §3.
+- [x] **Collapsible prompt composer v1** (`collapsible-prompt-composer-v1`) — replaced the always-on,
+  full-width composer in all four generative panels (Generated UI · Jira · Slack · Confluence) with ONE
+  shared `src/renderer/PromptComposer.tsx` that defaults COLLAPSED to a bottom-center cosmos-logo button
+  (`CosmosMark`, pastel pink→purple) and EXPANDS to a centered `max-w-2xl` overlay card (zero-height
+  in-flow slot + `absolute bottom-0`, transparent `pointer-events-none` surround so tickets behind stay
+  visible; card itself opaque `bg-popover`). Open-only logo; collapses on submit / Esc / click-outside;
+  draft preserved until a successful submit; mid-run collapse allowed (status persists via tab-strip +
+  footer glyphs, OQ-1). Both states stay mounted + cross-fade via `expanded` (hidden one `inert` +
+  `pointer-events-none` + `tabIndex=-1`) so the 400ms `cubic-bezier(0.16,1,0.3,1)` morph fires both
+  ways: the COMPOSER carries the size motion (scales from `scale-[0.08]` at `origin-bottom` = the
+  button's point), the LOGO only opacity-fades with a `delay-150` collapse stagger. Pure logic in
+  `promptComposerLogic.ts` (21 node tests). Added a reusable `cosmos` Button variant + single-sourced
+  brand tokens `--brand-pink`/`--brand-purple`/`--brand-foreground` (index.css), consumed by the
+  variant and `CosmosMark`. Renderer-only, no contract change. 682 tests green, typecheck clean.
+  Hit + recorded a Tailwind-v4 gotcha (`scale-*` is the standalone `scale:` prop, not `transform`).
+  Spec/plan/design at `.sdd/{specs,plans,designs}/collapsible-prompt-composer-v1.md`; see
+  `docs/ARCHITECTURE.md` §3 (renderer) + `docs/DEVELOPMENT.md` Styling. GUI verification pending.
 - [x] **Terminal tab index skip** (bug `terminal-tab-index-skip-v1`) — the Terminal panel's first `+`
   tab opened as "Terminal 3" instead of "Terminal 2". NOT the user's hypothesized background gen-UI
   terminal (the Generated UI surface is a headless `AgentRunner`, not a PTY — nothing consumes an
