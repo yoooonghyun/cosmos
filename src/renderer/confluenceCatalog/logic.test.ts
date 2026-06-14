@@ -2,7 +2,9 @@ import { describe, it, expect } from 'vitest'
 import {
   boundRows,
   countLabel,
+  CONFLUENCE_OPEN_DETAIL_ACTION,
   hasReadableBody,
+  isOpenDetailEmittable,
   showEmptyState,
   showErrorNotice
 } from './logic'
@@ -32,6 +34,33 @@ describe('hasReadableBody (PageDetail empty-body fallback — design §3.3)', ()
 
   it('is false for an absent body (missing optional, safe fallback, never throws)', () => {
     expect(hasReadableBody(undefined)).toBe(false)
+  })
+})
+
+/* confluence-page-detail-nav-v1 — click-to-open page detail (FR-001/FR-002/FR-003). */
+
+describe('CONFLUENCE_OPEN_DETAIL_ACTION (renderer-local nav signal, FR-003)', () => {
+  it('is a NON-confluence.* name so onAction intercepts it renderer-locally (never forwarded)', () => {
+    // The ConfluencePanel onAction seam handles it + returns true; a confluence.*-prefixed
+    // name would forward to main/the agent. Guard it stays renderer-local.
+    expect(CONFLUENCE_OPEN_DETAIL_ACTION).toBe('confluenceNav.openDetail')
+    expect(CONFLUENCE_OPEN_DETAIL_ACTION.startsWith('confluence.')).toBe(false)
+  })
+})
+
+describe('isOpenDetailEmittable (id-gated clickable row, FR-001/FR-002)', () => {
+  it('is true for a non-empty page id (the row is clickable)', () => {
+    expect(isOpenDetailEmittable('P1')).toBe(true)
+  })
+
+  it('is false for an absent id (missing optional → inert row, no action, no throw)', () => {
+    expect(isOpenDetailEmittable(undefined)).toBe(false)
+  })
+
+  it('is false for an empty/whitespace id (inert row)', () => {
+    expect(isOpenDetailEmittable('')).toBe(false)
+    expect(isOpenDetailEmittable('   ')).toBe(false)
+    expect(isOpenDetailEmittable('\t\n')).toBe(false)
   })
 })
 

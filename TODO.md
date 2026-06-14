@@ -16,12 +16,17 @@ For the authoritative design see `docs/ARCHITECTURE.md`.
 
 ## Next
 
-- [ ] **Confluence generated-UI list → page detail on click** (`/sdd`, requested 2026-06-14): clicking
-  a document row in a Confluence gen-UI list opens that page's detail in place (the Jira ticket-detail
-  precedent: a renderer-local nav action → `confluence:requestPageDetail` → `getPage` →
-  unsolicited `target:'confluence'` frame into the active tab + a "← Back" row restoring the list).
 - [ ] **Loading skeleton UI** (requested 2026-06-14): show a skeleton placeholder while a surface /
   list is loading (in place of blank/spinner-only), across the generative panels.
+- [ ] Manual GUI verification of **Confluence page detail on click v1** (`confluence-page-detail-nav-v1`,
+  NATIVE-REUSE approach — renderer-only, HMR is enough, NO preload restart): in a generated Confluence
+  list, clicking an id-bearing document row opens that page's detail in place via the EXISTING native
+  `PageDetail` component (title / space / body), with hover/focus affordance, while a no-id row is inert
+  (no cursor/hover/wrapping button); a native "← Back" row clears the overlay and restores the generated
+  list verbatim (live A2UI host underneath, no re-fetch); an empty body shows the calm muted line (not an
+  error); a `getPage` failure shows `PageDetail`'s recoverable error; reconnect-needed routes to native
+  Connect/Reconnect; switching tabs clears an open detail. Logic locked by `confluenceCatalog/logic.test.ts`;
+  the click-to-open / back overlay flow was NOT live-exercised (Electron window, not browser-automatable).
 
 - [ ] **Wire a descriptor-emitting compose path for the generative adapter** (the seam flagged by all
   three adapter cycles): the bound builders / resolvers / catalogs are built + unit-tested, but no live
@@ -172,6 +177,27 @@ For the authoritative design see `docs/ARCHITECTURE.md`.
 
 ## Done
 
+- [x] **Confluence generated-UI list → page detail on click** (`confluence-page-detail-nav-v1`, `/sdd`,
+  requested 2026-06-14) — clicking an id-bearing document row in a Confluence gen-UI list opens that
+  page's detail in place. **DESIGN PIVOT (user-directed):** the originally-specced surface-push design
+  (new `confluence:requestPageDetail` IPC channel + main `getPage` compose + `buildPageDetailSurface` +
+  unsolicited `target:'confluence'` frame + `confluenceBackNav.ts`, mirroring Jira) was rejected as
+  overengineered — *"왜 gen ui를 그리는거지? 그냥 confluence list component 재활용했으면…"*. SHIPPED
+  approach REUSES the EXISTING native `PageDetail` component: an id-gated `SearchResultRow` becomes a
+  clickable `<button>` (dispatch in container `SearchResultList`, carries `{pageId,title}`) emitting a
+  renderer-local nav action `CONFLUENCE_OPEN_DETAIL_ACTION='confluenceNav.openDetail'` that
+  `ConfluencePanel.handleSurfaceAction` intercepts via `ActiveTabSurface` `onAction` (returns `true`,
+  never forwarded); no-id rows stay inert. The intercept sets renderer-local overlay state
+  `genUiPage={pageId,title}` → panel renders a native `ChevronLeft` back row + the existing `PageDetail`
+  keyed on `pageId` (which reads `window.cosmos.confluence.getPage` DIRECTLY in the renderer — its own
+  loading/empty-body/error/reconnect states apply). Back clears `genUiPage` (generated list restored
+  verbatim, live A2UI host underneath); `useEffect` resets it on `activeTabId` change. **NO main / preload
+  / IPC / shared / surface-builder changes** (the originally-touched files reverted to HEAD; net-new
+  `confluenceBackNav.ts`/`.test.ts` removed). Read-only, no new scope, no token on any payload/surface.
+  Files: `confluenceCatalog/{logic,components}.tsx?`, `ConfluencePanel.tsx`. typecheck + build clean, 990
+  tests green (`confluenceCatalog/logic.test.ts`). Spec "As Built" + obsolete plan/design notes at
+  `.sdd/{specs,plans,designs}/confluence-page-detail-nav-v1.md`. **GUI verification pending** (renderer-only,
+  HMR is enough — NO preload restart needed).
 - [x] **Jira refreshable detail-nav crash + empty board** (bug
   `jira-refreshable-detail-nav-crash-and-empty-v1`) — two defects on the now-refreshable Jira
   generated UI (kanban). **A (main crash):** `UiBridge.settle` null-deref — the bindings branch's

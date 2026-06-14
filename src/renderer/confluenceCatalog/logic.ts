@@ -9,6 +9,29 @@ export function countLabel(count: number, singular: string, plural: string): str
   return `${count} ${count === 1 ? singular : plural}`
 }
 
+/* ------------------------------------------------------------------------- *
+ * Click-to-open page detail (confluence-page-detail-nav-v1, FR-001/FR-002/FR-003)
+ * ------------------------------------------------------------------------- */
+
+/**
+ * The renderer-local nav action a clicked `SearchResultRow` emits to open its page's
+ * detail in place (FR-003). Deliberately NOT a `confluence.*`-prefixed name — it is a
+ * navigation signal the `ConfluencePanel` `onAction` seam intercepts and handles
+ * renderer-locally (returns `true`), NEVER forwarded to main or the agent. Mirrors the
+ * Jira `jiraNav.openDetail` / Slack open-channel seam. The `logic.test.ts` guards that it
+ * stays non-`confluence.*`.
+ */
+export const CONFLUENCE_OPEN_DETAIL_ACTION = 'confluenceNav.openDetail'
+
+/**
+ * Whether a `SearchResultRow`'s `id` is a real page id worth emitting an open-detail
+ * action for (FR-001/FR-002). True only for a non-empty, non-whitespace string id; a row
+ * with no/empty id is INERT (no button, no action). Total — never throws.
+ */
+export function isOpenDetailEmittable(id: string | undefined): boolean {
+  return typeof id === 'string' && id.trim() !== ''
+}
+
 /**
  * Whether a page body has readable content. A blank/whitespace-only body shows the
  * "no readable body" empty line (design §3.3) — total, never throws.

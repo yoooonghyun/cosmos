@@ -479,8 +479,25 @@ serving **both** surfaces:
   or favourite = currentUser()) and type = page order by lastmodified desc`, the closest 3LO-reachable
   approximation of the user's notification/bell feed (Confluence Cloud exposes NO OAuth-3LO
   notifications API or scope). It reuses the same `ContentList` component, `ConfluenceResult<…>` shape,
-  and opaque-cursor pagination as search; typing a query swaps it for the search read. **The
-  Confluence generative panel stays read-only** (no write control/dispatcher, and the page-create
+  and opaque-cursor pagination as search; typing a query swaps it for the search read. **Clicking a
+  document row in a generated-UI list opens that page's detail in place** (`confluence-page-detail-nav-v1`).
+  This deliberately REUSES the existing native `PageDetail` browser component rather than composing a
+  main-side generative detail surface (the user rejected the Jira-style surface-push design as
+  overengineered): an id-bearing `SearchResultRow` becomes a clickable `<button>` (dispatch in the
+  container `SearchResultList`, carrying `{ pageId, title }`) emitting a renderer-local nav action
+  (`CONFLUENCE_OPEN_DETAIL_ACTION = 'confluenceNav.openDetail'`, non-`confluence.*`) the panel intercepts
+  via the `ActiveTabSurface` `onAction` seam — returns `true`, never forwarded to main / the agent; a
+  no-id row stays inert (no cursor/hover/wrapping button). The intercept (`handleSurfaceAction`) sets
+  renderer-local overlay state `genUiPage = { pageId, title }`, which makes the panel render a native
+  `ChevronLeft` **back row** plus the EXISTING native `PageDetail` component keyed on `pageId`.
+  `PageDetail` reads `window.cosmos.confluence.getPage({ pageId })` DIRECTLY in the renderer (the same
+  read the native base browser uses) — its existing loading / empty-body / error / reconnect states apply
+  unchanged, so there is **no new IPC channel, no main handler, no surface builder, and no fire-or-defer
+  correlation**. The back row clears `genUiPage`, returning the tab to the generated list it overlaid
+  (the list is the live A2UI host underneath, restored verbatim with no re-fetch); a `useEffect` keyed on
+  `activeTabId` resets `genUiPage` on tab switch so an open detail never bleeds across tabs. Read-only —
+  no new OAuth scope, no token on payload/surface. **The Confluence generative panel stays read-only** (no write
+  control/dispatcher, and the page-create
   tool is intentionally NOT in the panel's `--allowedTools` grant — `CONFLUENCE_TOOL_GRANTS`); the
   `confluence_create_page` write lives only on the MCP server for the interactive TUI. Both panels
   render the not-connected / loading / idle-empty / error / reconnect-needed states and reuse the

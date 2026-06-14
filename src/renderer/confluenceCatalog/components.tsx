@@ -23,7 +23,7 @@
  * §3 states, §6 catalog re-point.
  */
 
-import { useDataBinding } from '@a2ui-sdk/react/0.9'
+import { useDataBinding, useDispatchAction } from '@a2ui-sdk/react/0.9'
 import { Info, TriangleAlert } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
 import { Alert, AlertDescription } from '@/components/ui/alert'
@@ -35,8 +35,10 @@ import { cn } from '@/lib/utils'
 import { LoadMoreButton, useBound, type Bound } from '../catalogShared/controls'
 import {
   boundRows,
+  CONFLUENCE_OPEN_DETAIL_ACTION,
   countLabel,
   hasReadableBody,
+  isOpenDetailEmittable,
   showEmptyState,
   showErrorNotice
 } from './logic'
@@ -56,15 +58,27 @@ export interface SearchResultRowNode extends SdkProps {
   title?: string
   space?: string
   excerpt?: string
+  /**
+   * confluence-page-detail-nav-v1 (design §1.3/§2.1): toggles the clickable affordance
+   * (cursor + hover lift) on the row's `div`. Set by `SearchResultList` only for a row with
+   * a non-empty page id; the inert no-id row keeps the default cursor and no hover.
+   */
+  actionable?: boolean
 }
 
 export function SearchResultRow({
   title,
   space,
-  excerpt
+  excerpt,
+  actionable
 }: SearchResultRowNode): React.JSX.Element {
   return (
-    <div className="flex flex-col gap-1 border-b border-border/60 px-3 py-2 last:border-b-0">
+    <div
+      className={cn(
+        'flex flex-col gap-1 border-b border-border/60 px-3 py-2 transition-colors last:border-b-0',
+        actionable && 'cursor-pointer hover:bg-accent/40'
+      )}
+    >
       <div className="flex w-full items-center gap-2">
         <span className="min-w-0 flex-1 truncate text-sm font-medium text-foreground">
           {title ?? ''}
@@ -132,7 +146,23 @@ export function SearchResultList({
   const rows = useBound<SearchResultRowNode[]>(surfaceId, results, undefined)
   const isLoading = useDataBinding<boolean>(surfaceId, loading, false)
   const errorMessage = useDataBinding<string | undefined>(surfaceId, error, undefined)
+  const dispatch = useDispatchAction()
   const items = boundRows(rows)
+  // confluence-page-detail-nav-v1: a row with a non-empty page id opens that page's detail
+  // in place by REUSING the native page-detail browser (not a separate A2UI surface). The
+  // action is handled renderer-locally by the panel's `onAction` seam (never sent to
+  // main/agent — CONFLUENCE_OPEN_DETAIL_ACTION is a non-confluence.* nav action). It carries
+  // the `pageId` (the native `PageDetail` re-reads the body via `getPage`) + the `title` (so
+  // the native back row shows it immediately). A row with no id is inert (no button).
+  const open = (pageId: string | undefined, title: string | undefined): void => {
+    if (!isOpenDetailEmittable(pageId)) {
+      return
+    }
+    dispatch(surfaceId, componentId, {
+      name: CONFLUENCE_OPEN_DETAIL_ACTION,
+      context: { pageId: pageId as string, title: title ?? '' }
+    })
+  }
   if (showEmptyState(items.length, errorMessage)) {
     return (
       <p
@@ -151,9 +181,26 @@ export function SearchResultList({
           {countLabel(items.length, 'result', 'results')}
         </p>
       </div>
-      {items.map((result, i) => (
-        <SearchResultRow key={result.id ?? i} {...result} surfaceId="" componentId="" />
-      ))}
+      {items.map((result, i) => {
+        const actionable = isOpenDetailEmittable(result.id)
+        // Actionable (non-empty id): a real <button> wrapper — focusable, Enter/Space for
+        // free, cosmos focus ring drawn INSET (the Confluence list is a flush divided list,
+        // not rounded cards — design §1.3). Do NOT add rounded-*.
+        return actionable ? (
+          <button
+            key={result.id}
+            type="button"
+            className="w-full text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset"
+            aria-label={`Open ${result.title ?? 'page'}`}
+            onClick={() => open(result.id, result.title)}
+          >
+            <SearchResultRow {...result} actionable surfaceId="" componentId="" />
+          </button>
+        ) : (
+          // Non-actionable (no/empty id): the inert row, no wrapper, skipped in tab order.
+          <SearchResultRow key={i} {...result} surfaceId="" componentId="" />
+        )
+      })}
       <LoadMoreButton
         surfaceId={surfaceId}
         componentId={componentId}

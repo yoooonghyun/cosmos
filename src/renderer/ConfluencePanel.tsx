@@ -21,7 +21,7 @@
  */
 
 import { useCallback, useEffect, useState } from 'react'
-import { A2UIProvider } from '@a2ui-sdk/react/0.9'
+import { A2UIProvider, type A2UIAction } from '@a2ui-sdk/react/0.9'
 import { BookText, ChevronLeft, Loader2, Search } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -36,6 +36,7 @@ import {
   ReconnectState
 } from './atlassianPanelBits'
 import { confluenceCatalog, CONFLUENCE_CATALOG_ID } from './confluenceCatalog'
+import { CONFLUENCE_OPEN_DETAIL_ACTION } from './confluenceCatalog/logic'
 import { PanelTabStrip, type PanelTab } from './PanelTabStrip'
 import { PanelRefreshButton } from './PanelRefreshButton'
 import { panelRefreshInputsFor } from './panelRefreshLogic'
@@ -332,12 +333,33 @@ export function ConfluencePanel({ active }: { active: boolean }): React.JSX.Elem
   // panel-tabs v1: the per-tab generative surfaces (read-only, target 'confluence').
   // Zero tabs => the native search/page browser base (FR-017).
   const restoredConfluencePanel = useRestoredGenerativePanel('confluence')
-  const { tabs, activeTabId, activeTab, setActive, submit, newTab, closeTab, update } =
-    useGenerativePanelTabs({
-      target: 'confluence',
-      panelName: 'Confluence',
-      ...(restoredConfluencePanel ? { initial: restoredConfluencePanel } : {})
-    })
+  const {
+    tabs,
+    activeTabId,
+    activeTab,
+    setActive,
+    submit,
+    newTab,
+    closeTab,
+    update
+  } = useGenerativePanelTabs({
+    target: 'confluence',
+    panelName: 'Confluence',
+    ...(restoredConfluencePanel ? { initial: restoredConfluencePanel } : {})
+  })
+
+  // confluence-page-detail-nav-v1: clicking a row in a GENERATED-UI `SearchResultList`
+  // opens that page's full detail by REUSING the panel's existing native page-detail browser
+  // — NOT by composing/pushing a separate A2UI surface. The clicked row drives a renderer-
+  // local overlay `{ pageId, title }` that renders the SAME native `PageDetail` component
+  // (which reads via `window.cosmos.confluence.getPage`) + the SAME native back row over the
+  // generative host. "Back" clears the overlay → the generated list (or native base) returns
+  // verbatim, with no re-fetch and no surface round-trip. Held PER active tab and reset on a
+  // tab switch so an open detail never bleeds across tabs.
+  const [genUiPage, setGenUiPage] = useState<{ pageId: string; title: string } | null>(null)
+  useEffect(() => {
+    setGenUiPage(null)
+  }, [activeTabId])
   // The native-base browser nav is held PER-TAB, keyed by the active tab id
   // (bug panel-shared-tab-nav-state-v1), so each tab keeps its own view + search + query.
   const {
@@ -440,6 +462,33 @@ export function ConfluencePanel({ active }: { active: boolean }): React.JSX.Elem
 
   const isConnected = status.state === 'connected'
 
+  // confluence-page-detail-nav-v1: intercept the renderer-local open-detail nav action a
+  // clicked `SearchResultRow` (in a generated list) emits. Read its `pageId` + `title` and
+  // open the page in the SAME native page-detail browser via the `genUiPage` overlay — NO
+  // surface compose, NO main round-trip. Return TRUE so the action is NEVER forwarded to
+  // main or the agent. ANY OTHER action returns FALSE (Confluence is read-only with no
+  // main-side dispatcher; keeping the seam identical to Jira keeps the contract unambiguous).
+  const handleSurfaceAction = useCallback(
+    (action: A2UIAction): boolean => {
+      if (action.name !== CONFLUENCE_OPEN_DETAIL_ACTION) {
+        return false
+      }
+      const ctx = (action.context ?? {}) as Record<string, unknown>
+      const pageId = typeof ctx.pageId === 'string' ? ctx.pageId : ''
+      const title = typeof ctx.title === 'string' ? ctx.title : ''
+      if (pageId.trim().length > 0) {
+        setGenUiPage({ pageId, title })
+      }
+      return true
+    },
+    []
+  )
+
+  // confluence-page-detail-nav-v1: "← Back" from a generated-UI-opened page detail just
+  // clears the overlay — the generated list (the active tab's kept surface) renders again
+  // verbatim, no re-fetch, no surface round-trip.
+  const closeGenUiPage = useCallback(() => setGenUiPage(null), [])
+
   const stripTabs: PanelTab[] = tabs.map((t) => ({
     id: t.id,
     label: t.label,
@@ -496,6 +545,34 @@ export function ConfluencePanel({ active }: { active: boolean }): React.JSX.Elem
               />
             )}
           </div>
+        ) : genUiPage ? (
+          // confluence-page-detail-nav-v1: a row in a GENERATED-UI list was clicked. Show
+          // the SAME native page-detail browser (back row + native `PageDetail`, which reads
+          // via `window.cosmos.confluence.getPage`) over the active tab — no surface compose.
+          // "Back" clears the overlay and the generated list returns verbatim.
+          <>
+            <div className="flex items-center gap-1.5 border-b border-border px-2 py-1.5">
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon-sm"
+                aria-label="Back"
+                onClick={closeGenUiPage}
+              >
+                <ChevronLeft className="size-4" />
+              </Button>
+              <span className="truncate text-sm font-medium text-foreground">
+                {genUiPage.title}
+              </span>
+            </div>
+            <div className="min-h-0 flex-1">
+              <PageDetail
+                key={genUiPage.pageId}
+                pageId={genUiPage.pageId}
+                onReconnect={() => void refreshStatus()}
+              />
+            </div>
+          </>
         ) : (
           <>
             {/* Native search/page browser — the base shown at zero tabs AND on an
@@ -606,6 +683,7 @@ export function ConfluencePanel({ active }: { active: boolean }): React.JSX.Elem
                     surface={activeTab.surface}
                     catalogId={CONFLUENCE_CATALOG_ID}
                     panelName="ConfluencePanel"
+                    onAction={handleSurfaceAction}
                   />
                 </A2UIProvider>
               </div>
