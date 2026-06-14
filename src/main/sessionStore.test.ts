@@ -103,6 +103,119 @@ describe('SessionStore — load fallback (FR-005)', () => {
     fs.files.set('/u/session.json', Buffer.from(JSON.stringify({ schemaVersion: 99 }), 'utf8'))
     expect(store.load()).toBeNull()
   })
+
+  // panel-refresh-v1 regression: a pre-v3 snapshot can pair a literal-prop surface with a
+  // descriptor — restored under the new code that combination enables the panel refresh
+  // control yet cannot repaint (literal props ignore updateDataModel). The schema bump must
+  // invalidate it so it falls back to a clean session instead of a dead refresh button.
+  it('rejects a stale v2 snapshot whose composed surface is literal-prop + descriptor', () => {
+    const { store, fs } = makeStore()
+    const staleV2 = {
+      schemaVersion: 2,
+      panels: {
+        terminal: { tabs: [], activeTabId: null, everOpened: 0 },
+        'generated-ui': { tabs: [], activeTabId: null, everOpened: 0 },
+        jira: {
+          tabs: [
+            {
+              id: 't1',
+              label: '칸반보드로 만들어줘',
+              untitled: false,
+              composed: true,
+              descriptor: { dataSource: 'getIssue', query: { issueKey: 'CSMS-7' } },
+              surface: {
+                spec: {
+                  surfaceId: 'jira-kanban',
+                  components: [{ id: 'root', component: 'IssueList', issues: [{ issueKey: 'CSMS-7' }] }]
+                }
+              }
+            }
+          ],
+          activeTabId: 't1',
+          everOpened: 1
+        },
+        slack: { tabs: [], activeTabId: null, everOpened: 0 },
+        confluence: { tabs: [], activeTabId: null, everOpened: 0 }
+      }
+    }
+    fs.files.set('/u/session.json', Buffer.from(JSON.stringify(staleV2), 'utf8'))
+    expect(store.load()).toBeNull()
+  })
+
+  // refreshable-custom-generative-ui-v1 (FR-013/SC-005): the register-agent-surface rule
+  // changed the meaning of a persisted descriptor-bearing surface (it is now the AGENT's own
+  // spec, re-registered under the AGENT's surfaceId). A v3 snapshot was written under the
+  // shell-replacement rule, so its descriptor pairs with a SHELL spec; restored under v4 it
+  // would be wrongly re-registered as the agent's own bound layout. The 3→4 bump must treat a
+  // v3 snapshot as unreadable, falling back to a clean session.
+  it('rejects a stale v3 snapshot after the 3→4 bump (SC-005)', () => {
+    const { store, fs } = makeStore()
+    const staleV3 = {
+      schemaVersion: 3,
+      panels: {
+        terminal: { tabs: [], activeTabId: null, everOpened: 0 },
+        'generated-ui': { tabs: [], activeTabId: null, everOpened: 0 },
+        jira: {
+          tabs: [
+            {
+              id: 't1',
+              label: '칸반보드로 만들어줘',
+              untitled: false,
+              composed: true,
+              descriptor: { dataSource: 'searchIssues', query: { jql: 'assignee = currentUser()' } },
+              // v3 persisted the SHELL spec (register-by-shell), not the agent's custom layout.
+              surface: {
+                spec: { surfaceId: 'jira-issue-list', components: [{ id: 'root', component: 'IssueList' }] }
+              }
+            }
+          ],
+          activeTabId: 't1',
+          everOpened: 1
+        },
+        slack: { tabs: [], activeTabId: null, everOpened: 0 },
+        confluence: { tabs: [], activeTabId: null, everOpened: 0 }
+      }
+    }
+    fs.files.set('/u/session.json', Buffer.from(JSON.stringify(staleV3), 'utf8'))
+    expect(store.load()).toBeNull()
+  })
+
+  // FR-010: a CURRENT (v4) snapshot carrying a custom agent bound surface (its verbatim spec +
+  // secret-free descriptor) round-trips intact, so a restored custom bound surface is
+  // re-instated + refreshable.
+  it('round-trips a v4 custom bound composed surface + descriptor (FR-010)', () => {
+    const { store } = makeStore()
+    const snap: SessionSnapshot = {
+      schemaVersion: SESSION_SCHEMA_VERSION,
+      panels: {
+        terminal: { tabs: [], activeTabId: null, everOpened: 0 },
+        'generated-ui': { tabs: [], activeTabId: null, everOpened: 0 },
+        jira: {
+          tabs: [
+            {
+              id: 't1',
+              label: '칸반보드로 만들어줘',
+              untitled: false,
+              composed: true,
+              descriptor: { dataSource: 'searchIssues', query: { jql: 'assignee = currentUser()' } },
+              surface: {
+                spec: {
+                  surfaceId: 'agent-kanban-7',
+                  components: [{ id: 'root', component: 'Column', children: [] }]
+                }
+              }
+            }
+          ],
+          activeTabId: 't1',
+          everOpened: 1
+        },
+        slack: { tabs: [], activeTabId: null, everOpened: 0 },
+        confluence: { tabs: [], activeTabId: null, everOpened: 0 }
+      }
+    } as unknown as SessionSnapshot
+    store.save(snap)
+    expect(store.load()).toEqual(snap)
+  })
 })
 
 describe('SessionStore — save guards (FR-004/FR-007)', () => {

@@ -37,6 +37,8 @@ import {
 } from './atlassianPanelBits'
 import { confluenceCatalog, CONFLUENCE_CATALOG_ID } from './confluenceCatalog'
 import { PanelTabStrip, type PanelTab } from './PanelTabStrip'
+import { PanelRefreshButton } from './PanelRefreshButton'
+import { panelRefreshInputsFor } from './panelRefreshLogic'
 import { PanelFooter } from './PanelFooter'
 import { ActiveTabSurface } from './ActiveTabSurface'
 import { PromptComposer } from './PromptComposer'
@@ -447,6 +449,8 @@ export function ConfluencePanel({ active }: { active: boolean }): React.JSX.Elem
     ...(t.error ? { errorMessage: t.error } : {})
   }))
   const activeStripTab = stripTabs.find((t) => t.id === activeTabId) ?? null
+  // panel-refresh-v1 (Goal 1): the shared refresh control, fed the active tab's surface slice.
+  const refreshInputs = panelRefreshInputsFor(activeTab)
 
   return (
     <section
@@ -463,6 +467,12 @@ export function ConfluencePanel({ active }: { active: boolean }): React.JSX.Elem
         onClose={handleCloseTab}
         onNewTab={newTab}
         onRename={(id, label) => update(id, { label, renamed: true, untitled: false })}
+        trailing={
+          <PanelRefreshButton
+            activeTab={refreshInputs.activeTab}
+            requestId={refreshInputs.requestId}
+          />
+        }
         ariaLabel="Confluence tabs"
       />
 

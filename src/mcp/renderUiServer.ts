@@ -27,6 +27,11 @@ import {
   type BridgeServerMessage
 } from '../shared/bridge'
 import { validateSurfaceUpdate } from '../shared/validate'
+import { AdapterFlagPath } from '../shared/adapter'
+import { BindingsFirstEnforcer } from '../shared/dataBearingSpec'
+import { JiraAdapterSource } from '../shared/jira'
+import { SlackAdapterSource } from '../shared/slack'
+import { ConfluenceAdapterSource } from '../shared/confluence'
 import type { A2uiAction } from '../shared/ipc'
 
 /** Where the bridge socket lives. Claude Code sets CLAUDE_PROJECT_DIR. */
@@ -116,8 +121,15 @@ class BridgeClient {
   /**
    * Render `spec` in the app and await the user's resolved action. Resolves
    * `cancel` if the bridge cannot be reached (FR-009) rather than hanging.
+   * panel-refresh-v1 (FR-010): an OPTIONAL secret-free `descriptor` makes the surface
+   * refreshable — main validates + secret-screens it at the boundary, so passing one
+   * here is safe (a malformed/unknown descriptor is ignored, the surface still renders).
    */
-  async render(spec: BridgeRenderRequest['spec']): Promise<A2uiAction> {
+  async render(
+    spec: BridgeRenderRequest['spec'],
+    descriptor?: BridgeRenderRequest['descriptor'],
+    bindings?: BridgeRenderRequest['bindings']
+  ): Promise<A2uiAction> {
     let socket: Socket
     try {
       socket = await this.ensureConnected()
@@ -125,7 +137,13 @@ class BridgeClient {
       return { type: 'cancel' }
     }
     const callId = randomUUID()
-    const request: BridgeRenderRequest = { kind: 'render', callId, spec }
+    const request: BridgeRenderRequest = {
+      kind: 'render',
+      callId,
+      spec,
+      ...(descriptor ? { descriptor } : {}),
+      ...(bindings ? { bindings } : {})
+    }
     return new Promise<A2uiAction>((resolve) => {
       this.waiters.set(callId, resolve)
       socket.write(encodeBridgeMessage(request), (err) => {
@@ -205,8 +223,77 @@ const A2UI_TOOL_DESCRIPTION = [
   '    "action": { "name": "submit", "context": { "choice": { "path": "/choice" } } } },',
   '  { "id": "sendLbl", "component": "Text", "text": "Submit" } ] }',
   '',
-  'Resolves with the user action, or an explicit cancellation if dismissed.'
+  'Resolves with the user action, or an explicit cancellation if dismissed.',
+  '',
+  '════ REFRESHABLE DATA — compose the layout, declare ONE BINDING per data container ════',
+  'Whenever a container DISPLAYS live integration data you just read (a Slack/Jira/Confluence',
+  'list or detail), COMPOSE the layout you want and pass the rows you fetched as ORDINARY',
+  'LITERAL props — those literals become the first-paint SEED and the surface shows them',
+  'instantly. To make that container REFRESHABLE (the panel refresh control re-fetches +',
+  'repaints it in place, no agent round-trip), declare ONE binding for it. You do NOT author',
+  'any "{ path }" data binding yourself — cosmos rewrites each bound container\'s data prop to a',
+  'refreshable path for you, whether you passed literal rows or a path.',
+  '',
+  'BINDINGS is the primary way: pass "bindings": one entry per data-bearing container —',
+  '  { "componentId": "<the container\'s id>",',
+  '    "descriptor": { "dataSource": "<read id>", "query": { ... } } }.',
+  'A surface with a SINGLE data container declares ONE binding; a PARTITIONED layout (a kanban',
+  'with one list per status column, side-by-side feeds) declares ONE binding PER container, each',
+  'with its OWN narrowed query — so each refreshes independently and an EMPTY column (empty',
+  'literal seed) still re-fetches and can populate. dataSource is the integration read id; query',
+  'holds only NON-SECRET params (e.g. a jql, channelId, or pageId) — NEVER a token (cosmos',
+  'attaches the token only in main at refresh). dataSource is the ADAPTER SOURCE id — NOT the MCP',
+  'read-tool name ("jira_search_issues"/"slack_read_history"/"confluence_search_content"). Using a',
+  'tool name makes the surface non-refreshable. Valid dataSources:',
+  `  searchIssues, getIssue;  listChannels, getHistory, search;  defaultFeed, searchContent, getPage.`,
+  '',
+  '"descriptor": { "dataSource": ..., "query": { ... } } is the DEGENERATE single-binding form —',
+  'one surface-wide fetcher for a surface with a single data container. Use "descriptor" for one',
+  'region, "bindings" for many — NEVER pass both; if both are present bindings wins.',
+  '',
+  `You MAY still bind the shared reserved flags ("${AdapterFlagPath.loading}", "${AdapterFlagPath.hasMore}", "${AdapterFlagPath.error}") — cosmos also`,
+  'manages these for bound containers. Mint a UNIQUE surfaceId per surface. Omit all bindings',
+  'ONLY for a purely static/composed surface that shows no live integration data.'
 ].join('\n')
+
+/**
+ * The valid `dataSource` ids the generic render_ui descriptor accepts (bindings-first v3): the
+ * UNION of every integration's ADAPTER SOURCE id (mirrors `TARGET_ADAPTER_SOURCES['generated-ui']`
+ * in `src/shared/validate.ts`). These are the adapter source ids — NOT the MCP read-tool names
+ * (`jira_search_issues`, `slack_*`, `confluence_*`). The model previously set the read-tool name
+ * here, so main dropped the binding as cross-target and the surface landed unbound.
+ */
+const VALID_DATA_SOURCES: readonly string[] = [
+  ...Object.values(JiraAdapterSource),
+  ...Object.values(SlackAdapterSource),
+  ...Object.values(ConfluenceAdapterSource)
+]
+
+/**
+ * Zod schema for the OPTIONAL secret-free refresh descriptor (panel-refresh-v1, FR-010).
+ * `dataSource` is now CONSTRAINED to the known adapter source ids (bindings-first v3) so a
+ * read-tool-name value is rejected AT the render tool — the model resubmits with the right id
+ * instead of the call silently passing the MCP boundary and being dropped by main as cross-target.
+ * `query` internals stay permissive (validated + secret-stripped + target-matched in main).
+ */
+const DESCRIPTOR_SCHEMA = z
+  .object({
+    dataSource: z.string().refine((s) => VALID_DATA_SOURCES.includes(s), {
+      message: `dataSource must be one of: ${VALID_DATA_SOURCES.join(', ')} — the adapter source id, NOT the MCP read-tool name (e.g. jira_search_issues, slack_read_history, confluence_search_content).`
+    }),
+    query: z.record(z.unknown())
+  })
+  .passthrough()
+
+/**
+ * Zod schema for the OPTIONAL per-container bindings (refreshable-custom-generative-ui
+ * multi-region). One `{ componentId, descriptor }` per data-bearing container so a
+ * PARTITIONED layout (a kanban's columns) refreshes container-by-container. Main rebinds +
+ * registers each region; an invalid/cross-target entry is dropped at the boundary.
+ */
+const BINDINGS_SCHEMA = z.array(
+  z.object({ componentId: z.string(), descriptor: DESCRIPTOR_SCHEMA })
+)
 
 /** Human-readable summary of the resolved action for the text tool result. */
 function describeAction(action: A2uiAction): string {
@@ -220,6 +307,9 @@ function describeAction(action: A2uiAction): string {
 
 async function main(): Promise<void> {
   const bridge = new BridgeClient(resolveSocketPath())
+  // bindings-first ENFORCEMENT (v2): one per-process gate so an unbound data surface is rejected
+  // (the model resubmits with a binding per container), bounded by the cap → render-anyway.
+  const enforcer = new BindingsFirstEnforcer()
   const server = new McpServer({ name: 'cosmos-render-ui', version: '0.1.0' })
 
   server.registerTool(
@@ -236,10 +326,14 @@ async function main(): Promise<void> {
             surfaceId: z.string(),
             components: z.array(z.unknown())
           })
-          .passthrough()
+          .passthrough(),
+        // panel-refresh-v1 (FR-010): optional secret-free refresh descriptor.
+        descriptor: DESCRIPTOR_SCHEMA.optional(),
+        // multi-region: optional per-container bindings for a partitioned refreshable layout.
+        bindings: BINDINGS_SCHEMA.optional()
       }
     },
-    async ({ spec }) => {
+    async ({ spec, descriptor, bindings }) => {
       // FR-003: reject a malformed surfaceUpdate with an error tool result; the
       // app is never asked to render it, so it cannot crash.
       const valid = validateSurfaceUpdate(spec)
@@ -255,8 +349,26 @@ async function main(): Promise<void> {
         }
       }
 
+      // bindings-first ENFORCEMENT (v2): a data-bearing surface MUST declare a binding per data
+      // container so it is refreshable. If the call carries neither `descriptor` nor `bindings`
+      // yet the spec paints integration data, reject with an instructive (secret-free) message so
+      // the model resubmits with bindings — do NOT render. Bounded by the cap (render-anyway).
+      const decision = enforcer.evaluate({
+        spec: valid,
+        hasDescriptor: descriptor !== undefined,
+        hasBindings: bindings !== undefined
+      })
+      if (decision.reject) {
+        return {
+          isError: true,
+          content: [{ type: 'text' as const, text: `render_ui error: ${decision.message}` }]
+        }
+      }
+
       // FR-004/FR-007: push to the renderer via main and await the user's action.
-      const action = await bridge.render(valid)
+      // panel-refresh-v1 (FR-010): forward the optional descriptor; main validates +
+      // secret-screens it, so an invalid/unknown one is ignored (surface still renders).
+      const action = await bridge.render(valid, descriptor, bindings)
       return {
         content: [{ type: 'text' as const, text: describeAction(action) }],
         // Structured result so Claude can branch on the interaction precisely.

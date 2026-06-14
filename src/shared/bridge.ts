@@ -16,6 +16,7 @@
  */
 
 import type { A2uiAction, A2uiSurfaceUpdate, UiRenderTarget } from './ipc'
+import type { AdapterBinding, AdapterDescriptor } from './adapter'
 import type { SlackOpName, SlackResult } from './slack'
 import type { JiraOpName, JiraResult } from './jira'
 import type { ConfluenceOpName, ConfluenceResult } from './confluence'
@@ -80,6 +81,32 @@ export interface BridgeRenderRequest {
    * (backward-compatible — UiBridge defaults it). Non-secret.
    */
   target?: UiRenderTarget
+  /**
+   * panel-refresh-v1 (OQ-1 / FR-010..013): an OPTIONAL secret-free
+   * {@link AdapterDescriptor} `{ dataSource, query }` the composing agent attaches to
+   * make the surface it rendered REFRESHABLE. When present + valid, main re-fetches the
+   * descriptor (token attached in main), composes the matching BOUND surface, registers
+   * it with the AdapterDispatcher keyed by surfaceId, and pushes THAT bound surface (so a
+   * later `adapter.refresh` re-executes it in place). ABSENT or invalid ⇒ the agent's
+   * literal spec renders unchanged but non-refreshable (FR-012). Secret-free by contract:
+   * never a token (FR-013) — validated + secret-stripped at the main boundary.
+   *
+   * SINGLE-region shorthand: equivalent to a one-entry `bindings` whose container is the
+   * surface's lone data component. Prefer `bindings` for a PARTITIONED layout (e.g. a
+   * kanban with one descriptor per column). When both are present, `bindings` wins.
+   */
+  descriptor?: AdapterDescriptor
+  /**
+   * refreshable-custom-generative-ui (multi-region): one secret-free
+   * {@link AdapterBinding} PER data-bearing container, so a CUSTOM partitioned layout (a
+   * kanban's N columns, a dashboard's M panels) is refreshable container-by-container.
+   * Main rewrites each named container's literal data prop to a region-scoped `{path}`
+   * binding, seeds the literal as the region's first page, and registers each region with
+   * the AdapterDispatcher under its own descriptor + cursor (independent refresh/pagination
+   * — the user's "구분된 컴포넌트 별로 별도의 data fetcher" model). ABSENT ⇒ fall back to the
+   * single-region `descriptor` (or non-refreshable). Secret-free (validated in main).
+   */
+  bindings?: AdapterBinding[]
 }
 
 /**

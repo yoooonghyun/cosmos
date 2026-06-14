@@ -18,9 +18,15 @@
  * §7 CommentRow/CommentList, §8 AddCommentControl, §9.5 post-write notice.
  */
 
-import { useDispatchAction, useFormBinding } from '@a2ui-sdk/react/0.9'
+import { useDataBinding, useDispatchAction, useFormBinding } from '@a2ui-sdk/react/0.9'
 import type { DynamicValue } from '@a2ui-sdk/types/0.9'
-import { Check, Lock, SquareKanban, TriangleAlert, User } from 'lucide-react'
+import {
+  Check,
+  Lock,
+  SquareKanban,
+  TriangleAlert,
+  User
+} from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
 import { Card } from '@/components/ui/card'
 import { Avatar, AvatarFallback } from '@/components/ui/avatar'
@@ -37,6 +43,15 @@ import {
 } from '@/components/ui/select'
 import { cn } from '@/lib/utils'
 import { JiraBoundAction } from '../../shared/jira'
+// jira-generative-adapter-v1 → slack-generative-adapter-v1 (design §6.1): the adapter
+// controls + the {path}-binding helpers now live in the SHARED catalog module so Jira
+// and Slack reuse ONE definition each (no copy). Re-exported below for backward compat.
+import {
+  LoadMoreButton,
+  PaginationBar,
+  useBound,
+  type Bound
+} from '../catalogShared/controls'
 import type {
   JiraComment,
   JiraStatusCategory,
@@ -75,6 +90,20 @@ export const PATH_CREATE_DESCRIPTION = '/createDescription'
 /** EditIssueForm data-model paths (Jira write-extend v1, design §4). */
 export const PATH_EDIT_SUMMARY = '/editSummary'
 export const PATH_EDIT_DESCRIPTION = '/editDescription'
+
+/**
+ * Bound data-model paths the adapter controls + bound display components read
+ * (jira-generative-adapter-v1, FR-017/FR-018, design §4/§5). Centralized so a
+ * control's binding literal can never drift from what the AdapterDispatcher pushes.
+ */
+export const PATH_LOADING = '/loading'
+export const PATH_HAS_MORE = '/hasMore'
+export const PATH_HAS_PREV = '/hasPrev'
+
+// Re-export the shared adapter controls so `jiraCatalog/index.ts` (and any existing
+// importer) keeps importing them from `./components` after the §6.1 extraction — single
+// definition lives in `../catalogShared/controls`.
+export { LoadMoreButton, PaginationBar, useBound, type Bound }
 
 /** Props the SDK injects into every catalog component. */
 interface SdkProps {
@@ -131,12 +160,28 @@ function PersonInline({ person }: { person?: JiraUserRef }): React.JSX.Element {
  * TicketCard (display, no action) (design §4)
  * ------------------------------------------------------------------------- */
 
+/** The bound issue shape a detail TicketCard reads from the `{path}` issue value. */
+interface TicketIssueValue {
+  key?: string
+  summary?: string
+  statusName?: string
+  statusCategory?: JiraStatusCategory
+  assignee?: JiraUserRef
+}
+
 export interface TicketCardNode extends SdkProps {
   issueKey?: string
   summary?: string
   statusName?: string
   statusCategory?: JiraStatusCategory
   assignee?: JiraUserRef
+  /**
+   * jira-generative-adapter-v1 (FR-001): the DETAIL header binds the whole issue via a
+   * single `{path}` (e.g. `/issue`) so a refresh `updateDataModel` re-renders it in
+   * place. When present it OVERRIDES the individual static props (list cards still pass
+   * the individual props). Resolved through `useDataBinding`.
+   */
+  issue?: Bound<TicketIssueValue>
   /**
    * Whether this card is the clickable/actionable variant (jira-ticket-detail-v1,
    * design §1.3/§2). When true it gets `cursor-pointer` + the hover lift (it is wrapped
@@ -148,14 +193,25 @@ export interface TicketCardNode extends SdkProps {
 }
 
 export function TicketCard({
+  surfaceId,
   issueKey,
   summary,
   statusName,
   statusCategory,
   assignee,
+  issue,
   actionable
 }: TicketCardNode): React.JSX.Element {
-  const summaryText = ticketCardSummary(summary)
+  // FR-001: when a bound issue value is supplied, resolve it from the data model and
+  // read the display fields off it; otherwise fall back to the individual static props
+  // (the list-card path). useDataBinding returns the literal as-is when not a binding.
+  const boundIssue = useBound<TicketIssueValue>(surfaceId, issue, undefined)
+  const key = boundIssue?.key ?? issueKey
+  const summaryValue = boundIssue?.summary ?? summary
+  const statusNameValue = boundIssue?.statusName ?? statusName
+  const statusCategoryValue = boundIssue?.statusCategory ?? statusCategory
+  const assigneeValue = boundIssue?.assignee ?? assignee
+  const summaryText = ticketCardSummary(summaryValue)
   return (
     <Card
       className={cn(
@@ -167,9 +223,16 @@ export function TicketCard({
     >
       <div className="flex items-center justify-between gap-2">
         <Badge variant="secondary" className="shrink-0 font-mono text-[10px]">
-          {issueKey ?? '—'}
+          {key ?? '—'}
         </Badge>
-        <StatusBadge surfaceId="" componentId="" statusName={statusName} statusCategory={statusCategory} />
+        <div className="flex items-center gap-1.5">
+          <StatusBadge
+            surfaceId=""
+            componentId=""
+            statusName={statusNameValue}
+            statusCategory={statusCategoryValue}
+          />
+        </div>
       </div>
       <p
         className={cn(
@@ -180,7 +243,7 @@ export function TicketCard({
         {summaryText.text}
       </p>
       <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
-        <PersonInline person={assignee} />
+        <PersonInline person={assigneeValue} />
       </div>
     </Card>
   )
@@ -191,17 +254,61 @@ export function TicketCard({
  * ------------------------------------------------------------------------- */
 
 export interface IssueListNode extends SdkProps {
-  issues?: TicketCardNode[]
+  /**
+   * The rows. A bound surface passes a `{path}` (jira-generative-adapter-v1, FR-001) so
+   * a refresh / load-more `updateDataModel` re-renders the list in place; a static
+   * builder passes the literal array. Resolved through `useDataBinding`.
+   */
+  issues?: Bound<TicketCardNode[]>
+  /** Bound busy flag (FR-018) — drives the RefreshButton + LoadMoreButton spinners. */
+  loading?: Bound<boolean>
+  /** Bound "a next page exists" flag (FR-017) — gates the LoadMoreButton. */
+  hasMore?: Bound<boolean>
+  /** Bound recoverable error notice (FR-022) — shown above the list when present. */
+  error?: Bound<string>
+  /**
+   * This column's region key, stamped by main's rebinder on a MULTI-region (partitioned)
+   * surface. Forwarded to LoadMoreButton so a load-more reloads ONLY this column's fetcher.
+   * Absent on a single-region surface (the action proceeds surface-wide).
+   */
+  region?: string
 }
 
-export function IssueList({ surfaceId, componentId, issues }: IssueListNode): React.JSX.Element {
+export function IssueList({
+  surfaceId,
+  componentId,
+  issues,
+  loading,
+  hasMore,
+  error,
+  region
+}: IssueListNode): React.JSX.Element {
   const dispatch = useDispatchAction()
-  const items = Array.isArray(issues) ? issues : []
+  const rows = useBound<TicketCardNode[]>(surfaceId, issues, undefined)
+  const isLoading = useDataBinding<boolean>(surfaceId, loading, false)
+  const errorMessage = useDataBinding<string | undefined>(surfaceId, error, undefined)
+  const items = Array.isArray(rows) ? rows : []
+
+  // FR-022: a recoverable refresh/pagination error renders above the (kept) rows so prior
+  // data stays visible; an empty list with an error shows the notice instead of the empty
+  // state. Reuses the catalog's calm error treatment.
+  const errorBlock = errorMessage ? (
+    <Alert variant="destructive">
+      <TriangleAlert />
+      <AlertDescription className="text-destructive">{errorMessage}</AlertDescription>
+    </Alert>
+  ) : null
+
   if (items.length === 0) {
     return (
-      <div className="flex flex-col items-center gap-2 py-8">
-        <SquareKanban className="size-7 text-muted-foreground" />
-        <p className="text-sm text-muted-foreground">No issues found.</p>
+      <div className="flex flex-col gap-2" aria-busy={isLoading}>
+        {errorBlock}
+        {!errorMessage && (
+          <div className="flex flex-col items-center gap-2 py-8">
+            <SquareKanban className="size-7 text-muted-foreground" />
+            <p className="text-sm text-muted-foreground">No issues found.</p>
+          </div>
+        )}
       </div>
     )
   }
@@ -219,10 +326,15 @@ export function IssueList({ surfaceId, componentId, issues }: IssueListNode): Re
     })
   }
   return (
-    <div className="flex flex-col gap-2">
-      <p className="text-xs text-muted-foreground" aria-live="polite">
-        {items.length} {items.length === 1 ? 'issue' : 'issues'}
-      </p>
+    <div className="flex flex-col gap-2" aria-busy={isLoading}>
+      {errorBlock}
+      {/* §2.1: header row — count label only; manual refresh moved to the panel chrome
+          (panel-refresh-v1, FR-006). */}
+      <div className="flex items-center justify-between gap-2">
+        <p className="text-xs text-muted-foreground" aria-live="polite">
+          {items.length} {items.length === 1 ? 'issue' : 'issues'}
+        </p>
+      </div>
       {items.map((issue, i) => {
         const actionable = isOpenDetailEmittable(issue.issueKey)
         const card = (
@@ -254,6 +366,8 @@ export function IssueList({ surfaceId, componentId, issues }: IssueListNode): Re
           <div key={i}>{card}</div>
         )
       })}
+      {/* §5.1: append/load-more footer — absent unless a next page exists. */}
+      <LoadMoreButton surfaceId={surfaceId} componentId={componentId} loading={loading} hasMore={hasMore} region={region} />
     </div>
   )
 }
@@ -263,8 +377,10 @@ export function IssueList({ surfaceId, componentId, issues }: IssueListNode): Re
  * ------------------------------------------------------------------------- */
 
 export interface TransitionPickerNode extends SdkProps {
-  issueKey?: string
-  availableTransitions?: JiraTransition[]
+  /** May be a literal (static builder) or a `{path}` into the bound issue (FR-001). */
+  issueKey?: Bound<string>
+  /** May be a literal or a `{path}` into the bound issue's transitions (FR-001). */
+  availableTransitions?: Bound<JiraTransition[]>
 }
 
 export function TransitionPicker({
@@ -274,24 +390,26 @@ export function TransitionPicker({
   availableTransitions
 }: TransitionPickerNode): React.JSX.Element {
   const dispatch = useDispatchAction()
+  const issueKeyValue = useDataBinding<string | undefined>(surfaceId, issueKey, undefined)
+  const transitionsValue = useBound<JiraTransition[]>(surfaceId, availableTransitions, undefined)
   const [transitionId, setTransitionId] = useFormBinding<string>(
     surfaceId,
     { path: PATH_TRANSITION_ID },
     ''
   )
-  const transitions = Array.isArray(availableTransitions) ? availableTransitions : []
+  const transitions = Array.isArray(transitionsValue) ? transitionsValue : []
 
   if (transitions.length === 0) {
     return <p className="text-sm text-muted-foreground">No transitions available.</p>
   }
 
   const apply = (): void => {
-    if (!isTransitionSubmittable(transitionId) || !issueKey) {
+    if (!isTransitionSubmittable(transitionId) || !issueKeyValue) {
       return
     }
     dispatch(surfaceId, componentId, {
       name: JiraBoundAction.Transition,
-      context: { issueKey, transitionId: { path: PATH_TRANSITION_ID } }
+      context: { issueKey: issueKeyValue, transitionId: { path: PATH_TRANSITION_ID } }
     })
   }
 
@@ -362,11 +480,13 @@ export function CommentRow({ comment }: CommentRowNode): React.JSX.Element {
 }
 
 export interface CommentListNode extends SdkProps {
-  comments?: JiraComment[]
+  /** May be a literal (static builder) or a `{path}` into the bound issue (FR-001). */
+  comments?: Bound<JiraComment[]>
 }
 
 export function CommentList({ surfaceId, comments }: CommentListNode): React.JSX.Element {
-  const items = Array.isArray(comments) ? comments : []
+  const commentsValue = useBound<JiraComment[]>(surfaceId, comments, undefined)
+  const items = Array.isArray(commentsValue) ? commentsValue : []
   return (
     <div className="flex flex-col gap-1.5">
       <span className="text-xs font-medium text-muted-foreground">Comments ({items.length})</span>
@@ -388,7 +508,8 @@ export function CommentList({ surfaceId, comments }: CommentListNode): React.JSX
  * ------------------------------------------------------------------------- */
 
 export interface AddCommentControlNode extends SdkProps {
-  issueKey?: string
+  /** May be a literal (static builder) or a `{path}` into the bound issue (FR-001). */
+  issueKey?: Bound<string>
 }
 
 export function AddCommentControl({
@@ -397,15 +518,16 @@ export function AddCommentControl({
   issueKey
 }: AddCommentControlNode): React.JSX.Element {
   const dispatch = useDispatchAction()
+  const issueKeyValue = useDataBinding<string | undefined>(surfaceId, issueKey, undefined)
   const [body, setBody] = useFormBinding<string>(surfaceId, { path: PATH_COMMENT_BODY }, '')
 
   const submit = (): void => {
-    if (!isCommentSubmittable(body) || !issueKey) {
+    if (!isCommentSubmittable(body) || !issueKeyValue) {
       return
     }
     dispatch(surfaceId, componentId, {
       name: JiraBoundAction.Comment,
-      context: { issueKey, body: { path: PATH_COMMENT_BODY } }
+      context: { issueKey: issueKeyValue, body: { path: PATH_COMMENT_BODY } }
     })
   }
 
@@ -735,23 +857,27 @@ export interface NoticeNode extends SdkProps {
  * ------------------------------------------------------------------------- */
 
 export interface TextNode extends SdkProps {
-  text?: string
+  /** May be a literal or a `{path}` into the bound issue (FR-001, e.g. the description). */
+  text?: Bound<string>
   variant?: 'label' | 'body'
-  muted?: boolean
+  /** May be a literal or a bound boolean (e.g. muted when the description is empty). */
+  muted?: Bound<boolean>
 }
 
-export function Text({ text, variant, muted }: TextNode): React.JSX.Element {
+export function Text({ surfaceId, text, variant, muted }: TextNode): React.JSX.Element {
+  const textValue = useDataBinding<string | undefined>(surfaceId, text, undefined)
+  const mutedValue = useDataBinding<boolean>(surfaceId, muted, false)
   if (variant === 'label') {
-    return <span className="text-xs font-medium text-muted-foreground">{text ?? ''}</span>
+    return <span className="text-xs font-medium text-muted-foreground">{textValue ?? ''}</span>
   }
   return (
     <p
       className={cn(
         'whitespace-pre-wrap break-words text-sm leading-relaxed',
-        muted ? 'text-muted-foreground' : 'text-card-foreground'
+        mutedValue ? 'text-muted-foreground' : 'text-card-foreground'
       )}
     >
-      {text ?? ''}
+      {textValue ?? ''}
     </p>
   )
 }

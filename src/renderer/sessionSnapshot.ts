@@ -105,6 +105,12 @@ export function buildGenerativeTab(tab: GenerativeTab): GenerativeTabSnapshot {
   if (tab.composed === true && tab.surface && !tab.surface.error) {
     snap.composed = true
     snap.surface = { spec: tab.surface.spec }
+    // jira-generative-adapter-v1 (FR-006): persist the bound surface's secret-free
+    // descriptor beside its spec so restore can re-execute it for fresh data. Only a
+    // bound surface carries one; main re-validates (+ strips secrets) at load.
+    if (tab.descriptor) snap.descriptor = tab.descriptor
+    // multi-region: a partitioned surface persists its per-container bindings instead.
+    if (tab.bindings) snap.bindings = tab.bindings
   }
   return snap
 }
@@ -150,6 +156,25 @@ export function hydrateGenerativeTabs(
     if (t.composed === true && t.surface && t.surface.spec) {
       tab.composed = true
       tab.surface = { requestId: mintRequestId(), spec: t.surface.spec }
+      // jira-generative-adapter-v1 (FR-006/FR-013): restore the bound descriptor so a
+      // re-activation/refresh re-executes it. Main already stripped/validated it. It is
+      // carried on BOTH the tab (for persistence round-trips) and the rendered surface
+      // (so ActiveTabSurface fires the restore refresh that lazily re-registers it).
+      if (t.descriptor) {
+        tab.descriptor = t.descriptor
+        // FR-013: a RESTORED bound surface — its seed is stale (no live data model was
+        // pushed). Mark it so ActiveTabSurface fires the descriptor-bearing refresh that
+        // re-registers it in main + re-fetches. (A freshly composed surface is omitted.)
+        tab.surface.descriptor = t.descriptor
+        tab.surface.restored = true
+      }
+      // multi-region: a partitioned surface restores its bindings instead; the restore
+      // refresh re-registers EVERY region in main and fans out a fetch to each.
+      if (t.bindings) {
+        tab.bindings = t.bindings
+        tab.surface.bindings = t.bindings
+        tab.surface.restored = true
+      }
     }
     return tab
   })

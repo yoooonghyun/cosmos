@@ -11,6 +11,8 @@
  * (FR-006, FR-021, SC-008): these are content/metadata the user could see in Slack.
  */
 
+import type { AdapterDescriptor, AdapterQuery } from './adapter'
+
 /* ------------------------------------------------------------------------- *
  * Connection status (shared by the panel + status events)
  * ------------------------------------------------------------------------- */
@@ -251,3 +253,123 @@ export const SlackOp = {
 } as const
 
 export type SlackOpName = (typeof SlackOp)[keyof typeof SlackOp]
+
+/* ------------------------------------------------------------------------- *
+ * Generative adapter descriptors (slack-generative-adapter-v1)
+ *
+ * Slack-CONCRETE shapes of the shared, secret-free {@link AdapterDescriptor}
+ * `{ dataSource, query }` (the panel-agnostic contract lives in `src/shared/adapter.ts`;
+ * the dispatcher + validators are reused VERBATIM). These mirror `src/shared/jira.ts`'s
+ * `JiraAdapterDescriptor`/`jiraSearchDescriptor`. A bound Slack surface persists one of
+ * these beside its view spec so a refresh / load-more can re-execute the read in main
+ * (token attached inside SlackManager — never here, FR-005/FR-009/FR-018).
+ *
+ * READ-ONLY, APPEND-ONLY (FR-010/FR-011): only the three TOP-LEVEL read surfaces are
+ * mapped — `listChannels`/`getHistory`/`search`. `getReplies` (thread expansion) is
+ * DELIBERATELY NOT a dataSource here; it is reserved for the held `slack-thread-replies-v1`
+ * feature so the two never collide (spec "Relationship to held slack-thread-replies-v1").
+ * Every cursor is forward-only + opaque, so there is no prev cursor (the dispatcher's
+ * `pagination:'append'` mode + `hasMore` over `nextCursor` presence cover this).
+ * ------------------------------------------------------------------------- */
+
+/**
+ * The Slack `dataSource` discriminators (FR-005/FR-006). Each maps 1:1 to a SlackManager
+ * READ the adapter dispatcher's Slack resolver re-executes. Reuses the {@link SlackOp}
+ * read ids so the descriptor, the resolver, and the IPC/bridge reads never disagree on a
+ * string. `getReplies`/`getUser` are intentionally excluded (the former is held for the
+ * thread-replies feature; the latter is a name-resolution helper, not a list surface).
+ */
+export const SlackAdapterSource = {
+  /** Channel-list surface → `listChannels(cursor?)` (FR-006). */
+  ListChannels: SlackOp.ListChannels,
+  /** Message-history surface → `getHistory(channelId, cursor?)` (FR-006). */
+  GetHistory: SlackOp.GetHistory,
+  /** Search-results surface → `search(query, cursor?)` (FR-006). */
+  Search: SlackOp.Search
+} as const
+
+export type SlackAdapterSourceName =
+  (typeof SlackAdapterSource)[keyof typeof SlackAdapterSource]
+
+/**
+ * The query for a Slack `listChannels` descriptor (FR-006). Non-secret: only the opaque
+ * forward cursor (absent on the first page). Mirrors {@link SlackListChannelsParams}.
+ */
+export interface SlackChannelsAdapterQuery extends AdapterQuery {
+  /** Opaque next-page cursor (`conversations.list` next_cursor); absent on page one. */
+  cursor?: string
+}
+
+/**
+ * The query for a Slack `getHistory` descriptor (FR-006). Non-secret: the channel id to
+ * re-read + the opaque cursor. Mirrors {@link SlackHistoryParams}.
+ */
+export interface SlackHistoryAdapterQuery extends AdapterQuery {
+  /** The channel id whose history the surface reads (non-secret). */
+  channelId: string
+  /** Opaque next-page cursor (`conversations.history` next_cursor); absent on page one. */
+  cursor?: string
+}
+
+/**
+ * The query for a Slack `search` descriptor (FR-006). Non-secret: the search query + the
+ * synthetic forward page cursor (`page+1`, surfaced as a string). Mirrors
+ * {@link SlackSearchParams}.
+ */
+export interface SlackSearchAdapterQuery extends AdapterQuery {
+  /** The keyword query the search surface reads (non-secret). */
+  query: string
+  /** Opaque forward cursor — `search.messages` synthetic `page+1`; absent on page one. */
+  cursor?: string
+}
+
+/**
+ * A Slack adapter descriptor — the {@link AdapterDescriptor} narrowed to Slack's three
+ * read sources (FR-005/FR-006). Discriminated by `dataSource`. Secret-free (FR-005/FR-018).
+ */
+export type SlackAdapterDescriptor =
+  | (AdapterDescriptor & {
+      dataSource: typeof SlackAdapterSource.ListChannels
+      query: SlackChannelsAdapterQuery
+    })
+  | (AdapterDescriptor & {
+      dataSource: typeof SlackAdapterSource.GetHistory
+      query: SlackHistoryAdapterQuery
+    })
+  | (AdapterDescriptor & {
+      dataSource: typeof SlackAdapterSource.Search
+      query: SlackSearchAdapterQuery
+    })
+
+/**
+ * Build a secret-free Slack `listChannels` descriptor for a channel-list surface (FR-006).
+ * Carries only the optional opaque cursor — never a token.
+ */
+export function slackChannelsDescriptor(cursor?: string): SlackAdapterDescriptor {
+  return {
+    dataSource: SlackAdapterSource.ListChannels,
+    query: { ...(cursor ? { cursor } : {}) }
+  }
+}
+
+/**
+ * Build a secret-free Slack `getHistory` descriptor for a message-history surface (FR-006).
+ * Carries only the (non-secret) channel id + optional cursor — never a token.
+ */
+export function slackHistoryDescriptor(channelId: string, cursor?: string): SlackAdapterDescriptor {
+  return {
+    dataSource: SlackAdapterSource.GetHistory,
+    query: { channelId, ...(cursor ? { cursor } : {}) }
+  }
+}
+
+/**
+ * Build a secret-free Slack `search` descriptor for a search-results surface (FR-006).
+ * Carries only the (non-secret) query + optional synthetic forward cursor — never a token.
+ */
+export function slackSearchDescriptor(query: string, cursor?: string): SlackAdapterDescriptor {
+  return {
+    dataSource: SlackAdapterSource.Search,
+    query: { query, ...(cursor ? { cursor } : {}) }
+  }
+}

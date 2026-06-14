@@ -213,3 +213,38 @@ describe('groundingPromptForTarget — slack/confluence anti-fabrication (FR-011
     expect(groundingPromptForTarget('generated-ui')).toBeUndefined()
   })
 })
+
+describe('groundingPromptForTarget — bindings-first steering (v2 Fix A)', () => {
+  it('every data-bearing target forces a binding per data container with its own narrowed query', () => {
+    for (const target of ['jira', 'slack', 'confluence'] as const) {
+      const prompt = groundingPromptForTarget(target)
+      expect(prompt).toBeTruthy()
+      // The uniform clause: a binding per container, narrowed per-container query, no broad split.
+      expect(prompt).toContain('binding')
+      expect(prompt).toContain('narrowed')
+      expect(prompt).toContain('NEVER partition a broad fetch')
+      // Secret-free: never instruct a token.
+      expect(prompt).toContain('NEVER a token')
+    }
+  })
+
+  it('teaches the exact adapter-source dataSource ids and warns against the read-tool name (v3)', () => {
+    for (const target of ['jira', 'slack', 'confluence'] as const) {
+      const prompt = groundingPromptForTarget(target)!
+      // dataSource is the adapter source id, NOT the MCP read-tool name.
+      expect(prompt).toContain('ADAPTER SOURCE id')
+      // The valid ids per integration are stated.
+      expect(prompt).toContain('searchIssues')
+      expect(prompt).toContain('getIssue')
+      expect(prompt).toContain('listChannels')
+      expect(prompt).toContain('getHistory')
+      expect(prompt).toContain('defaultFeed')
+      expect(prompt).toContain('searchContent')
+      expect(prompt).toContain('getPage')
+      // And the read-tool names are explicitly called out as WRONG.
+      expect(prompt).toContain('jira_search_issues')
+      expect(prompt).toContain('slack_read_history')
+      expect(prompt).toContain('confluence_search_content')
+    }
+  })
+})

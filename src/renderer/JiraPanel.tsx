@@ -39,6 +39,8 @@ import type { FormEvent } from 'react'
 import { ConnectionStatus, ConnectForm } from './atlassianPanelBits'
 import { jiraCatalog, JIRA_CATALOG_ID, JIRA_OPEN_DETAIL_ACTION } from './jiraCatalog'
 import { PanelTabStrip, type PanelTab } from './PanelTabStrip'
+import { PanelRefreshButton } from './PanelRefreshButton'
+import { panelRefreshInputsFor } from './panelRefreshLogic'
 import { PanelFooter } from './PanelFooter'
 import { ActiveTabSurface } from './ActiveTabSurface'
 import { PromptComposer } from './PromptComposer'
@@ -317,6 +319,8 @@ export function JiraPanel({ active }: { active: boolean }): React.JSX.Element {
     ...(t.error ? { errorMessage: t.error } : {})
   }))
   const activeStripTab = stripTabs.find((t) => t.id === activeTabId) ?? null
+  // panel-refresh-v1 (Goal 1): the shared refresh control, fed the active tab's surface slice.
+  const refreshInputs = panelRefreshInputsFor(activeTab)
 
   // The surface send-spinner gate, scoped to the ACTIVE tab (composer-send-animation-v1
   // FR-005/FR-008). A user compose sets `inFlight` (not `loadingDefault`), so it shows the
@@ -353,6 +357,12 @@ export function JiraPanel({ active }: { active: boolean }): React.JSX.Element {
         onClose={closeTab}
         onNewTab={newTab}
         onRename={(id, label) => update(id, { label, renamed: true, untitled: false })}
+        trailing={
+          <PanelRefreshButton
+            activeTab={refreshInputs.activeTab}
+            requestId={refreshInputs.requestId}
+          />
+        }
         ariaLabel="Jira tabs"
       />
 

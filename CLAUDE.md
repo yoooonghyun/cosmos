@@ -49,6 +49,10 @@ cosmos = Conductor-style Electron app embed Claude Code as engine: show real Cla
 - Specs/plans + `docs/ARCHITECTURE.md` owned by **`architect`** agent;
   implementation (interface/tests/code) by **`developer`** agent. **`wrap-up`**
   skill propagates end-of-iteration learnings into living docs + reconciles `TODO.md`.
+- **Delegate SDD/bugfix agents (`architect`/`developer`/`designer`) as BACKGROUND subagents**
+  (`run_in_background: true`) by default so the main agent stays responsive (not blocked waiting on a
+  step). SDD steps are sequential (spec→plan→implement), so reserve true parallelism (multiple
+  background agents at once, or team mode) for independent multi-track work.
 - **SDD agents (`architect`/`developer`/`designer`) equipped w/ codegraph +
   agentmemory, must ground own investigation w/ them** — `codegraph_explore` for
   code structure, `memory_recall`/`memory_smart_search` for prior decisions, `memory_save` to

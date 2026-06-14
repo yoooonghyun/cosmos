@@ -18,13 +18,27 @@
  * §2.5 SearchResultRow, §2.6 SearchResultList, §2.7 UserChip, §2.8 Notice, §2.9 Text.
  */
 
-import { useDispatchAction } from '@a2ui-sdk/react/0.9'
+import { useDataBinding, useDispatchAction } from '@a2ui-sdk/react/0.9'
 import { Hash, Info, TriangleAlert } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
 import { Avatar, AvatarFallback } from '@/components/ui/avatar'
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { cn } from '@/lib/utils'
-import { authorName, countLabel, formatTs, initials, SLACK_OPEN_CHANNEL_ACTION } from './logic'
+// slack-generative-adapter-v1 (design §6): the bound Slack lists reuse the SHARED adapter
+// controls + binding helpers VERBATIM (the single definition the Jira catalog also uses).
+// Slack registers LoadMoreButton only — never PaginationBar (append-only). Refresh moved to
+// the panel chrome (panel-refresh-v1, FR-006) — no in-surface RefreshButton.
+import { LoadMoreButton, useBound, type Bound } from '../catalogShared/controls'
+import {
+  authorName,
+  boundRows,
+  countLabel,
+  formatTs,
+  initials,
+  showEmptyState,
+  showErrorNotice,
+  SLACK_OPEN_CHANNEL_ACTION
+} from './logic'
 
 /** Props the SDK injects into every catalog component. */
 interface SdkProps {
@@ -56,24 +70,59 @@ export function ChannelRow({ name, isMember }: ChannelRowNode): React.JSX.Elemen
   )
 }
 
-export interface ChannelListNode extends SdkProps {
-  channels?: ChannelRowNode[]
+/**
+ * The recoverable-error Notice the bound lists render ABOVE kept rows (design §3 / FR-007).
+ * Reuses the catalog's destructive Alert treatment; prior data is NOT cleared. Returns
+ * null when there is no error message.
+ */
+function BoundListError({ message }: { message: string | undefined }): React.JSX.Element | null {
+  if (!showErrorNotice(message)) {
+    return null
+  }
+  return (
+    <Alert variant="destructive" className="border-destructive/40 bg-destructive/15">
+      <TriangleAlert className="text-destructive" />
+      <AlertDescription className="text-destructive">{message}</AlertDescription>
+    </Alert>
+  )
 }
 
-export function ChannelList({ surfaceId, componentId, channels }: ChannelListNode): React.JSX.Element {
+export interface ChannelListNode extends SdkProps {
+  /**
+   * The rows. A bound surface passes a `{path}` (slack-generative-adapter-v1, FR-001/FR-002)
+   * so a refresh / load-more `updateDataModel` re-renders the list in place; a static
+   * builder passes the literal array. Resolved through `useBound`.
+   */
+  channels?: Bound<ChannelRowNode[]>
+  /** Bound busy flag (FR-004) — drives the RefreshButton + LoadMoreButton spinners. */
+  loading?: Bound<boolean>
+  /** Bound "a next page exists" flag (FR-012) — gates the LoadMoreButton. */
+  hasMore?: Bound<boolean>
+  /** Bound recoverable error notice (FR-007) — shown above the list when present. */
+  error?: Bound<string>
+  /** Region key (multi-region partitioned surface) — forwarded to LoadMoreButton so a
+   * load-more reloads only this container's fetcher. Absent → surface-wide. */
+  region?: string
+}
+
+export function ChannelList({
+  surfaceId,
+  componentId,
+  channels,
+  loading,
+  hasMore,
+  error,
+  region
+}: ChannelListNode): React.JSX.Element {
   const dispatch = useDispatchAction()
-  const items = Array.isArray(channels) ? channels : []
-  if (items.length === 0) {
-    return (
-      <div className="flex flex-col items-center gap-2 py-8 text-center">
-        <Hash className="size-7 text-muted-foreground" aria-hidden="true" />
-        <p className="text-sm text-muted-foreground">No channels.</p>
-      </div>
-    )
-  }
+  const rows = useBound<ChannelRowNode[]>(surfaceId, channels, undefined)
+  const isLoading = useDataBinding<boolean>(surfaceId, loading, false)
+  const errorMessage = useDataBinding<string | undefined>(surfaceId, error, undefined)
+  const items = boundRows(rows)
   // A row click navigates to that channel's native conversation view. The action is
   // handled renderer-locally by the Slack panel (not sent to main/the agent). A channel
-  // missing an id is non-navigable (still shown).
+  // missing an id is non-navigable (still shown). Coexists with the header/footer
+  // adapter.* controls — different components, no collision (design §2.3).
   const open = (channel: ChannelRowNode): void => {
     if (!channel.id) {
       return
@@ -87,11 +136,22 @@ export function ChannelList({ surfaceId, componentId, channels }: ChannelListNod
       }
     })
   }
+  if (showEmptyState(items.length, errorMessage)) {
+    return (
+      <div className="flex flex-col items-center gap-2 py-8 text-center" aria-busy={isLoading}>
+        <Hash className="size-7 text-muted-foreground" aria-hidden="true" />
+        <p className="text-sm text-muted-foreground">No channels.</p>
+      </div>
+    )
+  }
   return (
-    <div className="flex flex-col">
-      <p className="px-2 py-1.5 text-xs text-muted-foreground" aria-live="polite">
-        {countLabel(items.length, 'channel', 'channels')}
-      </p>
+    <div className="flex flex-col gap-1" aria-busy={isLoading}>
+      <BoundListError message={errorMessage} />
+      <div className="flex items-center justify-between gap-2 px-2 py-1.5">
+        <p className="text-xs text-muted-foreground" aria-live="polite">
+          {countLabel(items.length, 'channel', 'channels')}
+        </p>
+      </div>
       {items.map((channel, i) =>
         channel.id ? (
           <button
@@ -107,6 +167,7 @@ export function ChannelList({ surfaceId, componentId, channels }: ChannelListNod
           <ChannelRow key={i} {...channel} surfaceId="" componentId="" />
         )
       )}
+      <LoadMoreButton surfaceId={surfaceId} componentId={componentId} loading={loading} hasMore={hasMore} region={region} />
     </div>
   )
 }
@@ -155,19 +216,55 @@ export function MessageRow({
 }
 
 export interface MessageListNode extends SdkProps {
-  messages?: MessageRowNode[]
+  /**
+   * The rows. A bound surface passes a `{path}` (slack-generative-adapter-v1, FR-001/FR-002)
+   * so a refresh / append `updateDataModel` re-renders the list in place; a static builder
+   * passes the literal array. Resolved through `useBound`.
+   */
+  messages?: Bound<MessageRowNode[]>
+  /** Bound busy flag (FR-004) — drives the RefreshButton + LoadMoreButton spinners. */
+  loading?: Bound<boolean>
+  /** Bound "a next page exists" flag (FR-012) — gates the LoadMoreButton. */
+  hasMore?: Bound<boolean>
+  /** Bound recoverable error notice (FR-007) — shown above the list when present. */
+  error?: Bound<string>
+  /** Region key (multi-region partitioned surface) — forwarded to LoadMoreButton so a
+   * load-more reloads only this container's fetcher. Absent → surface-wide. */
+  region?: string
 }
 
-export function MessageList({ messages }: MessageListNode): React.JSX.Element {
-  const items = Array.isArray(messages) ? messages : []
-  if (items.length === 0) {
-    return <p className="px-3 py-6 text-center text-sm text-muted-foreground">No messages.</p>
+export function MessageList({
+  surfaceId,
+  componentId,
+  messages,
+  loading,
+  hasMore,
+  error,
+  region
+}: MessageListNode): React.JSX.Element {
+  const rows = useBound<MessageRowNode[]>(surfaceId, messages, undefined)
+  const isLoading = useDataBinding<boolean>(surfaceId, loading, false)
+  const errorMessage = useDataBinding<string | undefined>(surfaceId, error, undefined)
+  const items = boundRows(rows)
+  if (showEmptyState(items.length, errorMessage)) {
+    return (
+      <p className="px-3 py-6 text-center text-sm text-muted-foreground" aria-busy={isLoading}>
+        No messages.
+      </p>
+    )
   }
   return (
-    <div className="flex flex-col">
+    <div className="flex flex-col" aria-busy={isLoading}>
+      <BoundListError message={errorMessage} />
+      <div className="flex items-center justify-between gap-2 px-3 py-1.5">
+        <p className="text-xs text-muted-foreground" aria-live="polite">
+          {countLabel(items.length, 'message', 'messages')}
+        </p>
+      </div>
       {items.map((m, i) => (
         <MessageRow key={m.ts ?? i} {...m} surfaceId="" componentId="" />
       ))}
+      <LoadMoreButton surfaceId={surfaceId} componentId={componentId} loading={loading} hasMore={hasMore} region={region} />
     </div>
   )
 }
@@ -219,19 +316,51 @@ export function SearchResultRow({
 }
 
 export interface SearchResultListNode extends SdkProps {
-  matches?: SearchResultRowNode[]
+  /**
+   * The rows. A bound surface passes a `{path}` (slack-generative-adapter-v1, FR-001/FR-002)
+   * so a refresh / append `updateDataModel` re-renders the list in place; a static builder
+   * passes the literal array. Resolved through `useBound`.
+   */
+  matches?: Bound<SearchResultRowNode[]>
+  /** Bound busy flag (FR-004) — drives the RefreshButton + LoadMoreButton spinners. */
+  loading?: Bound<boolean>
+  /** Bound "a next page exists" flag (FR-012) — gates the LoadMoreButton. */
+  hasMore?: Bound<boolean>
+  /** Bound recoverable error notice (FR-007) — shown above the list when present. */
+  error?: Bound<string>
+  /** Region key (multi-region partitioned surface) — forwarded to LoadMoreButton so a
+   * load-more reloads only this container's fetcher. Absent → surface-wide. */
+  region?: string
 }
 
-export function SearchResultList({ matches }: SearchResultListNode): React.JSX.Element {
-  const items = Array.isArray(matches) ? matches : []
-  if (items.length === 0) {
-    return <p className="px-3 py-6 text-center text-sm text-muted-foreground">No results.</p>
+export function SearchResultList({
+  surfaceId,
+  componentId,
+  matches,
+  loading,
+  hasMore,
+  error,
+  region
+}: SearchResultListNode): React.JSX.Element {
+  const rows = useBound<SearchResultRowNode[]>(surfaceId, matches, undefined)
+  const isLoading = useDataBinding<boolean>(surfaceId, loading, false)
+  const errorMessage = useDataBinding<string | undefined>(surfaceId, error, undefined)
+  const items = boundRows(rows)
+  if (showEmptyState(items.length, errorMessage)) {
+    return (
+      <p className="px-3 py-6 text-center text-sm text-muted-foreground" aria-busy={isLoading}>
+        No results.
+      </p>
+    )
   }
   return (
-    <div className="flex flex-col">
-      <p className="px-3 py-2 text-xs text-muted-foreground" aria-live="polite">
-        {countLabel(items.length, 'result', 'results')}
-      </p>
+    <div className="flex flex-col" aria-busy={isLoading}>
+      <BoundListError message={errorMessage} />
+      <div className="flex items-center justify-between gap-2 px-3 py-2">
+        <p className="text-xs text-muted-foreground" aria-live="polite">
+          {countLabel(items.length, 'result', 'results')}
+        </p>
+      </div>
       {items.map((m, i) => (
         <SearchResultRow
           key={`${m.channelId ?? ''}-${m.ts ?? i}`}
@@ -240,6 +369,7 @@ export function SearchResultList({ matches }: SearchResultListNode): React.JSX.E
           componentId=""
         />
       ))}
+      <LoadMoreButton surfaceId={surfaceId} componentId={componentId} loading={loading} hasMore={hasMore} region={region} />
     </div>
   )
 }

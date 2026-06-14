@@ -23,6 +23,7 @@ import {
   type TerminalPanelSnapshot,
   type TerminalTabSnapshot
 } from '../shared/ipc'
+import { validateAdapterBindings, validateAdapterDescriptor } from '../shared/validate'
 
 /** Optional structured warning sink (defaults to console.warn) — mirrors validate.ts. */
 export type WarnFn = (message: string, ...rest: unknown[]) => void
@@ -114,6 +115,25 @@ function validateGenerativeTab(value: unknown, warn: WarnFn): GenerativeTabSnaps
   if (value.composed === true && isObject(value.surface) && isObject(value.surface.spec)) {
     tab.composed = true
     tab.surface = { spec: value.surface.spec as unknown as A2uiSurfaceUpdate }
+    // jira-generative-adapter-v1 (FR-006/FR-007): a bound surface persists its
+    // SECRET-FREE adapter descriptor beside the spec so restore can re-execute it.
+    // `validateAdapterDescriptor` strips any secret-looking query key + drops a
+    // malformed descriptor (warn + omit), so a bad descriptor never blocks the tab.
+    if (value.descriptor !== undefined) {
+      const descriptor = validateAdapterDescriptor(value.descriptor, warn)
+      if (descriptor) {
+        tab.descriptor = descriptor
+      }
+    }
+    // refreshable-custom-generative-ui (multi-region): a PARTITIONED surface persists its
+    // per-container bindings instead. `validateAdapterBindings` secret-strips each descriptor
+    // and drops malformed entries (warn), so a bad binding never blocks the tab.
+    if (value.bindings !== undefined) {
+      const bindings = validateAdapterBindings(value.bindings, warn)
+      if (bindings) {
+        tab.bindings = bindings
+      }
+    }
   }
   return tab
 }

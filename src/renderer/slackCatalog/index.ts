@@ -29,6 +29,10 @@ import {
   Text,
   UserChip
 } from './components'
+// slack-generative-adapter-v1 (design §6): the bound lists' tail load-more reuses the
+// SHARED adapter control verbatim. Slack is append-only, so it registers LoadMoreButton
+// ONLY — never PaginationBar. Refresh moved to the panel chrome (panel-refresh-v1, FR-006).
+import { LoadMoreButton } from '../catalogShared/controls'
 
 /** The `catalogId` the Slack panel's `<A2UIProvider>` registers. */
 export const SLACK_CATALOG_ID = 'slack'
@@ -54,6 +58,7 @@ export const slackCatalog: Catalog = {
     UserChip,
     Notice,
     Text,
+    LoadMoreButton,
     Column: standardCatalog.components.Column,
     Row: standardCatalog.components.Row
   },

@@ -30,6 +30,8 @@ import {
   type A2UIAction,
   type A2UIMessage
 } from '@a2ui-sdk/react/0.9'
+import type { UiDataModelPayload } from '../shared/ipc'
+import { applyDataModel } from './dataModelApply'
 import type { TabSurface } from './useGenerativePanelTabs'
 
 class SurfaceErrorBoundary extends Component<
@@ -95,10 +97,67 @@ export function ActiveTabSurface({
       }
       processMessage(create)
       processMessage(update)
+      // jira-generative-adapter-v1 (FR-002/FR-003): seed the bound surface's initial
+      // data model right after createSurface/updateComponents so it paints its first
+      // page of bound data + flags. A malformed seed entry is skipped (never throws).
+      if (Array.isArray(surface.dataModel)) {
+        for (const seed of surface.dataModel) {
+          applyDataModel(processMessage, surfaceId, seed)
+        }
+      }
     } catch {
       // SC-005: a bad spec degrades to the error boundary; nothing to render here.
     }
   }, [surface, catalogId, processMessage, clear])
+
+  // jira-generative-adapter-v1 (FR-013): when a BOUND surface is (re)mounted — a tab
+  // restore from the session snapshot or a panel re-activation that remounts this body —
+  // fire one `adapter.refresh` carrying the surface's secret-free descriptor. Main
+  // lazily (re-)registers a surface it never freshly composed (a restored tab) and then
+  // re-executes it, producing a fresh `updateDataModel` (no view re-compose, no agent).
+  // The descriptor is the persisted refetch intent; a manual RefreshButton later fires
+  // the same action WITHOUT a descriptor (the surface is registered by then). Keyed on
+  // requestId so it fires once per mounted surface, not on every data-model push.
+  useEffect(() => {
+    const surfaceId = surface?.spec.surfaceId
+    if (!surfaceId || surface?.error || !surface.restored) {
+      return
+    }
+    // multi-region: a partitioned surface re-registers EVERY region via its bindings;
+    // a single-region surface re-registers via its descriptor. Exactly one is present.
+    const values = surface.bindings
+      ? { surfaceId, bindings: surface.bindings }
+      : surface.descriptor
+        ? { surfaceId, descriptor: surface.descriptor }
+        : null
+    if (!values) {
+      return
+    }
+    window.cosmos.ui.sendAction({
+      requestId: surface.requestId,
+      action: { type: 'submit', actionId: 'adapter.refresh', values }
+    })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [surface?.requestId])
+
+  // jira-generative-adapter-v1 (FR-002/FR-010): apply IN-PLACE data-model updates the
+  // AdapterDispatcher pushes (refresh / pagination / loading flag) to THIS surface —
+  // matched by surfaceId so a push for a sibling tab's surface is ignored. The view is
+  // not re-composed; only the data model changes (bound hooks re-render). A malformed
+  // payload is safely ignored (FR-023). Resubscribes when the active surface changes.
+  useEffect(() => {
+    const surfaceId = surface?.spec.surfaceId
+    if (!surfaceId || surface?.error) {
+      return
+    }
+    const off = window.cosmos.ui.onDataModel((payload: UiDataModelPayload) => {
+      if (!payload || payload.surfaceId !== surfaceId) {
+        return
+      }
+      applyDataModel(processMessage, surfaceId, payload)
+    })
+    return off
+  }, [surface, processMessage])
 
   const handleAction = (action: A2UIAction): void => {
     // Renderer-local intercept (e.g. Slack open-channel) — never consumes a requestId.
@@ -106,13 +165,30 @@ export function ActiveTabSurface({
       return
     }
     const requestId = requestIdRef.current
-    if (!requestId || submittedRef.current.has(requestId)) {
+    if (!requestId) {
       return
     }
-    submittedRef.current.add(requestId)
+    // panel-refresh-v1 (Goal 2 / FR-008): split the one-shot guard. A reserved
+    // `adapter.*` action (refresh / load-more / page) and any non-terminal control are
+    // REPEATABLE — they re-execute the bound descriptor in main and push fresh
+    // `updateDataModel` to THIS surface, so they must NOT be consumed by the one-shot
+    // set. Only a TERMINAL `submit` (a control with no reserved actionId — the
+    // surface's final answer that resolves the awaiting render call) is one-shot, so a
+    // double click can't resolve the same pending call twice. The marker is the
+    // `adapter.` namespace; a `jira.*` deterministic write is likewise repeatable.
+    const actionId = action.name
+    const isRepeatable =
+      typeof actionId === 'string' &&
+      (actionId.startsWith('adapter.') || actionId.startsWith('jira.'))
+    if (!isRepeatable) {
+      if (submittedRef.current.has(requestId)) {
+        return
+      }
+      submittedRef.current.add(requestId)
+    }
     window.cosmos.ui.sendAction({
       requestId,
-      action: { type: 'submit', actionId: action.name, values: action.context }
+      action: { type: 'submit', actionId, values: action.context }
     })
   }
 

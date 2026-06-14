@@ -25,6 +25,11 @@ import {
   SearchResultRow,
   Text
 } from './components'
+// confluence-generative-adapter-v1 (design §6.1): the bound list's tail load-more reuses
+// the SHARED adapter control verbatim. Confluence is append-only, so it registers
+// LoadMoreButton ONLY — never PaginationBar. Refresh moved to the panel chrome
+// (panel-refresh-v1, FR-006).
+import { LoadMoreButton } from '../catalogShared/controls'
 
 /** The `catalogId` the Confluence panel's `<A2UIProvider>` registers. */
 export const CONFLUENCE_CATALOG_ID = 'confluence'
@@ -43,6 +48,7 @@ export const confluenceCatalog: Catalog = {
     PageDetail,
     Notice,
     Text,
+    LoadMoreButton,
     Column: standardCatalog.components.Column,
     Row: standardCatalog.components.Row
   },

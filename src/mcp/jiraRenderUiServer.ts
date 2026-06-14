@@ -28,6 +28,9 @@ import {
   type BridgeServerMessage
 } from '../shared/bridge'
 import { validateSurfaceUpdate } from '../shared/validate'
+import { AdapterFlagPath } from '../shared/adapter'
+import { BindingsFirstEnforcer } from '../shared/dataBearingSpec'
+import { JiraAdapterSource } from '../shared/jira'
 import type { A2uiAction } from '../shared/ipc'
 
 /** Where the bridge socket lives. Claude Code sets CLAUDE_PROJECT_DIR. */
@@ -111,7 +114,11 @@ class BridgeClient {
    * Render `spec` in the Jira panel (stamps `target: 'jira'`) and await the user's
    * resolved action. Resolves `cancel` if the bridge cannot be reached (FR-009).
    */
-  async render(spec: BridgeRenderRequest['spec']): Promise<A2uiAction> {
+  async render(
+    spec: BridgeRenderRequest['spec'],
+    descriptor?: BridgeRenderRequest['descriptor'],
+    bindings?: BridgeRenderRequest['bindings']
+  ): Promise<A2uiAction> {
     let socket: Socket
     try {
       socket = await this.ensureConnected()
@@ -120,7 +127,16 @@ class BridgeClient {
     }
     const callId = randomUUID()
     // D3: stamp target: 'jira' so main routes the surface to the Jira panel.
-    const request: BridgeRenderRequest = { kind: 'render', callId, spec, target: 'jira' }
+    // panel-refresh-v1 (FR-010): forward the optional secret-free refresh descriptor.
+    // multi-region: forward per-container bindings for a partitioned refreshable layout.
+    const request: BridgeRenderRequest = {
+      kind: 'render',
+      callId,
+      spec,
+      target: 'jira',
+      ...(descriptor ? { descriptor } : {}),
+      ...(bindings ? { bindings } : {})
+    }
     return new Promise<A2uiAction>((resolve) => {
       this.waiters.set(callId, resolve)
       socket.write(encodeBridgeMessage(request), (err) => {
@@ -178,8 +194,87 @@ const JIRA_TOOL_DESCRIPTION = [
   '      "statusCategory": "in_progress" } ] } ] }',
   '',
   'Resolves with the user action (e.g. a jira.transition / jira.comment), or an',
-  'explicit cancellation if dismissed.'
+  'explicit cancellation if dismissed.',
+  '',
+  '════ REFRESHABLE DATA — compose the board, declare ONE BINDING per data container ════',
+  'Whenever a container DISPLAYS live Jira data you just fetched (a list, a board, a detail',
+  'card — ANY custom layout), COMPOSE the layout you want and pass the issues you fetched as',
+  'ORDINARY LITERAL props (an "issues" array on IssueList, the issue fields on TicketCard) —',
+  'those literals become the first-paint SEED and the surface shows them instantly. To make a',
+  'container REFRESHABLE (the panel refresh control re-fetches + repaints it in place, no agent',
+  'round-trip), declare ONE binding for it. You do NOT author any "{ path }" data binding',
+  'yourself — cosmos rewrites each bound container\'s data prop to a refreshable path for you,',
+  'whether you passed literal rows or a path.',
+  '',
+  'BINDINGS is the primary way: pass "bindings": one entry per data-bearing container —',
+  '  { "componentId": "<the container\'s id>",',
+  '    "descriptor": { "dataSource": "searchIssues"|"getIssue", "query": { ... } } }.',
+  'The descriptor is the SAME read you performed; query holds only NON-SECRET params (a "jql"',
+  'for searchIssues, an "issueKey" for getIssue) — NEVER a token (cosmos attaches the token only',
+  'in main at refresh). IMPORTANT: "dataSource" is the ADAPTER SOURCE id — EXACTLY "searchIssues"',
+  'or "getIssue" — NOT the MCP read-tool name "jira_search_issues"/"jira_get_issue". Using the',
+  'tool name makes the surface non-refreshable. cosmos KEEPS your custom spec and refreshes it IN PLACE — a kanban stays',
+  'a kanban after refresh, with fresh data.',
+  '',
+  'SINGLE data container → ONE binding. PARTITIONED board (a kanban with one IssueList per',
+  'status column, side-by-side lists, a split view) → ONE binding PER container, each with its',
+  'OWN narrowed query (e.g. a per-status JQL: status = "In Review"). A column\'s identity comes',
+  'from its QUERY, not from its rows — so a column composed with an EMPTY "issues" array still',
+  'refreshes via its binding and can receive an issue that moves into it.',
+  '',
+  '"descriptor": { "dataSource": ..., "query": { ... } } is the DEGENERATE single-binding form —',
+  'one surface-wide fetcher for a surface with a single data container. Use "descriptor" for one',
+  'region, "bindings" for many — NEVER pass both; if both are present bindings wins.',
+  `You MAY also bind the shared flags ("${AdapterFlagPath.loading}", "${AdapterFlagPath.hasMore}", "${AdapterFlagPath.error}"). Mint a UNIQUE`,
+  'surfaceId per surface. Omit all bindings ONLY for a purely static surface with no live Jira data.',
+  '',
+  'Example (refreshable list — literal seed rows + ONE binding for the container):',
+  '{ "spec": { "surfaceId": "jira-board-1", "components": [',
+  '    { "id": "root", "component": "IssueList", "issues": [',
+  '      { "issueKey": "PROJ-1", "summary": "Fix login", "statusName": "In Progress",',
+  '        "statusCategory": "in_progress" } ] } ] },',
+  '  "bindings": [ { "componentId": "root",',
+  '      "descriptor": { "dataSource": "searchIssues",',
+  '        "query": { "jql": "assignee = currentUser()" } } } ] }',
+  '',
+  'Example (a 2-column kanban — literal seed rows per column + one binding per column):',
+  '{ "spec": { "surfaceId": "jira-kanban-1", "components": [',
+  '    { "id": "root", "component": "Row", "children": ["todo", "review"] },',
+  '    { "id": "todo",   "component": "IssueList", "issues": [ /* fetched To Do rows */ ] },',
+  '    { "id": "review", "component": "IssueList", "issues": [ /* fetched In Review rows */ ] } ] },',
+  '  "bindings": [',
+  '    { "componentId": "todo",   "descriptor": { "dataSource": "searchIssues",',
+  '        "query": { "jql": "project = CSMS AND status = \\"To Do\\"" } } },',
+  '    { "componentId": "review", "descriptor": { "dataSource": "searchIssues",',
+  '        "query": { "jql": "project = CSMS AND status = \\"In Review\\"" } } } ] }'
 ].join('\n')
+
+/** The valid Jira `dataSource` ids (bindings-first v3): the adapter source ids, NOT the read-tool names. */
+const VALID_DATA_SOURCES: readonly string[] = Object.values(JiraAdapterSource)
+
+/**
+ * Optional secret-free refresh descriptor schema (panel-refresh-v1, FR-010). `dataSource` is now
+ * CONSTRAINED to the Jira adapter source ids (`searchIssues`/`getIssue`) so a read-tool-name value
+ * (`jira_search_issues`) is rejected AT the render tool — the model resubmits with the right id
+ * instead of the call silently passing the MCP boundary and being dropped by main as cross-target.
+ */
+const DESCRIPTOR_SCHEMA = z
+  .object({
+    dataSource: z.string().refine((s) => VALID_DATA_SOURCES.includes(s), {
+      message: `dataSource must be one of: ${VALID_DATA_SOURCES.join(', ')} — the adapter source id, NOT the MCP read-tool name (e.g. jira_search_issues).`
+    }),
+    query: z.record(z.unknown())
+  })
+  .passthrough()
+
+/**
+ * Optional per-container bindings schema (refreshable-custom-generative-ui multi-region):
+ * one `{ componentId, descriptor }` per data-bearing container so a PARTITIONED layout (a
+ * kanban's columns) refreshes container-by-container. Main rebinds + registers each region.
+ */
+const BINDINGS_SCHEMA = z.array(
+  z.object({ componentId: z.string(), descriptor: DESCRIPTOR_SCHEMA })
+)
 
 /** Human-readable summary of the resolved action for the text tool result. */
 function describeAction(action: A2uiAction): string {
@@ -193,6 +288,9 @@ function describeAction(action: A2uiAction): string {
 
 async function main(): Promise<void> {
   const bridge = new BridgeClient(resolveSocketPath())
+  // bindings-first ENFORCEMENT (v2): one per-process gate so an unbound data surface is rejected
+  // (the model resubmits with a binding per container), bounded by the cap → render-anyway.
+  const enforcer = new BindingsFirstEnforcer()
   const server = new McpServer({ name: 'cosmos-jira-render-ui', version: '0.1.0' })
 
   server.registerTool(
@@ -206,10 +304,12 @@ async function main(): Promise<void> {
             surfaceId: z.string(),
             components: z.array(z.unknown())
           })
-          .passthrough()
+          .passthrough(),
+        descriptor: DESCRIPTOR_SCHEMA.optional(),
+        bindings: BINDINGS_SCHEMA.optional()
       }
     },
-    async ({ spec }) => {
+    async ({ spec, descriptor, bindings }) => {
       const valid = validateSurfaceUpdate(spec)
       if (!valid) {
         return {
@@ -223,7 +323,23 @@ async function main(): Promise<void> {
         }
       }
 
-      const action = await bridge.render(valid)
+      // bindings-first ENFORCEMENT (v2): a data-bearing surface MUST declare a binding per data
+      // container so it is refreshable. If the call carries neither `descriptor` nor `bindings`
+      // yet the spec paints integration data, reject with an instructive (secret-free) message so
+      // the model resubmits with bindings — do NOT render. Bounded by the cap (render-anyway).
+      const decision = enforcer.evaluate({
+        spec: valid,
+        hasDescriptor: descriptor !== undefined,
+        hasBindings: bindings !== undefined
+      })
+      if (decision.reject) {
+        return {
+          isError: true,
+          content: [{ type: 'text' as const, text: `render_jira_ui error: ${decision.message}` }]
+        }
+      }
+
+      const action = await bridge.render(valid, descriptor, bindings)
       return {
         content: [{ type: 'text' as const, text: describeAction(action) }],
         structuredContent: { action }

@@ -32,11 +32,13 @@ import {
   UiChannel,
   type AgentStatusPayload,
   type SessionSnapshot,
+  type UiDataModelPayload,
   type UiRenderPayload
 } from '../shared/ipc'
 import { matchShortcut } from './shortcutMatch'
 import type { SlackConnectionStatus } from '../shared/slack'
 import type { JiraConnectionStatus } from '../shared/jira'
+import { JiraAdapterSource } from '../shared/jira'
 import type { ConfluenceConnectionStatus } from '../shared/confluence'
 import {
   confluenceBridgeSocketPath,
@@ -63,6 +65,7 @@ import {
   validateSlackReplies,
   validateSlackSearch,
   validateStart,
+  validateAdapterAction,
   validateUiAction
 } from '../shared/validate'
 import { PtyManager } from './ptyManager'
@@ -87,7 +90,31 @@ import { runSlackOAuth } from './integrations/slackOAuth'
 import { JiraBridge } from './jiraBridge'
 import { JiraManager } from './jiraManager'
 import { JiraActionDispatcher } from './jiraActionDispatcher'
-import { buildDefaultViewSurface, buildIssueDetailSurface, buildNoticeSurface } from './jiraSurfaceBuilder'
+import { AdapterDispatcher, type AdapterResolver } from './adapterDispatcher'
+import { jiraAdapterResolver, jiraListBindOptions, jiraDetailBindOptions } from './jiraAdapter'
+// slack-generative-adapter-v1 (FR-005/FR-015): the SAME shared AdapterDispatcher serves
+// Slack's bound lists. A composite resolver branches Slack vs Jira by dataSource (the two
+// source namespaces don't collide), and the lazy re-registration consults Slack's
+// bind-options selector for a restored Slack descriptor.
+import { slackAdapterResolver, slackBindOptionsForSource } from './slackAdapter'
+// confluence-generative-adapter-v1 (FR-005/FR-008/FR-015): the same shared dispatcher
+// also serves Confluence's two append-only lists + its refresh-only page detail. The
+// composite resolver branches Confluence-vs-Slack-vs-Jira by dataSource; the lazy
+// re-registration consults this selector in the chain. READ-ONLY (FR-017): no write.
+import { confluenceAdapterResolver, confluenceBindOptionsForSource } from './confluenceAdapter'
+// panel-refresh-v1 (OQ-5 = main-composes): resolve a descriptor → its bound shell + bind
+// options so an agent-composed surface carrying a descriptor renders refreshable.
+import { planAgentSurfaceRegistration } from './descriptorRegistration'
+// refreshable-custom-generative-ui (multi-region): rebind an agent's per-container literal
+// props to region-scoped `{path}` bindings + plan the regions to register/refresh.
+import { planRegions, rebindAgentSurface } from './specRebinder'
+import {
+  buildBoundIssueListSurface,
+  buildBoundIssueDetailSurface,
+  buildNoticeSurface,
+  SURFACE_DEFAULT_VIEW,
+  SURFACE_ISSUE_DETAIL
+} from './jiraSurfaceBuilder'
 import { JiraClient } from './integrations/jiraClient'
 import { ConfluenceBridge } from './confluenceBridge'
 import { ConfluenceManager } from './confluenceManager'
@@ -124,6 +151,10 @@ let slackBridge: SlackBridge | null = null
 let jiraManager: JiraManager | null = null
 let jiraBridge: JiraBridge | null = null
 let jiraActionDispatcher: JiraActionDispatcher | null = null
+// jira-generative-adapter-v1 (FR-009/FR-012): the SHARED, panel-agnostic adapter
+// dispatch path. Constructed with a Jira resolver here; channel-independent (no
+// ptyManager/agentRunner). Drives refresh + load-more/pagination + the loading flag.
+let adapterDispatcher: AdapterDispatcher | null = null
 let confluenceManager: ConfluenceManager | null = null
 let confluenceBridge: ConfluenceBridge | null = null
 let agentRunner: AgentRunner | null = null
@@ -570,6 +601,65 @@ function registerIpcHandlers(): void {
     // so we do NOT also resolveAction here. An invalid/unknown bound action is
     // warned + ignored by the dispatcher (returns false) and falls through to the
     // normal resolve so a stray non-bound submit is still handled.
+    // jira-generative-adapter-v1 (FR-010/FR-019): a `submit` whose actionId is in the
+    // reserved `adapter.*` namespace (refresh / loadMore / page) is DETERMINISTICALLY
+    // routed to the shared AdapterDispatcher — NOT returned to Claude. It re-executes
+    // the bound surface's descriptor and pushes `updateDataModel` (not a full re-push).
+    // Validated at the boundary: an invalid/unknown adapter.* (e.g. bad direction or
+    // missing surfaceId) is warned + ignored (FR-022). Same interception discipline as
+    // the `jira.*` write path below — one coherent main-side dispatch (FR-011).
+    if (payload.action.type === 'submit' && payload.action.actionId?.startsWith('adapter.')) {
+      const request = validateAdapterAction(
+        payload.action.actionId,
+        payload.action.values,
+        (m, ...a) => console.warn(m, ...a)
+      )
+      if (request && adapterDispatcher) {
+        const surfaceId = request.surfaceId
+        if (request.name === 'adapter.refresh') {
+          // FR-013: a restore/re-activation refresh may carry the persisted descriptor OR
+          // bindings for a surface main never freshly composed; lazily (re-)register it so the
+          // refresh has a registration to run. MULTI-region bindings win (a partitioned surface
+          // persists `bindings`); a single-region surface persists `descriptor`.
+          if (request.bindings && !adapterDispatcher.has(surfaceId)) {
+            // planRegions derives the SAME regionKeys/options compose used (single source of
+            // truth), so a restored surface re-registers each container under its own region.
+            for (const region of planRegions(request.bindings)) {
+              adapterDispatcher.register(surfaceId, region.descriptor, region.options, region.regionKey)
+            }
+          } else if (request.descriptor && !adapterDispatcher.has(surfaceId)) {
+            // Panel-agnostic bind-options selection: a restored descriptor may be a Slack,
+            // Confluence, OR a Jira source. slack-/confluence-generative-adapter-v1
+            // (FR-015): consult the Slack selector first (append-only lists), then the
+            // Confluence selector (append lists + none detail); fall back to the Jira
+            // detail/list split.
+            const slackOpts = slackBindOptionsForSource(request.descriptor.dataSource)
+            const confluenceOpts = confluenceBindOptionsForSource(request.descriptor.dataSource)
+            const opts =
+              slackOpts ??
+              confluenceOpts ??
+              (request.descriptor.dataSource === JiraAdapterSource.GetIssue
+                ? jiraDetailBindOptions
+                : jiraListBindOptions)
+            adapterDispatcher.register(surfaceId, request.descriptor, opts)
+          }
+          // No region ⇒ fan out to EVERY region (surface-level refresh / restore); a region ⇒
+          // reload just that container's fetcher (the user's per-component refresh event).
+          if (request.region) {
+            void adapterDispatcher.refresh(surfaceId, request.region)
+          } else {
+            void adapterDispatcher.refreshSurface(surfaceId)
+          }
+        } else if (request.name === 'adapter.loadMore') {
+          void adapterDispatcher.loadMore(surfaceId, request.region ?? '')
+        } else {
+          void adapterDispatcher.page(surfaceId, request.direction, request.region ?? '')
+        }
+      }
+      // Adapter actions never resolve a pending render_ui call; stop here.
+      return
+    }
+
     if (
       payload.action.type === 'submit' &&
       jiraActionDispatcher?.handles(payload.action.actionId)
@@ -770,9 +860,17 @@ async function handleJiraView(jql: string): Promise<void> {
   }
 
   if (result.ok) {
+    // jira-generative-adapter-v1 (FR-004/FR-008): compose a BOUND list surface (rows +
+    // flags read the data model), register its secret-free descriptor with the
+    // dispatcher so refresh / load-more can re-execute it, and push the render frame
+    // carrying the initial data model + descriptor (the renderer seeds + persists them).
+    const bound = buildBoundIssueListSurface(SURFACE_DEFAULT_VIEW, jql, result.data)
+    adapterDispatcher?.register(bound.spec.surfaceId, bound.descriptor, jiraListBindOptions)
     pushRenderToRenderer({
       requestId: randomUUID(),
-      spec: buildDefaultViewSurface(result.data),
+      spec: bound.spec,
+      dataModel: bound.dataModel,
+      descriptor: bound.descriptor,
       target: 'jira'
     })
     return
@@ -832,9 +930,17 @@ async function handleJiraIssueDetail(issueKey: string): Promise<void> {
   }
 
   if (result.ok) {
+    // jira-generative-adapter-v1 (FR-004/FR-020): the detail is a BOUND, refreshable
+    // (pagination 'none') surface — its header reads the single bound issue value, so a
+    // later refresh / post-write push replaces it in place. Register the getIssue
+    // descriptor + push the seed + descriptor with the frame.
+    const bound = buildBoundIssueDetailSurface(SURFACE_ISSUE_DETAIL, result.data)
+    adapterDispatcher?.register(bound.spec.surfaceId, bound.descriptor, jiraDetailBindOptions)
     pushRenderToRenderer({
       requestId: randomUUID(),
-      spec: buildIssueDetailSurface(result.data),
+      spec: bound.spec,
+      dataModel: bound.dataModel,
+      descriptor: bound.descriptor,
       target: 'jira'
     })
     return
@@ -896,6 +1002,17 @@ function registerConfluenceIpcHandlers(): void {
 function pushRenderToRenderer(payload: UiRenderPayload): void {
   if (mainWindow && !mainWindow.isDestroyed()) {
     mainWindow.webContents.send(UiChannel.Render, payload)
+  }
+}
+
+/**
+ * Push a data-model update for a bound surface to the renderer (jira-generative-
+ * adapter-v1, FR-009/FR-010). The AdapterDispatcher's `pushDataModel` sink — guards a
+ * destroyed window exactly like `pushRenderToRenderer`. Carries only non-secret data.
+ */
+function pushDataModelToRenderer(payload: UiDataModelPayload): void {
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send(UiChannel.DataModel, payload)
   }
 }
 
@@ -977,7 +1094,53 @@ function createWindow(): void {
   // pushes + pending-call state. Start it with the window.
   uiBridge = new UiBridge({
     pushRender: pushRenderToRenderer,
-    projectDir: sandboxDir
+    projectDir: sandboxDir,
+    // refreshable-custom-generative-ui-v1 (FR-001/FR-002/FR-003/FR-006): make an agent-composed
+    // surface refreshable IN PLACE. The descriptor is ALREADY validated + secret-screened
+    // (target-matched) by UiBridge. The PRIMARY path registers the AGENT's OWN surface: resolve
+    // the bind options the `dataSource` implies (the SAME source-of-truth the shells use — no
+    // drift, FR-002) and, when the agent's spec is USABLE (non-empty surfaceId + a components
+    // array, FR-001), register the descriptor under the AGENT's `spec.surfaceId`, kick the first
+    // refresh (token attached in main, FR-003), and return the AGENT's spec AS-IS so its custom
+    // layout repaints in place. If the agent supplied no usable spec, FALL BACK to the generic
+    // `{path}`-bound SHELL (FR-006). An unknown `dataSource` (no resolver claims it) registers
+    // nothing → return the agent's spec unchanged, un-refreshable (FR-015). Closes over the
+    // module-scoped `adapterDispatcher` (wired below) so it is live at call time.
+    registerAgentSurface: (descriptor, agentSpec, _target) => {
+      if (!adapterDispatcher) {
+        return { spec: agentSpec, registered: false }
+      }
+      // The register-vs-shell-vs-skip decision is the PURE planAgentSurfaceRegistration
+      // (node-tested with the real resolvers); here we only do the side effects.
+      const plan = planAgentSurfaceRegistration(descriptor, agentSpec)
+      if (plan.register) {
+        adapterDispatcher.register(plan.surfaceId, descriptor, plan.options)
+        void adapterDispatcher.refresh(plan.surfaceId) // FR-003: kick the first refresh.
+        return { spec: plan.spec, registered: true }
+      }
+      return { spec: plan.spec, registered: false }
+    },
+    // refreshable-custom-generative-ui (multi-region): rebind the agent's per-container literal
+    // props to region-scoped `{path}` bindings (PURE rebindAgentSurface), then register each
+    // region with the dispatcher under its OWN descriptor + cursor and kick its first refresh.
+    // Returns the rewritten spec + the literal SEED so UiBridge paints it instantly; `null` when
+    // no binding is usable (UiBridge falls back to the single-region descriptor/literal path).
+    registerAgentSurfaceBindings: (bindings, agentSpec, _target) => {
+      if (!adapterDispatcher) {
+        return null
+      }
+      const result = rebindAgentSurface(agentSpec, bindings)
+      if (!result) {
+        return null
+      }
+      const surfaceId = result.spec.surfaceId
+      for (const region of result.regions) {
+        adapterDispatcher.register(surfaceId, region.descriptor, region.options, region.regionKey)
+        void adapterDispatcher.refresh(surfaceId, region.regionKey) // kick each region's first fetch.
+      }
+      return { spec: result.spec, dataModel: result.dataModel }
+    },
+    pushDataModel: pushDataModelToRenderer
   })
   uiBridge.start()
 
@@ -1009,12 +1172,43 @@ function createWindow(): void {
     pushRender: pushRenderToRenderer
   })
 
+  // Confluence: its own manager (token + cloudId only here, encrypted) serving both the
+  // native panel (IPC) and the MCP tools (bridge). Created BEFORE the adapter dispatcher
+  // so the composite resolver can include the Confluence read resolver.
   confluenceManager = createConfluenceManager(mainWindow)
   confluenceBridge = new ConfluenceBridge({
     socketPath: confluenceBridgeSocketPath(sandboxDir),
     manager: confluenceManager
   })
   confluenceBridge.start()
+
+  // jira-generative-adapter-v1 (FR-009/FR-012): the SHARED adapter dispatcher, wired
+  // with the JIRA resolver (maps a descriptor → jiraManager READ, token in main). It
+  // pushes `updateDataModel` (keyed by surfaceId) on refresh + load-more/pagination and
+  // drives the `loading` flag. Channel-independent: only the resolver + the data-model
+  // push + the UiBridge cancel — never the ptyManager/agentRunner (FR-012/FR-021).
+  // slack-/confluence-generative-adapter-v1 (FR-005): one dispatcher, a COMPOSITE
+  // resolver. The Slack, Jira, and Confluence `dataSource` namespaces are disjoint, so the
+  // descriptor's source selects the panel resolver; the Slack selector is consulted first,
+  // then Confluence, else Jira (an unknown source degrades to a recoverable Jira notice —
+  // never throws). Confluence rides the same append-only (lists) + none (detail) infra.
+  const jiraResolve = jiraAdapterResolver(jiraManager)
+  const slackResolve = slackAdapterResolver(slackManager)
+  const confluenceResolve = confluenceAdapterResolver(confluenceManager)
+  const compositeResolve: AdapterResolver = (descriptor) => {
+    if (slackBindOptionsForSource(descriptor.dataSource) !== null) {
+      return slackResolve(descriptor)
+    }
+    if (confluenceBindOptionsForSource(descriptor.dataSource) !== null) {
+      return confluenceResolve(descriptor)
+    }
+    return jiraResolve(descriptor)
+  }
+  adapterDispatcher = new AdapterDispatcher({
+    resolve: compositeResolve,
+    pushDataModel: pushDataModelToRenderer,
+    cancelActive: () => uiBridge?.cancelActive()
+  })
 
   // Generative-UI foundation v1: the headless `claude -p` runner. A SEPARATE
   // channel from the interactive PTY (FR-008) that reaches the SAME UiBridge via
@@ -1068,6 +1262,7 @@ function createWindow(): void {
     jiraBridge = null
     jiraManager = null
     jiraActionDispatcher = null
+    adapterDispatcher = null
     confluenceBridge?.stop()
     confluenceBridge = null
     confluenceManager = null
@@ -1161,6 +1356,7 @@ app.on('window-all-closed', () => {
   jiraBridge = null
   jiraManager = null
   jiraActionDispatcher = null
+  adapterDispatcher = null
   confluenceBridge?.stop()
   confluenceBridge = null
   confluenceManager = null

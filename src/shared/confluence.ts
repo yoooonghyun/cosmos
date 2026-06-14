@@ -16,6 +16,8 @@
  * every surface branches on the same `Result<T>`/`Page<T>` discipline.
  */
 
+import type { AdapterDescriptor, AdapterQuery } from './adapter'
+
 /* ------------------------------------------------------------------------- *
  * Connection status (shared by the panel + status events)
  * ------------------------------------------------------------------------- */
@@ -241,3 +243,126 @@ export const ConfluenceOp = {
 } as const
 
 export type ConfluenceOpName = (typeof ConfluenceOp)[keyof typeof ConfluenceOp]
+
+/* ------------------------------------------------------------------------- *
+ * Generative-adapter descriptors (confluence-generative-adapter-v1)
+ *
+ * The SECRET-FREE adapter descriptors that capture HOW to refetch a bound
+ * Confluence surface (FR-005/FR-006/FR-007). Mirrors `src/shared/slack.ts`'s
+ * descriptor builders. Each narrows the shared {@link AdapterDescriptor}
+ * `{ dataSource, query }` to one Confluence READ; the `query` carries only
+ * non-secret params + the opaque forward `_links.next` cursor — never a token,
+ * cloudId-derived secret, or the personal-feed CQL (FR-007/FR-018).
+ *
+ * READ-ONLY (FR-017): only the three reads (`defaultFeed`/`searchContent`/
+ * `getPage`) — no write source. `createPage` is the separate
+ * `confluence-create-page-v1` feature and is deliberately NOT an adapter source.
+ * ------------------------------------------------------------------------- */
+
+/**
+ * The Confluence adapter `dataSource` values (FR-006). Each maps 1:1 to a
+ * {@link ConfluenceManager} READ in `confluenceAdapterResolver`:
+ *   defaultFeed   → the personal activity feed (cursor-only — FR-007).
+ *   searchContent → a CQL/text content search.
+ *   getPage       → one page's detail.
+ * Reuses the `ConfluenceOp` read discriminators so the names never drift.
+ */
+export const ConfluenceAdapterSource = {
+  /** Default activity-feed surface → `defaultFeed(cursor?)` (FR-006/FR-007). */
+  DefaultFeed: 'defaultFeed',
+  /** Content/CQL search surface → `searchContent(query, cursor?)` (FR-006). */
+  SearchContent: ConfluenceOp.SearchContent,
+  /** Page-detail surface → `getPage(pageId)` (FR-006). */
+  GetPage: ConfluenceOp.GetPage
+} as const
+
+export type ConfluenceAdapterSourceName =
+  (typeof ConfluenceAdapterSource)[keyof typeof ConfluenceAdapterSource]
+
+/**
+ * The query for a `defaultFeed` descriptor (FR-007). CURSOR-ONLY: it carries NO
+ * CQL and NO feed-mode discriminator — the fixed personal-scope CQL lives ONLY
+ * in `ConfluenceClient.defaultFeed`, preserving `confluence-default-feed-v1`
+ * FR-006/SC-008. Mirrors {@link ConfluenceDefaultFeedParams}.
+ */
+export interface ConfluenceFeedAdapterQuery extends AdapterQuery {
+  /** Opaque forward cursor (`_links.next`-derived); absent on page one. */
+  cursor?: string
+}
+
+/**
+ * The query for a `searchContent` descriptor (FR-006). Non-secret: the search
+ * query (mapped to CQL text by the client) + the opaque forward cursor. Mirrors
+ * {@link ConfluenceSearchParams}.
+ */
+export interface ConfluenceSearchAdapterQuery extends AdapterQuery {
+  /** The search query the surface reads (non-secret). */
+  query: string
+  /** Opaque forward cursor (`_links.next`-derived); absent on page one. */
+  cursor?: string
+}
+
+/**
+ * The query for a `getPage` descriptor (FR-006). Non-secret: the page id to
+ * re-read. Mirrors {@link ConfluenceGetPageParams}. No cursor — the detail is a
+ * single value (refresh-only, `pagination: 'none'`).
+ */
+export interface ConfluencePageAdapterQuery extends AdapterQuery {
+  /** The page id whose detail the surface reads (non-secret). */
+  pageId: string
+}
+
+/**
+ * A Confluence adapter descriptor — the {@link AdapterDescriptor} narrowed to
+ * Confluence's three READ sources (FR-005/FR-006). Discriminated by `dataSource`.
+ * Secret-free (FR-005/FR-007/FR-018).
+ */
+export type ConfluenceAdapterDescriptor =
+  | (AdapterDescriptor & {
+      dataSource: typeof ConfluenceAdapterSource.DefaultFeed
+      query: ConfluenceFeedAdapterQuery
+    })
+  | (AdapterDescriptor & {
+      dataSource: typeof ConfluenceAdapterSource.SearchContent
+      query: ConfluenceSearchAdapterQuery
+    })
+  | (AdapterDescriptor & {
+      dataSource: typeof ConfluenceAdapterSource.GetPage
+      query: ConfluencePageAdapterQuery
+    })
+
+/**
+ * Build a secret-free `defaultFeed` descriptor for a bound activity-feed surface
+ * (FR-006/FR-007). Carries ONLY the optional opaque cursor — no CQL, no token.
+ */
+export function confluenceFeedDescriptor(cursor?: string): ConfluenceAdapterDescriptor {
+  return {
+    dataSource: ConfluenceAdapterSource.DefaultFeed,
+    query: { ...(cursor ? { cursor } : {}) }
+  }
+}
+
+/**
+ * Build a secret-free `searchContent` descriptor for a bound search-results
+ * surface (FR-006). Carries only the (non-secret) query + optional cursor.
+ */
+export function confluenceSearchDescriptor(
+  query: string,
+  cursor?: string
+): ConfluenceAdapterDescriptor {
+  return {
+    dataSource: ConfluenceAdapterSource.SearchContent,
+    query: { query, ...(cursor ? { cursor } : {}) }
+  }
+}
+
+/**
+ * Build a secret-free `getPage` descriptor for a bound page-detail surface
+ * (FR-006). Carries only the (non-secret) page id — never a token.
+ */
+export function confluencePageDescriptor(pageId: string): ConfluenceAdapterDescriptor {
+  return {
+    dataSource: ConfluenceAdapterSource.GetPage,
+    query: { pageId }
+  }
+}

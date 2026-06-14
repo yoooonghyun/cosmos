@@ -16,7 +16,8 @@
  *   R->M  renderer sends to main process (ipcRenderer.send / invoke)
  */
 
-import type { UpdateComponentsPayload } from '@a2ui-sdk/types/0.9'
+import type { UpdateComponentsPayload, UpdateDataModelPayload } from '@a2ui-sdk/types/0.9'
+import type { AdapterBinding, AdapterDescriptor } from './adapter'
 
 /**
  * Channel name constants. Centralized so main, preload, and renderer never
@@ -192,7 +193,15 @@ export const UiChannel = {
   /** M->R: push an A2UI surface to render in the panel. FR-004. */
   Render: 'ui:render',
   /** R->M: return the user's interaction (action or cancel) for a surface. FR-006. */
-  Action: 'ui:action'
+  Action: 'ui:action',
+  /**
+   * M->R: push a DATA-MODEL update (not a full surface) to a bound surface
+   * (jira-generative-adapter-v1, FR-009/FR-010). The AdapterDispatcher emits this on
+   * a refresh trigger or a reserved `adapter.*` pagination action; the renderer
+   * applies it to the surface named by `surfaceId`. Shared by all four generative
+   * panels (panel-agnostic). NO secret (FR-021).
+   */
+  DataModel: 'ui:dataModel'
 } as const
 
 export type UiChannelName = (typeof UiChannel)[keyof typeof UiChannel]
@@ -233,6 +242,25 @@ export const DEFAULT_UI_RENDER_TARGET: UiRenderTarget = 'generated-ui'
 export type A2uiSurfaceUpdate = UpdateComponentsPayload
 
 /**
+ * M->R. A data-model update for a bound surface (jira-generative-adapter-v1,
+ * FR-009/FR-010). Typed alias over the SDK's 0.9 `UpdateDataModelPayload`
+ * (`{ surfaceId, path?, value? }`) so cosmos and the SDK never disagree on the
+ * shape. The AdapterDispatcher pushes one (or a batch) on refresh/pagination:
+ *
+ *  - `surfaceId` — which bound surface to apply to (the dispatcher KEYS pushes by it,
+ *    FR-010). Validated non-empty at the main boundary (FR-022).
+ *  - `path` — RFC 6901 JSON Pointer; defaults to `/` (root). The dispatcher writes
+ *    the FULL accumulated list at the bound list path for append (NEVER the `-`
+ *    append token, FR-015) and the flags (`/loading`, `/hasMore`, …) at their keys.
+ *  - `value` — the new value at `path`; omitted means "remove" (SDK semantics).
+ *
+ * Carries ONLY non-secret data (FR-021). Validated by `validateUiDataModel`; a
+ * malformed payload is warned + ignored at the boundary and safely ignored at the
+ * renderer — never a crash (FR-022/FR-023).
+ */
+export type UiDataModelPayload = UpdateDataModelPayload
+
+/**
  * M->R. Push a surface to the Generated-UI panel. FR-004, FR-012.
  *
  * `requestId` is minted by the main-process bridge per `render_ui` call so the
@@ -250,6 +278,34 @@ export interface UiRenderPayload {
    * originating render frame omits a target (backward-compatible). NO secret.
    */
   target: UiRenderTarget
+  /**
+   * The bound surface's INITIAL data-model seed (jira-generative-adapter-v1,
+   * FR-001/FR-003). Present only for a bound surface: an ordered list of
+   * `{ surfaceId, path?, value? }` pushes the renderer applies right AFTER
+   * createSurface/updateComponents so the surface paints its first page of bound data
+   * + flags (`/loading=false`, `/hasMore`, …) without a separate round-trip. Absent
+   * for a non-bound surface. NO secret (FR-021).
+   */
+  dataModel?: UiDataModelPayload[]
+  /**
+   * The bound surface's SECRET-FREE adapter descriptor (jira-generative-adapter-v1,
+   * FR-006). Present only for a bound surface; the renderer stores it on the tab so a
+   * later refresh/restore can re-execute it, and persists it in the session snapshot
+   * beside the spec. Absent for a non-bound surface. Carries no token/secret (FR-007).
+   *
+   * For a MULTI-region surface this is omitted in favor of {@link bindings}; a
+   * single-region surface keeps using `descriptor`.
+   */
+  descriptor?: AdapterDescriptor
+  /**
+   * refreshable-custom-generative-ui (multi-region): the per-region
+   * {@link AdapterBinding} list main rebound the surface against — one entry per
+   * data-bearing container, each with its OWN secret-free descriptor. The renderer stores
+   * it on the tab and persists it in the session snapshot beside the spec so a restore
+   * re-registers EVERY region. Present only for a multi-region bound surface; a
+   * single-region surface uses {@link descriptor} instead. No token/secret (FR-007).
+   */
+  bindings?: AdapterBinding[]
 }
 
 /**
@@ -294,6 +350,14 @@ export interface UiApi {
   onRender(listener: (payload: UiRenderPayload) => void): () => void
   /** R->M. Return the user's interaction for a surface. FR-006, FR-009. */
   sendAction(payload: UiActionPayload): void
+  /**
+   * M->R. Subscribe to data-model updates for bound surfaces
+   * (jira-generative-adapter-v1, FR-009/FR-010). The renderer applies each to the
+   * surface named by `surfaceId`. Returns an unsubscribe fn so the panel can detach
+   * on unmount (avoids leaks / double-binding on HMR). NOTE: a NEW preload method —
+   * a full `npm run dev` restart is required (HMR alone leaves it `not a function`).
+   */
+  onDataModel(listener: (payload: UiDataModelPayload) => void): () => void
 }
 
 /* ------------------------------------------------------------------------- *
@@ -760,8 +824,28 @@ export type SessionChannelName =
  * The current on-disk snapshot schema version (session-persistence-v1, FR-002).
  * Bump on any breaking shape change; main treats a non-matching version as
  * unreadable → warn + clean empty session (FR-002/FR-005).
+ *
+ * v3 (panel-refresh-v1): the meaning of a persisted bound surface changed. A
+ * descriptor-bearing surface is now always a `{path}`-BOUND shell (OQ-5 main-composes),
+ * never the agent's literal-prop spec. A pre-v3 snapshot can hold a literal-prop surface
+ * paired with a descriptor; restored under the new code that combination enables the panel
+ * refresh control yet cannot repaint (literal props ignore `updateDataModel`). Bumping
+ * invalidates those stale snapshots so they fall back to a clean session instead.
+ *
+ * v4 (refreshable-custom-generative-ui-v1): the rule flipped again — a descriptor-bearing
+ * persisted surface is now the AGENT's OWN custom spec, re-registered under the agent's OWN
+ * `spec.surfaceId` on restore (NOT a generic shell). A v3 snapshot was written under the
+ * shell-replacement rule, so its descriptor pairs with a shell spec whose surfaceId is the
+ * shell's, not the agent's; restored under v4 it would be wrongly re-registered as the
+ * agent's own bound layout. Bumping invalidates v3 → clean session (FR-013).
+ *
+ * v5 (refreshable-custom-generative-ui multi-region): a partitioned custom surface now
+ * persists per-container {@link AdapterBinding}s ({@link GenerativeTabSnapshot.bindings})
+ * instead of a single surface-wide descriptor, and its persisted spec is the REBOUND
+ * (`{path}`, region-scoped) layout. A v4 snapshot has neither field nor the rebound spec, so
+ * restoring it under v5's multi-region re-registration would mis-key regions. Bump → clean.
  */
-export const SESSION_SCHEMA_VERSION = 1
+export const SESSION_SCHEMA_VERSION = 5
 
 /**
  * One terminal tab's persisted state (FR-008/FR-018/FR-019/FR-021).
@@ -828,6 +912,26 @@ export interface GenerativeTabSnapshot {
    * `composed: false` view is not persisted as a surface (FR-012/FR-015).
    */
   composed?: true
+  /**
+   * The bound surface's SECRET-FREE adapter descriptor, persisted BESIDE the view
+   * spec so a restored surface can re-execute it for fresh data
+   * (jira-generative-adapter-v1, FR-006). Present ONLY when the persisted surface is
+   * a bound surface (it accompanies `surface`); absent for a non-bound composed
+   * surface. Carries no token/secret — the validator strips it to `{ dataSource,
+   * query }` only (FR-007/FR-021). Schema bump from v1 → v2 added this field.
+   *
+   * For a MULTI-region surface this is absent in favor of {@link bindings}.
+   */
+  descriptor?: AdapterDescriptor
+  /**
+   * refreshable-custom-generative-ui (multi-region): the per-region
+   * {@link AdapterBinding} list, persisted beside the view spec so a restored CUSTOM
+   * partitioned surface re-registers EVERY region's fetcher for fresh data. Present ONLY
+   * when the persisted surface is a multi-region bound surface; a single-region surface
+   * uses {@link descriptor}. Secret-free — each binding's descriptor is stripped to
+   * `{ dataSource, query }` by the validator (FR-007/FR-021).
+   */
+  bindings?: AdapterBinding[]
 }
 
 /**

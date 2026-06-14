@@ -21,6 +21,8 @@ import { useEffect } from 'react'
 import { A2UIProvider } from '@a2ui-sdk/react/0.9'
 import { Sparkles } from 'lucide-react'
 import { PanelTabStrip, type PanelTab } from './PanelTabStrip'
+import { PanelRefreshButton } from './PanelRefreshButton'
+import { panelRefreshInputsFor } from './panelRefreshLogic'
 import { PanelFooter } from './PanelFooter'
 import { ActiveTabSurface } from './ActiveTabSurface'
 import { PromptComposer } from './PromptComposer'
@@ -78,6 +80,9 @@ export function GeneratedUiPanel({ active }: { active: boolean }): React.JSX.Ele
   }))
 
   const activeStripTab = stripTabs.find((t) => t.id === activeTabId) ?? null
+  // panel-refresh-v1 (Goal 1): the shared refresh control, fed the active tab's surface
+  // slice. A generated-UI surface composed without a descriptor derives to disabled (OQ-2).
+  const refreshInputs = panelRefreshInputsFor(activeTab)
 
   return (
     <section
@@ -91,6 +96,12 @@ export function GeneratedUiPanel({ active }: { active: boolean }): React.JSX.Ele
         onClose={closeTab}
         onNewTab={newTab}
         onRename={(id, label) => update(id, { label, renamed: true, untitled: false })}
+        trailing={
+          <PanelRefreshButton
+            activeTab={refreshInputs.activeTab}
+            requestId={refreshInputs.requestId}
+          />
+        }
         ariaLabel="Generated UI tabs"
       />
 

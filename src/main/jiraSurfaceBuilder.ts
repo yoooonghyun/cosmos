@@ -17,21 +17,30 @@
  * token (FR-015/FR-017).
  */
 
-import type { A2uiSurfaceUpdate } from '../shared/ipc'
+import type { A2uiSurfaceUpdate, UiDataModelPayload } from '../shared/ipc'
 import type {
   JiraComment,
   JiraIssueDetail,
   JiraIssueSummary,
   JiraPage
 } from '../shared/jira'
+import {
+  JiraAdapterSource,
+  jiraSearchDescriptor,
+  jiraGetIssueDescriptor,
+  type JiraAdapterDescriptor
+} from '../shared/jira'
+import { JIRA_DETAIL_PATH, JIRA_LIST_PATH, jiraIssueRow } from './jiraAdapter'
 
 /** An A2UI 0.9 component definition: an id + a `component` discriminator + props. */
 type Component = { id: string; component: string } & Record<string, unknown>
 
 /** Surface ids — stable per surface kind (requestId, minted in main, is freshness). */
 const SURFACE_ISSUE_LIST = 'jira-issue-list'
-const SURFACE_ISSUE_DETAIL = 'jira-issue-detail'
-const SURFACE_DEFAULT_VIEW = 'jira-default-view'
+/** The issue-detail surfaceId (exported so main registers the bound surface under it). */
+export const SURFACE_ISSUE_DETAIL = 'jira-issue-detail'
+/** The default-view / JQL-search list surfaceId (exported for bound registration). */
+export const SURFACE_DEFAULT_VIEW = 'jira-default-view'
 const SURFACE_CREATE_ISSUE = 'jira-create-issue'
 const SURFACE_EDIT_ISSUE = 'jira-edit-issue'
 
@@ -152,6 +161,236 @@ function issueListSurface(
     }
   ]
   return { surfaceId, components }
+}
+
+/* ------------------------------------------------------------------------- *
+ * BOUND surfaces (jira-generative-adapter-v1) — live, refreshable, paginated
+ *
+ * A bound surface carries `{path}` bindings instead of literal data props, plus an
+ * INITIAL data-model seed (the first page + flags) and a SECRET-FREE descriptor for
+ * re-execution. The catalog `IssueList`/`TicketCard` read the bound list + flags;
+ * the AdapterDispatcher pushes fresh `updateDataModel` on refresh / load-more.
+ * ------------------------------------------------------------------------- */
+
+/** A composed BOUND surface: the view spec + its initial data model + its descriptor. */
+export interface JiraBoundSurface {
+  /** The `{path}`-bound A2UI surface spec (data-free; rows/flags read the data model). */
+  spec: A2uiSurfaceUpdate
+  /** The initial data-model seed (first page + `/loading`/`/hasMore`) — FR-001/FR-003. */
+  dataModel: UiDataModelPayload[]
+  /** The secret-free descriptor for re-execution (refresh / pagination) — FR-006/FR-008. */
+  descriptor: JiraAdapterDescriptor
+}
+
+/**
+ * Compose a BOUND issue-list surface for the DEFAULT view / JQL search (FR-004/FR-008).
+ * The `IssueList` root reads its rows from the bound list path + the `loading`/`hasMore`
+ * flags (it renders its own load-more footer, design §5.1). The initial data model seeds
+ * the first page; the descriptor (`searchIssues` + the composed JQL) drives refresh +
+ * load-more. `surfaceId` distinguishes the default view from a JQL search.
+ */
+export function buildBoundIssueListSurface(
+  surfaceId: string,
+  jql: string,
+  page: JiraPage<JiraIssueSummary>
+): JiraBoundSurface {
+  const id = makeIds()
+  const root = id('root')
+  const spec: A2uiSurfaceUpdate = {
+    surfaceId,
+    components: [
+      {
+        id: root,
+        component: 'IssueList',
+        // FR-001: rows + flags are BOUND (data-free spec). The catalog component reads
+        // these paths via `useDataBinding`; the dispatcher updates them in place.
+        issues: { path: JIRA_LIST_PATH },
+        loading: { path: '/loading' },
+        hasMore: { path: '/hasMore' }
+      }
+    ]
+  }
+  return {
+    spec,
+    dataModel: listSeed(surfaceId, page),
+    descriptor: jiraSearchDescriptor(jql, undefined)
+  }
+}
+
+/**
+ * panel-refresh-v1 (OQ-5 = main-composes): build the DATA-FREE bound SHELL surface for a
+ * Jira `dataSource`, so main can push a `{path}`-bound surface (instead of the agent's
+ * literal-prop spec) and let the AdapterDispatcher's first `refresh` paint it in place.
+ * `searchIssues` → the bound IssueList; `getIssue` → the bound detail tree. Returns `null`
+ * for a non-Jira source. The surfaceId is stable per source.
+ */
+export function buildJiraBoundShell(dataSource: string): A2uiSurfaceUpdate | null {
+  if (dataSource === JiraAdapterSource.SearchIssues) {
+    return {
+      surfaceId: SURFACE_DEFAULT_VIEW,
+      components: [
+        {
+          id: 'root',
+          component: 'IssueList',
+          issues: { path: JIRA_LIST_PATH },
+          loading: { path: '/loading' },
+          hasMore: { path: '/hasMore' }
+        }
+      ]
+    }
+  }
+  if (dataSource === JiraAdapterSource.GetIssue) {
+    return boundIssueDetailShellSpec(SURFACE_ISSUE_DETAIL)
+  }
+  return null
+}
+
+/** The data-free bound issue-DETAIL tree (mirrors `buildBoundIssueDetailSurface`'s spec). */
+function boundIssueDetailShellSpec(surfaceId: string): A2uiSurfaceUpdate {
+  const id = makeIds()
+  const components: Component[] = []
+  const rootChildren: string[] = []
+
+  const header = id('ticket')
+  components.push({
+    id: header,
+    component: 'TicketCard',
+    issue: { path: JIRA_DETAIL_PATH }
+  })
+  rootChildren.push(header)
+
+  const descLabel = id('desc-label')
+  components.push({ id: descLabel, component: 'Text', variant: 'label', text: 'Description' })
+  const descBody = id('desc-body')
+  components.push({
+    id: descBody,
+    component: 'Text',
+    variant: 'body',
+    text: { path: `${JIRA_DETAIL_PATH}/description` }
+  })
+  rootChildren.push(descLabel, descBody)
+
+  const comments = id('comments')
+  components.push({
+    id: comments,
+    component: 'CommentList',
+    comments: { path: `${JIRA_DETAIL_PATH}/comments` }
+  })
+  rootChildren.push(comments)
+
+  const transition = id('transition')
+  components.push({
+    id: transition,
+    component: 'TransitionPicker',
+    issueKey: { path: `${JIRA_DETAIL_PATH}/key` },
+    availableTransitions: { path: `${JIRA_DETAIL_PATH}/availableTransitions` }
+  })
+  rootChildren.push(transition)
+
+  const addComment = id('add-comment')
+  components.push({
+    id: addComment,
+    component: 'AddCommentControl',
+    issueKey: { path: `${JIRA_DETAIL_PATH}/key` }
+  })
+  rootChildren.push(addComment)
+
+  const root = id('root')
+  components.push({ id: root, component: 'Column', children: rootChildren })
+  return { surfaceId, components }
+}
+
+/** The initial data-model seed for a bound list surface (first page + flags). */
+function listSeed(surfaceId: string, page: JiraPage<JiraIssueSummary>): UiDataModelPayload[] {
+  return [
+    { surfaceId, path: JIRA_LIST_PATH, value: page.items.map(jiraIssueRow) },
+    { surfaceId, path: '/loading', value: false },
+    { surfaceId, path: '/hasMore', value: page.nextCursor !== undefined }
+  ]
+}
+
+/**
+ * Compose a BOUND issue-DETAIL surface (FR-004/FR-008/FR-020). The detail has NO
+ * pagination ('none') but is refreshable (FR-013): EVERY display component binds to a
+ * sub-path of the single bound issue value at {@link JIRA_DETAIL_PATH} (`/issue`), so a
+ * refresh / post-write `updateDataModel` of `/issue` re-renders the whole detail in
+ * place — no view re-compose (FR-009/FR-014). Child order follows the static detail
+ * (header card → description → comments → transition → add-comment). Manual refresh is now
+ * a panel-chrome control (panel-refresh-v1, FR-006), not an in-card button. The
+ * transition + add-comment controls read `issueKey`/`availableTransitions` from the
+ * bound issue and still own their OWN input binding + emit the `jira.*` write actions
+ * (writes unchanged — SC-008). Seed = the issue + `/loading=false`; descriptor =
+ * `getIssue` + issueKey.
+ */
+export function buildBoundIssueDetailSurface(
+  surfaceId: string,
+  detail: JiraIssueDetail
+): JiraBoundSurface {
+  const id = makeIds()
+  const components: Component[] = []
+  const rootChildren: string[] = []
+
+  // Header: the issue as a TicketCard (reads the whole bound issue value). Refresh is now
+  // a panel-chrome control (panel-refresh-v1, FR-006) — no in-card RefreshButton.
+  const header = id('ticket')
+  components.push({
+    id: header,
+    component: 'TicketCard',
+    issue: { path: JIRA_DETAIL_PATH }
+  })
+  rootChildren.push(header)
+
+  // Description (label + body) — the body binds to the bound issue's description.
+  const descLabel = id('desc-label')
+  components.push({ id: descLabel, component: 'Text', variant: 'label', text: 'Description' })
+  const descBody = id('desc-body')
+  components.push({
+    id: descBody,
+    component: 'Text',
+    variant: 'body',
+    text: { path: `${JIRA_DETAIL_PATH}/description` }
+  })
+  rootChildren.push(descLabel, descBody)
+
+  // Comments — bound to the issue's comments array.
+  const comments = id('comments')
+  components.push({
+    id: comments,
+    component: 'CommentList',
+    comments: { path: `${JIRA_DETAIL_PATH}/comments` }
+  })
+  rootChildren.push(comments)
+
+  // Transition control (reads issueKey + transitions from the bound issue; emits jira.transition).
+  const transition = id('transition')
+  components.push({
+    id: transition,
+    component: 'TransitionPicker',
+    issueKey: { path: `${JIRA_DETAIL_PATH}/key` },
+    availableTransitions: { path: `${JIRA_DETAIL_PATH}/availableTransitions` }
+  })
+  rootChildren.push(transition)
+
+  // Add-comment control (reads issueKey from the bound issue; emits jira.comment).
+  const addComment = id('add-comment')
+  components.push({
+    id: addComment,
+    component: 'AddCommentControl',
+    issueKey: { path: `${JIRA_DETAIL_PATH}/key` }
+  })
+  rootChildren.push(addComment)
+
+  const root = id('root')
+  components.push({ id: root, component: 'Column', children: rootChildren })
+
+  return {
+    spec: { surfaceId, components },
+    dataModel: [
+      { surfaceId, path: JIRA_DETAIL_PATH, value: detail },
+      { surfaceId, path: '/loading', value: false }
+    ],
+    descriptor: jiraGetIssueDescriptor(detail.key)
+  }
 }
 
 /* ------------------------------------------------------------------------- *

@@ -65,6 +65,15 @@ export interface PanelTabStripProps {
    * rename affordance.
    */
   onRename?: (tabId: string, label: string) => void
+  /**
+   * panel-refresh-v1 (design §1/§7): an optional chrome node rendered in the trailing,
+   * NON-SCROLLING cluster, immediately LEFT of the pinned `+` (DOM + Tab order:
+   * `…tabs → trailing → +`). The strip owns the cluster geometry; the node carries its own
+   * `border-l`/`rounded-none` so the cluster reads as one segmented unit. Used to mount the
+   * shared `PanelRefreshButton`. It is a sibling of the `role="tablist"` list, NOT a
+   * `role="tab"`, so it never interferes with the roving-tabindex tab navigation.
+   */
+  trailing?: React.ReactNode
   /** Accessible name for the tablist, e.g. "Slack tabs" (design §7). */
   ariaLabel: string
 }
@@ -88,6 +97,7 @@ export function PanelTabStrip({
   onClose,
   onNewTab,
   onRename,
+  trailing,
   ariaLabel
 }: PanelTabStripProps): React.JSX.Element {
   const listRef = useRef<HTMLDivElement | null>(null)
@@ -396,6 +406,10 @@ export function PanelTabStrip({
           )
         })}
       </div>
+
+      {/* panel-refresh-v1 (design §1): the optional trailing chrome node (the panel refresh
+          control), pinned LEFT of `+` in the same non-scrolling cluster. Never scrolls. */}
+      {trailing}
 
       {/* Pinned trailing `+` — never scrolls (design §4.1). Always present, incl. the
           zero-tab state (FR-005/FR-016). */}

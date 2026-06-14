@@ -1,5 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import {
+  buildBoundIssueDetailSurface,
+  buildBoundIssueListSurface,
   buildCreateIssueSurface,
   buildDefaultViewSurface,
   buildEditIssueSurface,
@@ -8,6 +10,8 @@ import {
   buildNoticeSurface,
   formatCommentTime
 } from './jiraSurfaceBuilder'
+import { JIRA_DETAIL_PATH, JIRA_LIST_PATH, jiraIssueRow } from './jiraAdapter'
+import { JiraAdapterSource } from '../shared/jira'
 import type { JiraIssueDetail, JiraIssueSummary, JiraPage } from '../shared/jira'
 
 /* Jira generative-UI v2 — pure surface builder emitting the JIRA CUSTOM catalog. */
@@ -263,6 +267,108 @@ describe('buildEditIssueSurface (Jira write-extend v1, FR-018, design §4)', () 
     const notice = find(comps, (c) => c.component === 'Notice')!
     expect(children[0]).toBe(notice.id)
     expect(notice.noticeKind).toBe('write_not_authorized')
+  })
+})
+
+/* jira-generative-adapter-v1 — BOUND surfaces: `{path}`-bound (data-free) spec + an
+ * initial data-model seed + a secret-free descriptor. Pattern per FR: happy path; the
+ * missing-optional (no nextCursor → hasMore:false); the no-secret invariant (FR-017). */
+
+function isBinding(v: unknown): v is { path: string } {
+  return typeof v === 'object' && v !== null && typeof (v as { path?: unknown }).path === 'string'
+}
+
+describe('buildBoundIssueListSurface (FR-001/FR-004/FR-008)', () => {
+  const page: JiraPage<JiraIssueSummary> = {
+    items: [{ key: 'PROJ-1', summary: 'A', statusName: 'To Do', statusCategory: 'todo' }],
+    nextCursor: 'c2'
+  }
+
+  it('emits an IssueList root whose rows + flags are {path} bindings (data-free spec)', () => {
+    const { spec } = buildBoundIssueListSurface('jira-default-view', 'assignee = currentUser()', page)
+    expect(spec.surfaceId).toBe('jira-default-view')
+    const list = find(spec.components as Component[], (c) => c.component === 'IssueList')!
+    expect(list.issues).toEqual({ path: JIRA_LIST_PATH })
+    expect(list.loading).toEqual({ path: '/loading' })
+    expect(list.hasMore).toEqual({ path: '/hasMore' })
+    // No literal row data leaked into the spec (it lives only in the data model).
+    expect(isBinding(list.issues)).toBe(true)
+  })
+
+  it('seeds the initial data model: first page rows + /loading=false + /hasMore (FR-003)', () => {
+    const { dataModel } = buildBoundIssueListSurface('jira-default-view', 'x', page)
+    expect(dataModel).toEqual([
+      { surfaceId: 'jira-default-view', path: JIRA_LIST_PATH, value: [jiraIssueRow(page.items[0])] },
+      { surfaceId: 'jira-default-view', path: '/loading', value: false },
+      { surfaceId: 'jira-default-view', path: '/hasMore', value: true }
+    ])
+  })
+
+  it('seeds hasMore:false when the page has no nextCursor (missing optional, no error)', () => {
+    const { dataModel } = buildBoundIssueListSurface('jira-default-view', 'x', { items: [] })
+    const hasMore = dataModel.find((d) => d.path === '/hasMore')!
+    expect(hasMore.value).toBe(false)
+  })
+
+  it('carries the searchIssues descriptor (secret-free) for re-execution (FR-006/FR-008)', () => {
+    const { descriptor } = buildBoundIssueListSurface('jira-default-view', 'project = PROJ', page)
+    expect(descriptor.dataSource).toBe(JiraAdapterSource.SearchIssues)
+    expect((descriptor.query as Record<string, unknown>).jql).toBe('project = PROJ')
+    expect(JSON.stringify(descriptor)).not.toMatch(/Bearer|accessToken|refreshToken|token/i)
+  })
+})
+
+describe('buildBoundIssueDetailSurface (FR-009/FR-013/FR-014/FR-020)', () => {
+  it('binds EVERY display value to a sub-path of the single bound issue value', () => {
+    const { spec } = buildBoundIssueDetailSurface('jira-issue-detail', detailBase)
+    expect(spec.surfaceId).toBe('jira-issue-detail')
+    const comps = spec.components as Component[]
+
+    const card = find(comps, (c) => c.component === 'TicketCard')!
+    expect(card.issue).toEqual({ path: JIRA_DETAIL_PATH })
+    // panel-refresh-v1 (FR-006): refresh moved to the panel chrome — the detail card no
+    // longer emits an in-card `refreshable`/`loading` RefreshButton.
+    expect(card.refreshable).toBeUndefined()
+    expect(card.loading).toBeUndefined()
+
+    const body = byComponent(comps, 'Text').find((t) => isBinding(t.text))!
+    expect(body.text).toEqual({ path: `${JIRA_DETAIL_PATH}/description` })
+
+    const comments = find(comps, (c) => c.component === 'CommentList')!
+    expect(comments.comments).toEqual({ path: `${JIRA_DETAIL_PATH}/comments` })
+
+    const picker = find(comps, (c) => c.component === 'TransitionPicker')!
+    expect(picker.issueKey).toEqual({ path: `${JIRA_DETAIL_PATH}/key` })
+    expect(picker.availableTransitions).toEqual({ path: `${JIRA_DETAIL_PATH}/availableTransitions` })
+
+    const addComment = find(comps, (c) => c.component === 'AddCommentControl')!
+    expect(addComment.issueKey).toEqual({ path: `${JIRA_DETAIL_PATH}/key` })
+  })
+
+  it('seeds the whole issue at /issue + /loading=false (FR-003)', () => {
+    const { dataModel } = buildBoundIssueDetailSurface('jira-issue-detail', detailBase)
+    expect(dataModel).toEqual([
+      { surfaceId: 'jira-issue-detail', path: JIRA_DETAIL_PATH, value: detailBase },
+      { surfaceId: 'jira-issue-detail', path: '/loading', value: false }
+    ])
+  })
+
+  it('carries the getIssue descriptor (secret-free) keyed on the issue (FR-006/FR-008)', () => {
+    const { descriptor } = buildBoundIssueDetailSurface('jira-issue-detail', detailBase)
+    expect(descriptor.dataSource).toBe(JiraAdapterSource.GetIssue)
+    expect((descriptor.query as Record<string, unknown>).issueKey).toBe('PROJ-1')
+  })
+
+  it('carries no token/secret in the bound spec or descriptor (FR-017)', () => {
+    const bound = buildBoundIssueDetailSurface('jira-issue-detail', detailBase)
+    expect(JSON.stringify(bound)).not.toMatch(/Bearer|accessToken|refreshToken/)
+  })
+
+  it('uses only jira-catalog component types (incl. Column/Text passthroughs)', () => {
+    const comps = buildBoundIssueDetailSurface('jira-issue-detail', detailBase).spec.components as Component[]
+    for (const c of comps) {
+      expect(JIRA_CATALOG_TYPES.has(c.component)).toBe(true)
+    }
   })
 })
 

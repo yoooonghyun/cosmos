@@ -6,10 +6,52 @@ For the authoritative design see `docs/ARCHITECTURE.md`.
 
 ## In progress
 
-_None._
+- [ ] **Confirm the `UiBridge.settle` null-deref crash is gone after a CLEAN `npm run dev` restart**
+  (bug `jira-refreshable-detail-nav-crash-and-empty-v1`, Defect A). The fix IS in the compiled
+  `out/main/index.js` (the `if (!call) return` guard + captured-`call` settle; `settle` is now ~line
+  1050). A crash re-reported on 2026-06-14 still showed the OLD stack (`settle` at `index.js:966`,
+  `onMessage` at `:958`) → it came from a STALE electron main process that started before the
+  rebuild (electron-vite main HMR can leave a zombie). Kill the running dev server and relaunch, then
+  re-run kanban → ticket detail → Back and confirm no uncaught exception.
 
 ## Next
 
+- [ ] **Confluence generated-UI list → page detail on click** (`/sdd`, requested 2026-06-14): clicking
+  a document row in a Confluence gen-UI list opens that page's detail in place (the Jira ticket-detail
+  precedent: a renderer-local nav action → `confluence:requestPageDetail` → `getPage` →
+  unsolicited `target:'confluence'` frame into the active tab + a "← Back" row restoring the list).
+- [ ] **Loading skeleton UI** (requested 2026-06-14): show a skeleton placeholder while a surface /
+  list is loading (in place of blank/spinner-only), across the generative panels.
+
+- [ ] **Wire a descriptor-emitting compose path for the generative adapter** (the seam flagged by all
+  three adapter cycles): the bound builders / resolvers / catalogs are built + unit-tested, but no live
+  trigger yet composes a *bound* surface carrying its `{dataSource,query}` descriptor — surfaces are
+  still composed agent-side (`render_*_ui`) with literal data, so refresh / load-more / detail-refresh
+  cannot fire at runtime. Decide + build the compose path (e.g. extend `render_*_ui` to emit the bound
+  spec + descriptor, or a native main compose trigger) so `AdapterDispatcher` re-execution actually
+  runs end-to-end. Until then the adapter is dormant. See `docs/ARCHITECTURE.md` §4g "Known seam".
+- [ ] Manual GUI verification of the **generative adapter** (Jira → Slack → Confluence) once the
+  compose path above exists: a composed surface refreshes its data on tab restore / panel
+  re-activation / explicit refresh without re-composing the view; append "load more" grows the bound
+  list (Slack/Confluence opaque forward cursor; Jira list); Jira page-replace prev/next where
+  applicable; the `loading` flag spins only the active control with rows kept (`aria-busy`, no skeleton
+  flash); empty/last-page hides load-more; fetch error shows a recoverable Notice above un-corrupted
+  prior data; no secrets in any descriptor / data model / payload. Builders + dispatch logic locked by
+  node tests (`jira/slack/confluenceAdapter.test.ts`, `*SurfaceBuilder.test.ts`, `dataModelApply`);
+  the bound renderer was NOT live-exercised (no composing trigger yet).
+- [ ] Manual GUI verification of the **multi-region kanban refresh** (`refreshable-custom-generative-ui`
+  multi-region) via `npm run dev`: have the agent compose a partitioned Jira board (one bound column per
+  status), move a card to a different status server-side (e.g. CSMS-6 `To Do → In Review`), hit the panel
+  refresh, and confirm the card moves to its new column in place (no re-compose); confirm an EMPTY column
+  still refreshes (its identity comes from its narrowed JQL, not its rows). Locked by node tests
+  (`specRebinder.test.ts` + multi-region `adapterDispatcher.test.ts`) but the per-region fan-out was NOT
+  live-exercised.
+- [ ] Manual verification of the **bindings-first teaching** (`bindings-first-generative-ui-v1`,
+  descriptions-only) via `npm run dev`: confirm the agent now composes a data surface with LITERAL
+  seed rows + a declared `binding` per data container (not hand-authored `{path}` props) and the
+  surface paints instantly then refreshes in place, across Jira/Slack/Confluence/generic. The
+  mechanism + the no-binding dev warning are locked by node tests (`dataBearingWarning.test.ts`,
+  `uiBridge.test.ts`); only the model's adherence to the reframed tool descriptions needs a live run.
 - [ ] Manual GUI verification of **composer send animation v1** + **unified tab naming** via
   `npm run dev` (renderer-only, HMR is enough — but the StrictMode counter behavior only manifests in
   dev): in all four generative panels a successful Send grows-and-vanishes the composer (`scale-[2.6]`
@@ -130,6 +172,72 @@ _None._
 
 ## Done
 
+- [x] **Jira refreshable detail-nav crash + empty board** (bug
+  `jira-refreshable-detail-nav-crash-and-empty-v1`) — two defects on the now-refreshable Jira
+  generated UI (kanban). **A (main crash):** `UiBridge.settle` null-deref — the bindings branch's
+  first-refresh kick (`registerAgentSurfaceBindings` → `adapterDispatcher.refresh` →
+  `cancelActive`) NULLS `this.active` synchronously mid-`onMessage`, so the display-only
+  immediate-settle passed `null`. Fixed by settling a CAPTURED `call` local (never `this.active`) +
+  a defensive `settle(OutstandingCall|null)` guard. **B (empty board on Back):** a bound kanban's
+  rows live only in live A2UI SDK state (`surface.dataModel` undefined — seed pushed separately), so
+  restoring the snapshot spec on Back repainted empty `{path}` bindings. Fixed in
+  `src/renderer/jiraBackNav.ts`: a bound composed snapshot restores with `restored: true`, firing
+  `ActiveTabSurface`'s restore-refresh (re-registers regions + re-fetches). 986 tests green (+2
+  regression describes), typecheck clean. Bug report
+  `.sdd/bugs/jira-refreshable-detail-nav-crash-and-empty-v1.md`; `docs/ARCHITECTURE.md` §4.3 + §4h
+  invariants. **Refresh itself confirmed working live** (dev log: kanban composes 3 bound columns,
+  per-status `searchIssues`, regions registered). Not committed.
+- [x] **Bindings-first ENFORCEMENT v3 — dataSource enum tightening** (`bindings-first-generative-ui-v1`)
+  — v2 still failed live: the model set `descriptor.dataSource` to the MCP READ-TOOL name
+  (`jira_search_issues`) not the adapter source id (`searchIssues`), so main's cross-target check
+  dropped the binding → surface landed un-refreshable + refresh button disabled. Tightened each
+  `render_*_ui` `DESCRIPTOR_SCHEMA.dataSource` from `z.string()` to a `.refine` against that target's
+  `*AdapterSource` enum (jira `searchIssues`/`getIssue`; slack `listChannels`/`getHistory`/`search`;
+  confluence `defaultFeed`/`searchContent`/`getPage`; generic = union) so a wrong value is rejected
+  AT the render tool (MCP SDK validates inputSchema pre-handler → model resubmits). Added the
+  "adapter source id, NOT the read-tool name" caveat to all four tool descriptions + `BINDINGS_FIRST_STEERING`.
+  typecheck clean; vitest green; bundles re-emitted. `docs/ARCHITECTURE.md` §4h. Not committed.
+
+- [x] **Bindings-first generative UI** (`bindings-first-generative-ui-v1`) — reframed all four
+  `render_*_ui` tool descriptions (jira/slack/confluence/generic) bindings-first: the agent composes
+  the layout and declares one secret-free `binding` per data-bearing container (single → one,
+  partitioned → many); literal fetched rows are a valid first-paint **seed** (main's `rebindAgentSurface`
+  overwrites the data prop regardless), `descriptor` = degenerate single-binding form. Removed the
+  obsolete "author `{path}` yourself / no literal rows / literals never repaint" teaching. Added a pure
+  main-side dev warning (`src/main/dataBearingWarning.ts` → `UiBridge.onMessage`) that warns once when a
+  data-bearing surface carries neither `bindings` nor `descriptor`. Mechanism unchanged (§4h); no IPC
+  contract change. 959 tests green, typecheck clean. Spec/plan at
+  `.sdd/{specs,plans}/bindings-first-generative-ui-v1.md`; `docs/ARCHITECTURE.md` §4h note. Not committed.
+
+- [x] **Bindings-first ENFORCEMENT (v2)** (`bindings-first-generative-ui-v1`) — the description
+  reframe did not make the model comply at runtime (it fetched broadly, split client-side, rendered
+  literal rows with no binding → refresh disabled, reload repaints stale rows). Added (a) uniform
+  bindings-first **grounding steering** to every data-bearing target (`groundingPromptForTarget` in
+  `src/main/mcpConfig.ts`) forcing a per-container narrowed-query binding; (b) **tool-level
+  rejection** — each `render_*_ui` handler runs `BindingsFirstEnforcer` (`src/shared/dataBearingSpec.ts`)
+  and returns an `isError` for an unbound data spec so the model resubmits with bindings; static /
+  already-bound calls render. Reject loop bounded (`ENFORCEMENT_REJECT_CAP = 2`, in-memory per render
+  server process) → render-anyway after the cap. Moved `LIST_SOURCE_DATA_PROP` + the
+  `specHasUnboundDataContainer` heuristic into `src/shared/` so the MCP bundles import it (main keeps a
+  thin re-export); MCP rollup bundles verified. No IPC/contract change. typecheck clean; 980 tests
+  green. Not committed.
+- [x] **API→UI generative adapter — three-cycle set** (`jira/slack/confluence-generative-adapter-v1`) —
+  composed surfaces gain refreshable, paginated data via A2UI 0.9's view/data split: `{path}` +
+  `TemplateBinding` bound surfaces seeded by an initial `updateDataModel`, a persisted **secret-free**
+  descriptor `{dataSource,query}` beside the view spec, a channel-independent main-side
+  **`AdapterDispatcher`** (`src/main/adapterDispatcher.ts` + `dataModelApply.ts`) that on refresh /
+  reserved `adapter.*` action re-executes the descriptor (tokens stay in main) and pushes
+  `updateDataModel` keyed by `surfaceId` — never a full re-push. Shared catalog controls extracted to
+  `src/renderer/catalogShared/controls.tsx` (`useBound`/`RefreshButton`/`LoadMoreButton`/
+  `PaginationBar`). **Jira** built the shared infra + page-replace + reconciled `jira.*` writes into the
+  generalized path; **Slack** + **Confluence** reuse it verbatim as read-only **append-only** lists
+  (opaque forward cursors, no `hasPrev`) via `{slack,confluence}Adapter.ts`/`*SurfaceBuilder.ts` joined
+  by a composite resolver in `index.ts`; Confluence page-detail is refresh-only (`pagination:'none'`).
+  Shared contract unchanged across all three. 871 tests green (+88), typecheck clean. Specs/plans/
+  designs at `.sdd/{specs,plans,designs}/{jira,slack,confluence}-generative-adapter-v1.md`;
+  `docs/ARCHITECTURE.md` §4g, `docs/DEVELOPMENT.md` "Generative adapter". **Not yet runtime-wired** — no
+  live compose trigger emits a bound surface + descriptor yet (see Next); bound renderer not
+  live-exercised. Not committed.
 - [x] **Jira back-nav loses pinned generated UI** (bug `jira-detail-back-loses-generated-ui-v1`) — Back
   from a ticket detail opened on top of a PINNED generated-UI (`composed`) surface returned to the
   default board / last search instead of restoring the generated UI. Cause: the unsolicited detail

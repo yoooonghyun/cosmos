@@ -39,11 +39,41 @@ import {
 import { buildGenerativePanel, hydrateGenerativeTabs } from './sessionSnapshot'
 import { useReportPanel } from './SessionProvider'
 import type { GenerativePanelKey } from '../shared/ipc'
+import type { AdapterBinding, AdapterDescriptor } from '../shared/adapter'
 
 /** A rendered surface stored on a tab: the spec to (re)process + its requestId. */
 export interface TabSurface {
   requestId: string
   spec: UiRenderPayload['spec']
+  /**
+   * The bound surface's INITIAL data-model seed (jira-generative-adapter-v1,
+   * FR-001/FR-003): ordered `{ surfaceId, path?, value? }` pushes ActiveTabSurface
+   * applies right after createSurface/updateComponents so the surface paints its
+   * first page of bound data + flags. Absent for a non-bound surface.
+   */
+  dataModel?: UiRenderPayload['dataModel']
+  /**
+   * The bound surface's SECRET-FREE adapter descriptor (jira-generative-adapter-v1,
+   * FR-006/FR-013): carried onto the rendered surface so ActiveTabSurface can fire a
+   * restore/re-activation refresh (with the descriptor for lazy re-registration in main)
+   * when a stored surface is (re)mounted. Absent for a non-bound surface.
+   */
+  descriptor?: AdapterDescriptor
+  /**
+   * The PARTITIONED surface's per-container {@link AdapterBinding}s (refreshable-custom-
+   * generative-ui multi-region). Carried onto the rendered surface so ActiveTabSurface fires a
+   * restore refresh that re-registers EVERY region in main. Mutually exclusive with
+   * {@link descriptor} (multi-region uses bindings; single-region uses descriptor).
+   */
+  bindings?: AdapterBinding[]
+  /**
+   * True only for a surface re-instated from the session snapshot (jira-generative-
+   * adapter-v1, FR-013): its data model is stale, so ActiveTabSurface fires the
+   * descriptor-bearing restore refresh that lazily re-registers it in main + re-fetches.
+   * A FRESHLY composed surface is already registered + seeded live in main, so it does
+   * NOT set this (no redundant first-page re-fetch on every default-view compose).
+   */
+  restored?: boolean
   /** Set when the surface could not be rendered, for a safe fallback (SC-005). */
   error?: string
 }
@@ -81,6 +111,20 @@ export interface GenerativeTab {
    * (FR-017), like every other tab field.
    */
   renamed?: boolean
+  /**
+   * The bound surface's SECRET-FREE adapter descriptor (jira-generative-adapter-v1,
+   * FR-006). Present only for a bound surface; lets a refresh/restore re-execute the
+   * descriptor for fresh data. Persisted beside the composed spec + restored on
+   * hydrate. Carries no token/secret (FR-007/FR-021). Session-only otherwise.
+   */
+  descriptor?: AdapterDescriptor
+  /**
+   * The PARTITIONED surface's per-container {@link AdapterBinding}s (refreshable-custom-
+   * generative-ui multi-region). Present only for a multi-region bound surface; persisted
+   * beside the composed spec + restored on hydrate so a refresh re-registers every region.
+   * Mutually exclusive with {@link descriptor}. No token/secret. Session-only otherwise.
+   */
+  bindings?: AdapterBinding[]
 }
 
 export interface GenerativePanelTabs extends PanelTabsController<GenerativeTab> {
@@ -240,9 +284,20 @@ export function useGenerativePanelTabs(
             id,
             label: mintLabel(),
             untitled: true,
-            surface: { requestId: payload.requestId, spec: payload.spec },
+            surface: {
+              requestId: payload.requestId,
+              spec: payload.spec,
+              dataModel: payload.dataModel,
+              descriptor: payload.descriptor,
+              bindings: payload.bindings
+            },
             inFlight: false,
-            composed: false
+            composed: false,
+            // jira-generative-adapter-v1 (FR-006): carry the bound surface's descriptor
+            // onto the tab so refresh/restore can re-execute it. Undefined for non-bound.
+            // multi-region: bindings carry the per-container descriptors instead.
+            descriptor: payload.descriptor,
+            bindings: payload.bindings
           })
           return
         }
@@ -254,7 +309,13 @@ export function useGenerativePanelTabs(
       // auto-relabel (label + untitled) while still updating surface/inFlight/error.
       const applyAutoLabel = shouldApplyAutoLabel(tabsByIdRef.current.get(tabId))
       update(tabId, {
-        surface: { requestId: payload.requestId, spec: payload.spec },
+        surface: {
+          requestId: payload.requestId,
+          spec: payload.spec,
+          dataModel: payload.dataModel,
+          descriptor: payload.descriptor,
+          bindings: payload.bindings
+        },
         // FR-010: derive the label from the originating utterance (solicited only),
         // unless the tab was manually renamed (tab-rename-v1 FR-008).
         ...(utterance && applyAutoLabel
@@ -267,7 +328,12 @@ export function useGenerativePanelTabs(
         loadingDefault: false,
         // Mark composed vs. native data view so panels (Jira) can hide compose-only
         // chrome on generated surfaces while keeping it for ticket browsing.
-        composed: wasSolicited
+        composed: wasSolicited,
+        // jira-generative-adapter-v1 (FR-006): carry/clear the bound descriptor onto
+        // the tab (a non-bound surface clears any stale one). multi-region: bindings
+        // carry the per-container descriptors instead (each clears the other).
+        descriptor: payload.descriptor,
+        bindings: payload.bindings
       })
     })
     return off

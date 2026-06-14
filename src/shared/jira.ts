@@ -416,6 +416,87 @@ export type JiraBoundActionRequest =
   | { name: typeof JiraBoundAction.Update; params: JiraUpdateParams }
 
 /* ------------------------------------------------------------------------- *
+ * Adapter descriptor — Jira concrete shapes (jira-generative-adapter-v1, FR-008)
+ *
+ * The Jira wiring of the SHARED, secret-free `AdapterDescriptor` (`src/shared/adapter.ts`).
+ * `dataSource` maps to a JiraManager READ (`searchIssues` for list/search/default,
+ * `getIssue` for detail); `query` carries only non-secret JQL/cursor or issueKey —
+ * never a token (FR-007/FR-008). Persisted in the tab snapshot + carried on the
+ * `adapter.*` dispatch path; the dispatcher's Jira resolver maps it back to the read.
+ * ------------------------------------------------------------------------- */
+
+import type { AdapterDescriptor, AdapterQuery } from './adapter'
+
+/**
+ * The Jira `dataSource` discriminators (FR-008). Each maps 1:1 to a JiraManager READ
+ * the adapter dispatcher's Jira resolver re-executes. Reused from {@link JiraOp} so
+ * the descriptor, the resolver, and the IPC reads never disagree on a string.
+ */
+export const JiraAdapterSource = {
+  /** List/search/default surfaces → `searchIssues(jql, cursor)` (FR-008). */
+  SearchIssues: 'searchIssues',
+  /** Issue-detail surface → `getIssue(issueKey)` (FR-008). */
+  GetIssue: 'getIssue'
+} as const
+
+export type JiraAdapterSourceName =
+  (typeof JiraAdapterSource)[keyof typeof JiraAdapterSource]
+
+/**
+ * The query for a Jira `searchIssues` descriptor (FR-008). Non-secret: the JQL the
+ * surface was composed from + an optional opaque cursor for pagination. Mirrors
+ * {@link JiraSearchParams} so the resolver passes it straight through.
+ */
+export interface JiraSearchAdapterQuery extends AdapterQuery {
+  /** The JQL the list/search/default surface reads (non-secret). */
+  jql: string
+  /** Opaque next-page cursor (Jira `nextPageToken`); absent on the first page. */
+  cursor?: string
+}
+
+/**
+ * The query for a Jira `getIssue` descriptor (FR-008). Non-secret: just the issue key
+ * to re-read. Mirrors {@link JiraGetIssueParams}.
+ */
+export interface JiraGetIssueAdapterQuery extends AdapterQuery {
+  /** The issue key to re-read (e.g. `PROJ-123`); non-secret. */
+  issueKey: string
+}
+
+/**
+ * A Jira adapter descriptor — the {@link AdapterDescriptor} narrowed to Jira's two
+ * read sources (FR-005/FR-008). Discriminated by `dataSource`. Secret-free (FR-007).
+ */
+export type JiraAdapterDescriptor =
+  | (AdapterDescriptor & {
+      dataSource: typeof JiraAdapterSource.SearchIssues
+      query: JiraSearchAdapterQuery
+    })
+  | (AdapterDescriptor & {
+      dataSource: typeof JiraAdapterSource.GetIssue
+      query: JiraGetIssueAdapterQuery
+    })
+
+/**
+ * Build a secret-free Jira `searchIssues` descriptor for a list/search/default surface
+ * (FR-008). Carries only the JQL + (optionally) the cursor — never a token.
+ */
+export function jiraSearchDescriptor(jql: string, cursor?: string): JiraAdapterDescriptor {
+  return {
+    dataSource: JiraAdapterSource.SearchIssues,
+    query: { jql, ...(cursor ? { cursor } : {}) }
+  }
+}
+
+/**
+ * Build a secret-free Jira `getIssue` descriptor for an issue-detail surface (FR-008).
+ * Carries only the issue key — never a token.
+ */
+export function jiraGetIssueDescriptor(issueKey: string): JiraAdapterDescriptor {
+  return { dataSource: JiraAdapterSource.GetIssue, query: { issueKey } }
+}
+
+/* ------------------------------------------------------------------------- *
  * Read-only MCP tool contract (FR-J06, FR-X01)
  * ------------------------------------------------------------------------- */
 

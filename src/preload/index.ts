@@ -35,6 +35,7 @@ import {
   type SlackApi,
   type UiApi,
   type UiActionPayload,
+  type UiDataModelPayload,
   type UiRenderPayload
 } from '../shared/ipc'
 import type {
@@ -102,6 +103,15 @@ const uiApi: UiApi = {
   },
   sendAction(payload: UiActionPayload): void {
     ipcRenderer.send(UiChannel.Action, payload)
+  },
+  // jira-generative-adapter-v1 FR-009/FR-010: data-only updates for a bound
+  // surface (createSurface/updateComponents stay on onRender). NEW preload method
+  // — requires a full `npm run dev` restart; HMR won't expose it live.
+  onDataModel(listener: (payload: UiDataModelPayload) => void): () => void {
+    const handler = (_event: IpcRendererEvent, payload: UiDataModelPayload): void =>
+      listener(payload)
+    ipcRenderer.on(UiChannel.DataModel, handler)
+    return () => ipcRenderer.removeListener(UiChannel.DataModel, handler)
   }
 }
 

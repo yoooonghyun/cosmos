@@ -22,6 +22,15 @@
     "src/preload/**/*.ts",
     "src/shared/**/*.ts",
     "src/mcp/**/*.ts",
-    "electron.vite.config.ts"
+    "electron.vite.config.ts",
+    // refresh-repaint-integration-test-v1: the end-to-end integration test
+    // (src/main/refreshRepaintIntegration.test.ts) drives both the main-side
+    // dispatcher/resolver/registration AND the renderer-PURE `applyDataModel`
+    // (no DOM/React; imports only a src/shared type). cosmos typechecks the two
+    // process trees as mutually-exclusive composite projects, so that one
+    // cross-tree value import would otherwise be TS6307 ("not in the file list").
+    // Listing the single renderer-pure file the test needs lets it typecheck
+    // without loosening the boundary to all of src/renderer.
+    "src/renderer/dataModelApply.ts"
   ]
 }

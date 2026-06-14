@@ -49,13 +49,28 @@ export type JiraBackTarget =
  * the origin union. A `composed` origin with a valid snapshot restores it; everything
  * else (default, search, or a malformed composed origin missing its snapshot) falls
  * back to the existing read behavior — never throws.
+ *
+ * jira-refreshable-detail-nav-crash-and-empty-v1 (Defect B): a REFRESHABLE generated UI
+ * (a kanban with `bindings`, or a single-region `descriptor`) keeps its row data only in
+ * the live A2UI SDK state — the seed is pushed via a separate `updateDataModel`, NEVER
+ * stored on `surface.dataModel`, and the per-region refreshes repaint live. The detail
+ * overlay clears that SDK state, so restoring the snapshot SPEC alone repaints an EMPTY
+ * board ("No issue found"). So when the snapshot is a bound surface, restore it marked
+ * `restored: true`: ActiveTabSurface's existing restore-refresh effect then re-registers
+ * every region in main (idempotent) and re-fetches, repopulating the board (the user's
+ * "re-run the refresh on Back" option). An UNBOUND composed surface (no bindings/
+ * descriptor) carries its own data in the spec/seed, so it is restored verbatim.
  */
 export function backNavTarget(origin: JiraBackOrigin): JiraBackTarget {
   if (origin.kind === 'composed') {
     // Safe fallback: a composed origin must carry a snapshot to restore. If it is
     // missing (malformed state), degrade to the default-view read rather than throw.
     if (origin.surface) {
-      return { kind: 'restore-surface', surface: origin.surface }
+      const isBound = !!(origin.surface.bindings || origin.surface.descriptor)
+      const surface = isBound
+        ? { ...origin.surface, restored: true }
+        : origin.surface
+      return { kind: 'restore-surface', surface }
     }
     return { kind: 'read-default' }
   }

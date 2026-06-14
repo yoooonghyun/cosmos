@@ -41,6 +41,59 @@ describe('backNavTarget', () => {
     })
   })
 
+  describe('a REFRESHABLE composed surface restores marked `restored` (Defect B)', () => {
+    // jira-refreshable-detail-nav-crash-and-empty-v1: a bound kanban keeps its row data
+    // only in live SDK state (seed pushed separately, never on surface.dataModel; regions
+    // repaint via per-region refresh). The detail overlay clears that state, so restoring
+    // the spec alone repaints an EMPTY board. The fix restores the snapshot marked
+    // `restored: true` so ActiveTabSurface's restore-refresh effect re-registers every
+    // region in main and re-fetches, repopulating the board.
+    it('a bindings (multi-region) surface → restore-surface marked restored:true', () => {
+      const bound: TabSurface = {
+        requestId: 'req-kanban-1',
+        spec: { surfaceId: 'jira-kanban-1', components: {} } as unknown as TabSurface['spec'],
+        bindings: [
+          { componentId: 'col-todo', descriptor: { dataSource: 'searchIssues', query: { jql: 'status=To Do' } } }
+        ] as TabSurface['bindings']
+      }
+      const result = backNavTarget({ kind: 'composed', surface: bound })
+      expect(result.kind).toBe('restore-surface')
+      if (result.kind === 'restore-surface') {
+        // The board re-fetch is re-kicked on Back via the `restored` flag.
+        expect(result.surface.restored).toBe(true)
+        // The bindings + spec ride along unchanged so every region re-registers.
+        expect(result.surface.bindings).toBe(bound.bindings)
+        expect(result.surface.spec).toBe(bound.spec)
+      }
+    })
+
+    it('a single-region descriptor surface → restore-surface marked restored:true', () => {
+      const bound: TabSurface = {
+        requestId: 'req-bound-1',
+        spec: { surfaceId: 'jira-list-1', components: {} } as unknown as TabSurface['spec'],
+        descriptor: { dataSource: 'searchIssues', query: { jql: 'assignee=me' } } as TabSurface['descriptor']
+      }
+      const result = backNavTarget({ kind: 'composed', surface: bound })
+      expect(result.kind).toBe('restore-surface')
+      if (result.kind === 'restore-surface') {
+        expect(result.surface.restored).toBe(true)
+        expect(result.surface.descriptor).toBe(bound.descriptor)
+      }
+    })
+
+    it('an UNBOUND composed surface (no bindings/descriptor) restores verbatim, NOT marked restored', () => {
+      // A static generated UI carries its data in the spec/seed — no re-fetch needed, so
+      // it must NOT be flagged `restored` (that would fire a needless refresh with no
+      // descriptor/bindings). The exact snapshot reference is preserved (the original guard).
+      const result = backNavTarget({ kind: 'composed', surface })
+      expect(result.kind).toBe('restore-surface')
+      if (result.kind === 'restore-surface') {
+        expect(result.surface).toBe(surface)
+        expect(result.surface.restored).toBeUndefined()
+      }
+    })
+  })
+
   describe('default / search origins → existing read behavior (unchanged)', () => {
     it('default origin → read-default', () => {
       expect(backNavTarget({ kind: 'default' })).toEqual({ kind: 'read-default' })

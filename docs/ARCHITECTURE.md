@@ -188,6 +188,14 @@ env var (`COSMOS_BRIDGE_SOCKET` for both render entry scripts, which share the o
   the user's action on its control. This is safe for `'jira'` because `jira.*` actions are
   dispatched deterministically by main (`JiraActionDispatcher`, §4.9), never returned to the
   agent's render call; and `'slack'`/`'confluence'` surfaces are read-only with no controls (§4.8).
+- **Invariant — `onMessage` settles the CAPTURED call, never `this.active` (re-entrancy guard).**
+  Registering a refreshable surface kicks its regions' first refresh, and `AdapterDispatcher.refresh`
+  synchronously calls back into `uiBridge.cancelActive()` (its FR-013 supersede guard) BEFORE its
+  first `await` — which settles + NULLS `this.active` *during* `onMessage`. So `onMessage` captures
+  the freshly-minted call into a local and settles THAT local at the display-only branch; re-reading
+  `this.active` there would pass `null` and null-deref `call.socket` (the
+  `jira-refreshable-detail-nav-crash-and-empty-v1` crash). `settle` is also null-tolerant as
+  belt-and-suspenders. Any future synchronous re-entrant settle path must preserve this.
 
 ### 4.4 A2UI panels (renderer) — target-routed multi-panel hosting
 - A2UI payloads are rendered via `@a2ui-sdk/react`, with cosmos controlling the styling and
@@ -769,6 +777,206 @@ notice pointing at the native Connect/Reconnect affordance; no write is attempte
    renderer-minted `paneId`, with `pty:start`/`pty:dispose`); per-tab A2UI hosting with
    renderer-only originating-tab correlation (no `UiRenderPayload` change, valid only because runs
    stay sequential, §4.10).~~ Built; tests green.
+4g. **API→UI generative adapter** (Jira `.sdd/specs/jira-generative-adapter-v1.md`, Slack
+   `.sdd/specs/slack-generative-adapter-v1.md`, Confluence
+   `.sdd/specs/confluence-generative-adapter-v1.md`) — three sibling cycles (Jira → Slack →
+   Confluence, all built) introducing surfaces whose **view is composed once but whose data refreshes** against
+   the live source, via A2UI 0.9's view/data split. Jira **establishes the shared infrastructure**
+   the other two reuse: bound surfaces (`{path}` bindings + `TemplateBinding` instead of literal
+   props, seeded by an initial `updateDataModel`); `ActiveTabSurface` learning to process
+   `updateDataModel` (today it sends only `createSurface` + `updateComponents`); a persisted,
+   **secret-free adapter descriptor** `{ dataSource, query }` (which manager call + non-secret
+   JQL/cursor/issueKey) stored in the session snapshot beside the composed view spec; a reusable
+   main-side **`AdapterDispatcher`** that on a refresh trigger (tab restore / panel re-activation /
+   explicit refresh) or a reserved `adapter.*` pagination action re-executes the descriptor via the
+   integration manager (tokens stay in main) and pushes an **`updateDataModel`** keyed by `surfaceId`
+   — NOT a full surface re-push; and both pagination shapes (append/"load more" writes the full
+   accumulated list at the bound path — no RFC6901 `-`; page-replace swaps the list + updates cursor
+   state, with Prev/Next bound to a `LogicExpression` over `hasMore`/`hasPrev`, and a `loading` flag
+   driving the button spinner). Jira's existing deterministic `jira.*` write dispatch
+   (`JiraActionDispatcher`, §4.9) is **reconciled into** this generalized main-side dispatch path
+   (one coherent `ui:action`-boundary interception), preserving its execute→re-read→reflect behavior
+   and coexisting with the §4.11 unsolicited-frame discipline + `jiraBackNav` Back restore. Security
+   unchanged: all fetching/tokens in main, descriptor + data model + every payload secret-free, one
+   typed IPC contract validated at the boundary (invalid → warn + ignore). UI-bearing — the design
+   step (§pagination/refresh/loading states) precedes interface. **Shared modules** (built):
+   `src/main/adapterDispatcher.ts` (channel-independent dispatcher), `src/main/dataModelApply.ts`
+   (node-testable `updateDataModel` apply), `src/renderer/catalogShared/controls.tsx`
+   (`Bind`/`Bound`/`useBound` + `RefreshButton`/`LoadMoreButton`/`PaginationBar`), the descriptor
+   type + `updateDataModel` IPC payload + reserved `adapter.*` action contract in `src/shared/ipc.ts`,
+   and the descriptor field on the generative-tab snapshot. **Slack + Confluence** reuse this verbatim
+   as read-only, **append-only** lists (opaque forward cursors — `next_cursor`/`_links.next`; no
+   page-replace, `hasPrev` unused) via `slackAdapter.ts`/`slackSurfaceBuilder.ts` and
+   `confluenceAdapter.ts`/`confluenceSurfaceBuilder.ts`, each joining one **composite resolver** in
+   `index.ts` (`*BindOptionsForSource` selects the owning resolver). Confluence's page-detail surface
+   is `pagination:'none'` (refresh-only single `value`); Slack resolves author names via `getUser`
+   in main (only the non-secret display name crosses).
+
+   **Refresh affordance (`panel-refresh-v1`, planned):** refresh is **one control per generative
+   panel, in the panel chrome** (outside the A2UI host), acting on the **active tab's** registered
+   surface — NOT a per-surface/per-section button. The in-surface catalog `RefreshButton` is removed
+   from composed surfaces; only `LoadMoreButton` (append) and `PaginationBar` (page-replace) stay
+   in-surface (a list's paging is tied to its own scroll position, semantically distinct from a
+   panel-wide refresh). The panel control dispatches the same reserved `adapter.refresh` for the
+   active `surfaceId` and is disabled/absent when the active tab has no registered (bound) surface.
+   `panel-refresh-v1` also fixes the renderer's one-shot action guard so reserved `adapter.*` actions
+   (refresh / loadMore / page) repeat while only the terminal `submit` stays one-shot.
+
+   **Closing the live-registration seam:** Jira already has a live bound-compose path
+   (`handleJiraView`/`handleJiraIssueDetail` → `register` → push `{spec,dataModel,descriptor}`).
+   `panel-refresh-v1` adds the analogous **panel-driven native bound-compose** path for the
+   Slack/Confluence native data views (mirroring Jira: a new fire-and-forget request channel → a
+   `handle*View` that runs the existing manager read, builds the dormant `buildBound*Surface`,
+   `register`s the descriptor via the composite resolver, and pushes the bound frame) — so their
+   panel-driven data surfaces become bound + registered + refreshable like Jira's.
+
+   **Refreshable CUSTOM agent-composed surfaces (`refreshable-custom-generative-ui-v1`, built).**
+   The original OQ-5 rule was "main-composes": when the agent attached a descriptor to a `render_*_ui`
+   frame, main DISCARDED the agent's spec and pushed a FIXED generic `{path}`-bound SHELL
+   (`resolveDescriptorShell` → `jira-issue-list`/`slack-channels`/…), so a custom layout (e.g. a
+   kanban board) could not be refreshed in place — refreshability and custom layout were mutually
+   exclusive. The new rule is **register-the-agent-surface, don't replace**: when the agent attaches a
+   valid, secret-free, target-matched descriptor AND a usable spec (non-empty `surfaceId` + a
+   `components` array), main registers the descriptor with the `AdapterDispatcher` keyed by the
+   **agent's OWN `spec.surfaceId`** (bind options — `listPath` + pagination — resolved from
+   `dataSource` via the same `resolveBindOptionsForSource`/per-integration resolvers the shells use),
+   kicks the first `adapter.refresh`, and pushes the **agent's spec AS-IS**. A later refresh emits
+   `updateDataModel { surfaceId: <agent's id>, path, value }` and repaints the custom layout in place
+   — no full re-push, no agent round-trip. The agent composes `{path}` bindings against a
+   **documented per-`dataSource` data-model path contract**, single-sourced from the `*_PATH`
+   constants and taught by each render-tool description: Jira `searchIssues`→list `/items`,
+   `getIssue`→value `/issue`; Slack `listChannels`→`/channels`, `getHistory`→`/messages`,
+   `search`→`/matches`; Confluence `defaultFeed`→`/feed`, `searchContent`→`/results`, `getPage`→`/page`;
+   shared reserved flags `/loading`, `/hasMore`, `/error` — so the path the agent binds and the path
+   the dispatcher writes cannot drift. The generic `resolveDescriptorShell` SHELL remains the
+   **fallback only** when the agent supplied a descriptor but no usable spec; an unknown `dataSource`
+   (no resolver claims it) is warned + ignored and the agent's spec renders un-refreshably. cosmos
+   trusts the documented `{path}` contract rather than statically detecting bound-vs-literal specs.
+   Security unchanged: the descriptor is secret-free (validated + secret-stripped at the `UiBridge`
+   boundary); the token is attached only in main at refresh. A `composed:true` custom bound surface
+   persists its verbatim spec + descriptor and re-registers lazily under the agent's surfaceId on its
+   restore refresh; `SESSION_SCHEMA_VERSION` bumped 3 → 4 (the new rule changes the meaning of a
+   persisted descriptor-bearing surface, so v3 snapshots fall back to a clean session).
+   The refresh → data-model → repaint chain is regression-guarded by an end-to-end integration test
+   (`src/main/refreshRepaintIntegration.test.ts`, `refresh-repaint-integration-test-v1`) that drives
+   the REAL `planAgentSurfaceRegistration` + `AdapterDispatcher` (over the real `jiraAdapterResolver`
+   fed a fake `JiraAdapterManager`) + the renderer-pure `applyDataModel` + the SDK's own
+   `setValueByPath`/`resolveValue`, proving a custom `{path}`-bound `IssueList` resolves the freshly
+   re-pulled rows in place (and re-resolves to a changed set on a second refresh) — with a literal-prop
+   negative control that does NOT move, confirming the `{path}` binding is what causes the redraw.
+
+4h. **Refreshable custom generative UI** (`.sdd/specs/refreshable-custom-generative-ui-v1.md`,
+   `.sdd/plans/refreshable-custom-generative-ui-v1.md`, OQ-4g panel-refresh-v1 sub-note) — supersedes
+   the OQ-5 "main-composes" rule: main registers an agent-attached descriptor under the AGENT's own
+   `spec.surfaceId` and pushes the agent's custom spec as-is (instead of substituting a generic bound
+   shell), so a custom layout (e.g. a kanban board) refreshes in place via `updateDataModel`. The
+   render-tool descriptions teach the documented per-`dataSource` `{path}` contract; the generic shell
+   stays a fallback for an unusable spec; `SESSION_SCHEMA_VERSION` bumped 3 → 4.
+
+   **Multi-region refreshable surfaces (`refreshable-custom-generative-ui` multi-region, built).**
+   4h still required the agent to bind every refreshable container with its own `{path}` props. In
+   practice the composing model emits containers with **literal props** (a kanban column as
+   `issues:[…]` with no `{path}`) — so nothing was registered to refetch and the board went stale
+   after refresh (a card moved `To Do → In Review` server-side stayed put). The fix is **generic
+   across integrations** (Jira / Slack / Confluence + future), not Jira-specific, and adopts
+   **Option 1 — the agent NAMES the containers, main AUTHORS the bindings**:
+   - **`AdapterBinding` side-channel (`src/shared/adapter.ts`).** A render frame carries either a
+     single `descriptor` (one-region surface) OR a `bindings: AdapterBinding[]` array (partitioned
+     surface) — never both. Each `AdapterBinding {componentId, descriptor}` names which container
+     gets which secret-free `{dataSource, query}` descriptor (its own narrowed query — e.g. a column
+     whose JQL is `status="In Review"` — plus its own pagination/cursor). The `componentId` doubles
+     as the dispatcher **regionKey**, so column identity comes from each column's QUERY, not inferred
+     from rows — **empty columns still refresh correctly**. The 4 MCP render servers
+     (`src/mcp/{jira,slack,confluence,}RenderUiServer.ts`) teach this `bindings` vs `descriptor`
+     choice to the agent.
+   - **Region → data-model path mapping (`regionListPath`/`regionFlagPath`, `ADAPTER_REGION_ROOT =
+     '/regions'`).** An EMPTY regionKey maps to the flat top-level paths (`/items`, `/loading`) —
+     full back-compat for single-region 4h surfaces; a non-empty key namespaces under
+     `/regions/<escaped-componentId>/…` (RFC 6901-escaped). Both the dispatcher's push and main's
+     `{path}` rebind call these helpers, so the bound path and the written path cannot drift.
+   - **Main-side rebind (`src/main/specRebinder.ts`).** `planRegions(bindings)` derives the regions
+     used by BOTH compose and restore (regionKey = `componentId` when >1 binding, else `''`).
+     `rebindAgentSurface(spec, bindings)` rewrites each literal container's rows prop into a
+     region-scoped `{path}`, stamps a `region` prop on multi-region containers (so an in-surface
+     control reloads only its own column), **SEEDS the agent's literal rows as that region's first
+     page** for instant paint, and returns `{spec, dataModel, regions}` — or `null` (caller falls
+     back to the single-region shell).
+   - **The extensibility seam (`src/main/adapterBindingRegistry.ts`).** The ONE per-integration fact
+     main needs to rebind is `LIST_SOURCE_DATA_PROP` / `listSourceBinding(dataSource)` — which prop a
+     container reads its rows from (Jira `issues`, Slack `channels`/`messages`/`matches`, Confluence
+     `results`), keyed by `dataSource` (not component type, which Slack/Confluence share). A new
+     rebindable list source = **one entry here plus its existing `*BindOptionsForSource`** — no
+     rebinder change. Detail sources (`getIssue`/`getPage`) are intentionally absent (single-value,
+     never partitioned).
+   - **Per-region fetcher + surface-level fan-out (`src/main/adapterDispatcher.ts`).** The dispatcher
+     is now multi-region: each surface is a `Map<regionKey, RegionState>`, every region holding its
+     own descriptor / cursor / accumulation. `register/refresh/loadMore/page` take a `regionKey`
+     (default `''`); `refreshSurface(surfaceId)` does a `Promise.all` fan-out over `regionsOf` so a
+     surface-level refresh reloads every column from its own fetcher concurrently (one column's
+     failure degrades only that column). `has`/`regionsOf`/`unregister(surfaceId, regionKey?)`
+     complete the API.
+   - **IPC + restore (`src/main/index.ts` `adapter.*` handler).** The `AdapterActionRequest.refresh`
+     variant carries an optional `region` (absent ⇒ fan out to all regions) and optional `bindings`
+     (lazy multi-region re-registration on tab restore: `bindings && !has(surfaceId)` →
+     `planRegions` register loop). `region ? refresh(region) : refreshSurface`. Renderer controls
+     (`src/renderer/catalogShared/controls.tsx` + each catalog's list components) thread the `region`
+     prop into the dispatched `adapter.loadMore`/`adapter.page` context.
+   - **Invariant — a bound surface's rows live ONLY in live SDK state, so any overlay-then-restore
+     must re-kick its refresh.** The seed for a `bindings` surface is pushed as a SEPARATE
+     `updateDataModel` (NOT on the render payload's `dataModel`), and per-region refresh repaints live;
+     the tab's `surface.dataModel` is therefore empty. When something overwrites the surface (a Jira
+     ticket detail's unsolicited frame `clear()`s the SDK — §4.11) and is later restored from a spec
+     snapshot, restoring the spec ALONE repaints an empty board. So a Back/restore that re-files a
+     bound composed surface marks it `restored: true` (`jiraBackNav.backNavTarget`) — re-triggering
+     `ActiveTabSurface`'s restore-refresh effect, which re-registers every region (idempotent) and
+     re-fetches. This is the same `restored`-flag path the session-snapshot restore uses; it is the
+     `jira-refreshable-detail-nav-crash-and-empty-v1` (Defect B) "empty board on Back" fix.
+   `SESSION_SCHEMA_VERSION` bumped 4 → 5 (a partitioned surface persists its `bindings` + the rebound
+   spec). Covered by `src/main/specRebinder.test.ts` (new) + multi-region cases in
+   `src/main/adapterDispatcher.test.ts`.
+
+   **Bindings-first teaching (`.sdd/specs/bindings-first-generative-ui-v1.md`, descriptions-only).**
+   The rebind/seed MECHANISM above is UNCHANGED. Only the 4 render-tool DESCRIPTIONS were reframed:
+   because `rebindAgentSurface` overwrites each bound container's data prop to a `{path}` and seeds
+   the agent's literal rows regardless of shape, the agent is now taught **bindings-first** — compose
+   the layout, pass the fetched rows as ordinary literal props (a first-paint SEED), and declare ONE
+   `binding` per data-bearing container (single container → one binding; partitioned → one per
+   container); `descriptor` is the degenerate single-binding form, bindings wins when both are
+   present, the `query` stays secret-free. The earlier "author the `{path}` yourself / do NOT pass
+   literal rows / literals can never repaint" instructions were removed (they were made wrong by the
+   rebinder). A side-effect-free **dev warning** (`src/main/dataBearingWarning.ts`
+   `specHasUnboundDataContainer`) fires once at the `UiBridge.onMessage` boundary when a frame carries
+   neither `bindings` nor `descriptor` yet its spec paints data (a `LIST_SOURCE_DATA_PROP` rows prop /
+   bound detail prop) — warn-and-continue, never blocks or alters the render; ambiguous shapes stay
+   silent. Covered by `src/main/dataBearingWarning.test.ts` + a suite in `src/main/uiBridge.test.ts`.
+
+   **Bindings-first is now ENFORCED, not just taught (v2).** The description reframe alone proved
+   insufficient at runtime — the model fetched broadly, partitioned rows into UI containers
+   client-side, and rendered LITERAL rows with NO binding (refresh disabled; a reload re-paints
+   stale rows). Two reinforcements were added, NO new IPC/contract field: (a) **grounding steering**
+   — every data-bearing target's `groundingPromptForTarget` (`src/main/mcpConfig.ts`) carries a
+   uniform clause forcing a binding per data container whose `query` is that container's OWN narrowed
+   fetch (a kanban column → its status JQL), never splitting a broad fetch without a per-container
+   binding; and (b) **tool-level rejection** — each `render_*_ui` MCP handler runs the shared
+   `BindingsFirstEnforcer` (`src/shared/dataBearingSpec.ts`, which now also OWNS the moved-to-shared
+   `LIST_SOURCE_DATA_PROP` + the `specHasUnboundDataContainer` heuristic so the MCP rollup bundles can
+   import it) BEFORE relaying: a data-bearing spec with neither `descriptor` nor `bindings` is
+   rejected with an instructive, secret-free MCP `isError` so the model resubmits with a binding per
+   container; static surfaces and already-bound calls render normally. The reject loop is BOUNDED by
+   an in-memory per-process counter (`ENFORCEMENT_REJECT_CAP = 2`, the render server lives one
+   AgentRunner run) — after the cap it renders anyway (the warn-and-render fallback) so the surface
+   still appears. Covered by `src/shared/dataBearingSpec.test.ts` + the steering assertion in
+   `src/main/mcpConfig.test.ts`.
+   **dataSource is the adapter source id, NOT the read-tool name (v3).** A runtime test showed the
+   v2 steering worked (the model passed `bindings`) but set each `descriptor.dataSource` to the MCP
+   READ-TOOL name (`jira_search_issues`) instead of the adapter source id (`searchIssues`), so main's
+   `validateAdapterDescriptor` dropped all bindings as cross-target and the surface landed unbound.
+   Fix, NO IPC change: each `render_*_ui` server tightens `DESCRIPTOR_SCHEMA.dataSource` from
+   `z.string()` to a `.refine` against that target's `*AdapterSource` enum values (generic
+   `render_ui` accepts the union, mirroring `TARGET_ADAPTER_SOURCES`) — a read-tool name is rejected
+   AT the render tool (the model resubmits) rather than silently passing the MCP boundary; and the
+   four tool descriptions plus `BINDINGS_FIRST_STEERING` now state the valid per-integration
+   `dataSource` ids and that it is the adapter source id, NOT the read-tool name.
 5. ~~Decide whether session control stays purely interactive (PTY) or adds Agent SDK for
    background work.~~ Resolved (§4.5, §4.10): a headless `claude -p` `AgentRunner` runs alongside
    the interactive PTY — the `claude` binary is reused, NOT the Agent SDK.

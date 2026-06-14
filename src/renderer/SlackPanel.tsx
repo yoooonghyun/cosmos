@@ -32,6 +32,8 @@ import { Avatar, AvatarFallback } from '@/components/ui/avatar'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { slackCatalog, SLACK_CATALOG_ID, SLACK_OPEN_CHANNEL_ACTION } from './slackCatalog'
 import { PanelTabStrip, type PanelTab } from './PanelTabStrip'
+import { PanelRefreshButton } from './PanelRefreshButton'
+import { panelRefreshInputsFor } from './panelRefreshLogic'
 import { PanelFooter } from './PanelFooter'
 import { ActiveTabSurface } from './ActiveTabSurface'
 import { PromptComposer } from './PromptComposer'
@@ -818,6 +820,8 @@ export function SlackPanel({ active }: { active: boolean }): React.JSX.Element {
     ...(t.error ? { errorMessage: t.error } : {})
   }))
   const activeStripTab = stripTabs.find((t) => t.id === activeTabId) ?? null
+  // panel-refresh-v1 (Goal 1): the shared refresh control, fed the active tab's surface slice.
+  const refreshInputs = panelRefreshInputsFor(activeTab)
 
   return (
     <section
@@ -834,6 +838,12 @@ export function SlackPanel({ active }: { active: boolean }): React.JSX.Element {
         onClose={handleCloseTab}
         onNewTab={newTab}
         onRename={(id, label) => update(id, { label, renamed: true, untitled: false })}
+        trailing={
+          <PanelRefreshButton
+            activeTab={refreshInputs.activeTab}
+            requestId={refreshInputs.requestId}
+          />
+        }
         ariaLabel="Slack tabs"
       />
 

@@ -60,3 +60,35 @@ export function countLabel(count: number, singular: string, plural: string): str
  * or the agent. The context carries `{ channelId, channelName, isMember }`.
  */
 export const SLACK_OPEN_CHANNEL_ACTION = 'slack.openChannel'
+
+/* ------------------------------------------------------------------------- *
+ * Bound-list display gating (slack-generative-adapter-v1, FR-004)
+ *
+ * The bound Slack lists (ChannelList/MessageList/SearchResultList) read their rows +
+ * `loading`/`hasMore`/`error` flags from the data model and disambiguate the five
+ * states (design §3). These pure helpers encode that gating so the `.tsx` shells stay
+ * thin and the decisions are node-testable (the catalog `.ts`/`.test.ts` split). They
+ * mirror the bound `IssueList`'s in-component logic; Slack is APPEND-ONLY (no prev).
+ * ------------------------------------------------------------------------- */
+
+/** Coerce a possibly-undefined bound rows value to a safe array (never throws). */
+export function boundRows<T>(rows: T[] | undefined): T[] {
+  return Array.isArray(rows) ? rows : []
+}
+
+/**
+ * Whether to render the recoverable-error Notice ABOVE the rows (FR-007 / design §3).
+ * True iff a non-empty error message is present. The prior rows stay visible (the caller
+ * keeps them); an empty list WITH an error shows the Notice instead of the empty state.
+ */
+export function showErrorNotice(error: string | undefined): boolean {
+  return typeof error === 'string' && error.trim() !== ''
+}
+
+/**
+ * Whether to render the bound empty state (design §3). True iff the list is empty AND
+ * there is no error notice to show in its place (the error supersedes the empty state).
+ */
+export function showEmptyState(rowCount: number, error: string | undefined): boolean {
+  return rowCount === 0 && !showErrorNotice(error)
+}

@@ -108,6 +108,80 @@ catalogue of conventions and hard-won gotchas. The file-by-file source map lives
   change so it doesn't bleed across tabs; the action carries its target id in `action.context` (e.g.
   `{ issueKey }`) since catalog components have no panel callback prop.
 
+## Generative adapter — bound surfaces, descriptors & AdapterDispatcher (jira-generative-adapter-v1)
+
+The API→UI generative adapter turns a one-shot composed surface into a **live, refreshable,
+paginated** one WITHOUT re-running the agent or re-composing the view. It is **shared infra** —
+Slack/Confluence reuse items 1-6 below and supply only their own builders/descriptors/resolvers/
+catalog components. Jira is the first concrete cycle; **Slack and Confluence are the two sibling
+cycles and the set is now closed — all three integrations ride the shared infra with NO change to
+the shared contract.** Slack and Confluence are **read-only** (refresh + pagination only, never the
+Jira write-reconciliation path); Confluence is **append-only** for its two lists and `none` for its
+detail.
+
+- **One dispatcher, a COMPOSITE resolver (`src/main/index.ts`).** The Slack, Confluence, and Jira
+  `dataSource` namespaces are disjoint, so the composite resolver selects the panel resolver by
+  source: Slack selector first, then Confluence (`confluenceBindOptionsForSource`), else Jira (the
+  fallback also catches an unknown source → a recoverable Jira notice, never a throw). The same
+  selector chain drives the lazy re-registration bind-options pick. **Create `confluenceManager`
+  BEFORE the `AdapterDispatcher`** so its resolver is available to the composite (it used to be
+  constructed after).
+- **Confluence specifics (`confluenceAdapter.ts` / `confluenceSurfaceBuilder.ts`).** Sources:
+  `defaultFeed` (cursor-ONLY — the personal CQL stays in `ConfluenceClient.defaultFeed`, never in the
+  descriptor, FR-007), `searchContent` (`{ query, cursor? }`), `getPage` (`{ pageId }`). ONE bound
+  `SearchResultList` backs BOTH the default feed (`/feed`) and search results (`/results`) — the
+  builder seeds different descriptor + paths, NOT a second component. The bound `PageDetail`
+  (`pagination:'none'`) binds `title`/`space`/`body` to `/page` sub-paths (refresh-only, no
+  load-more). NO name-resolution step (Confluence rows carry no user-id, unlike Slack's `getUser`).
+  Cursor is the opaque forward `_links.next` (`cursorFromNextLink` → `nextCursor`); `hasMore` =
+  `nextCursor` present; `hasPrev` unused; no `PaginationBar` registered in `confluenceCatalog/index.ts`.
+
+- **Bound surface = view composed once, data refreshed in place.** A bound surface's spec carries
+  `{path}` bindings (NOT literal data props); its data lives in the A2UI **data model** and is
+  updated via `updateDataModel` keyed by `surfaceId` — the view is never re-composed. The composer
+  (`jiraSurfaceBuilder.buildBoundIssueListSurface`/`buildBoundIssueDetailSurface`) returns a
+  `JiraBoundSurface { spec, dataModel, descriptor }`: the data-free spec, the INITIAL data-model seed
+  (first page + flags), and a secret-free descriptor. The detail binds EVERY display value to a
+  `/issue` sub-path (`/issue/description`, `/issue/comments`, `/issue/key`, …) so one `/issue`
+  update re-renders the whole detail (incl. the post-write reflect) in place — `pagination:'none'`
+  but still refreshable.
+- **Catalog components must self-resolve `{path}` — the SDK does NOT.** A2UI 0.9's
+  `ComponentRenderer` spreads node props verbatim; a `{path}` prop arrives as the literal object.
+  Each bound prop must be read through `useDataBinding(surfaceId, source, default)` (passes a
+  non-binding literal through unchanged, so the same component serves bound AND static surfaces).
+  **Gotcha:** `DynamicValue` does not model object/array literals, so binding an object/array prop
+  (issue, issues, comments, availableTransitions) needs a cast — use the `useBound<T>` helper in
+  `jiraCatalog/components.tsx` (`source as DynamicValue | undefined`), don't fight the type per-call.
+- **`updateDataModel` apply lives in a pure `.ts`, not the `.tsx`.** `ActiveTabSurface.tsx` seeds
+  the initial data model after `createSurface`/`updateComponents`, then subscribes to
+  `window.cosmos.ui.onDataModel` filtered by `surfaceId` (a push for a sibling tab's surface is
+  ignored). The actual data-model mutation is `dataModelApply.ts` (`applyDataModel`) — node-testable,
+  malformed entry safely skipped. Keep new apply logic there, not inline in the component.
+- **Descriptor `{ dataSource, query }` is SECRET-FREE and persisted.** It is the refetch intent —
+  `dataSource` = a manager-call id (`searchIssues`/`getIssue`), `query` = non-secret JQL/cursor/
+  issueKey. It is persisted in `GenerativeTabSnapshot` beside `surface.spec` (schema bumped to 2) and
+  re-validated + secret-stripped by `validateAdapterDescriptor` at load. NEVER put a token in a
+  descriptor, data-model value, or any IPC frame — `validateAdapterDescriptor`/`validateAdapterAction`
+  STRIP secret-looking query keys (token/access_token/client_secret/…) and warn.
+- **`AdapterDispatcher` (`src/main/adapterDispatcher.ts`) is channel-independent.** It holds the
+  per-surface descriptor + accumulated list + cursor/loading state and pushes `updateDataModel`; it
+  has NO PtyManager/AgentRunner deps (inject `resolve`/`pushDataModel`/`cancelActive`/`warn`).
+  Append pagination writes the FULL accumulated list at the bound path (main holds the accumulation —
+  no RFC6901 `-` append); page-replace swaps the list and updates `hasMore`/`hasPrev`.
+- **Reserved `adapter.*` action namespace, intercepted at the `ui:action` boundary** (parallel to
+  `jira.*`): `adapter.refresh`/`adapter.loadMore`/`adapter.page`. Never returned to the agent.
+- **Lazy re-registration on restore.** After a restart main has no registration for a restored tab's
+  surface. `ActiveTabSurface` fires `adapter.refresh` carrying the persisted descriptor ONLY when the
+  surface's `restored` flag is set (set only in `hydrateGenerativeTabs`); main lazily registers
+  (bind options chosen by `descriptor.dataSource`) then refreshes. A FRESHLY composed surface seeds
+  its own data model and must NOT re-fetch (SC-008 perf) — that's what the `restored` gate prevents.
+  `AdapterActionRequest`'s Refresh variant therefore carries an OPTIONAL `descriptor`; the manual
+  RefreshButton fires the same action WITHOUT one (the surface is already registered).
+- **`jira.*` writes are reconciled, not replaced.** Registration persists in the dispatcher map, so a
+  write's re-read/reflect re-push still refreshes the bound surface; the write execute→re-read→reflect
+  path (`JiraActionDispatcher`) is unchanged (SC-008). Refresh triggers (restore, re-activation
+  remount, explicit RefreshButton) all funnel through `adapter.refresh`.
+
 ## Panel tabs & per-tab render routing
 
 - **Per-tab render routing is renderer-only and assumes sequential runs.** `UiRenderPayload` has

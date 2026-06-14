@@ -5,23 +5,41 @@
  * no Atlassian brand color, no raw hex (design §2).
  *
  * Each component receives the rest of its surface node spread in by the SDK's
- * `ComponentRenderer` plus `{ surfaceId, componentId }` (design §1.3). These are
- * DISPLAY-ONLY: they read static node props directly (the agent emits the
- * `src/shared/confluence.ts` shapes on the node) — there is NO `useFormBinding`/
- * `useDispatchAction`, no input, and no action in v1 (FR-012).
+ * `ComponentRenderer` plus `{ surfaceId, componentId }` (design §1.3).
+ *
+ * confluence-generative-adapter-v1 (design §6): `SearchResultList` (backs BOTH the
+ * default feed and search results) + `PageDetail` are now BOUND — they read their
+ * rows/value + `loading`/`hasMore`/`error` flags from the data model via `useBound`/
+ * `useDataBinding` (FR-001/FR-004), render the SHARED `RefreshButton` (+ `LoadMoreButton`
+ * for the lists), and degrade a recoverable fetch error to a destructive Notice above
+ * kept rows/content. `SearchResultRow`/`Notice`/`Text` remain display-only, unchanged.
+ * APPEND-ONLY (FR-011): no PaginationBar, no `hasPrev`. READ-ONLY: the only actions any
+ * surface emits are the reserved `adapter.refresh`/`adapter.loadMore`.
  *
  * Visuals are lifted from `ConfluencePanel.tsx` (its search rows + page detail) so the
  * agent-composed body matches the native browser body.
  *
- * Design trace: §3.1 SearchResultRow, §3.2 SearchResultList, §3.3 PageDetail,
- * §3.4 Notice, §3.5 Text.
+ * Design trace: §2.1/§2.2 SearchResultList (feed + search), §2.3 PageDetail,
+ * §3 states, §6 catalog re-point.
  */
 
+import { useDataBinding } from '@a2ui-sdk/react/0.9'
 import { Info, TriangleAlert } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { cn } from '@/lib/utils'
-import { countLabel, hasReadableBody } from './logic'
+// confluence-generative-adapter-v1 (design §6): the bound Confluence list + detail reuse
+// the SHARED adapter controls + binding helpers VERBATIM (the single definition the Jira
+// and Slack catalogs also use). Confluence registers LoadMoreButton only — never
+// PaginationBar (append-only). Refresh moved to the panel chrome (panel-refresh-v1, FR-006).
+import { LoadMoreButton, useBound, type Bound } from '../catalogShared/controls'
+import {
+  boundRows,
+  countLabel,
+  hasReadableBody,
+  showEmptyState,
+  showErrorNotice
+} from './logic'
 
 /** Props the SDK injects into every catalog component. */
 interface SdkProps {
@@ -66,25 +84,83 @@ export function SearchResultRow({
   )
 }
 
-export interface SearchResultListNode extends SdkProps {
-  results?: SearchResultRowNode[]
+/**
+ * The recoverable-error Notice the bound list + detail render ABOVE kept rows/content
+ * (design §3 / FR-007). Reuses the catalog's destructive Alert treatment; prior data is
+ * NOT cleared. Returns null when there is no error message.
+ */
+function BoundListError({ message }: { message: string | undefined }): React.JSX.Element | null {
+  if (!showErrorNotice(message)) {
+    return null
+  }
+  return (
+    <Alert variant="destructive" className="border-destructive/40 bg-destructive/15">
+      <TriangleAlert className="text-destructive" />
+      <AlertDescription className="text-destructive">{message}</AlertDescription>
+    </Alert>
+  )
 }
 
-export function SearchResultList({ results }: SearchResultListNode): React.JSX.Element {
-  const items = Array.isArray(results) ? results : []
-  if (items.length === 0) {
+export interface SearchResultListNode extends SdkProps {
+  /**
+   * The rows. A bound surface passes a `{path}` (confluence-generative-adapter-v1,
+   * FR-001/FR-002) so a refresh / load-more `updateDataModel` re-renders the list in
+   * place; a static builder passes the literal array. Resolved through `useBound`. ONE
+   * `SearchResultList` backs BOTH the default feed and search results (design §2.2).
+   */
+  results?: Bound<SearchResultRowNode[]>
+  /** Bound busy flag (FR-004) — drives the RefreshButton + LoadMoreButton spinners. */
+  loading?: Bound<boolean>
+  /** Bound "a next page exists" flag (FR-012) — gates the LoadMoreButton. */
+  hasMore?: Bound<boolean>
+  /** Bound recoverable error notice (FR-007) — shown above the list when present. */
+  error?: Bound<string>
+  /** Region key (multi-region partitioned surface) — forwarded to LoadMoreButton so a
+   * load-more reloads only this container's fetcher. Absent → surface-wide. */
+  region?: string
+}
+
+export function SearchResultList({
+  surfaceId,
+  componentId,
+  results,
+  loading,
+  hasMore,
+  error,
+  region
+}: SearchResultListNode): React.JSX.Element {
+  const rows = useBound<SearchResultRowNode[]>(surfaceId, results, undefined)
+  const isLoading = useDataBinding<boolean>(surfaceId, loading, false)
+  const errorMessage = useDataBinding<string | undefined>(surfaceId, error, undefined)
+  const items = boundRows(rows)
+  if (showEmptyState(items.length, errorMessage)) {
     return (
-      <p className="px-3 py-6 text-center text-sm text-muted-foreground">No content matches.</p>
+      <p
+        className="px-3 py-6 text-center text-sm text-muted-foreground"
+        aria-busy={isLoading}
+      >
+        No content matches.
+      </p>
     )
   }
   return (
-    <div className="flex flex-col">
-      <p className="px-3 py-2 text-xs text-muted-foreground" aria-live="polite">
-        {countLabel(items.length, 'result', 'results')}
-      </p>
+    <div className="flex flex-col" aria-busy={isLoading}>
+      <BoundListError message={errorMessage} />
+      <div className="flex items-center justify-between gap-2 px-3 py-2">
+        <p className="text-xs text-muted-foreground" aria-live="polite">
+          {countLabel(items.length, 'result', 'results')}
+        </p>
+      </div>
       {items.map((result, i) => (
         <SearchResultRow key={result.id ?? i} {...result} surfaceId="" componentId="" />
       ))}
+      <LoadMoreButton
+        surfaceId={surfaceId}
+        componentId={componentId}
+        loading={loading}
+        hasMore={hasMore}
+        region={region}
+      />
     </div>
   )
 }
@@ -95,27 +171,51 @@ export function SearchResultList({ results }: SearchResultListNode): React.JSX.E
 
 export interface PageDetailNode extends SdkProps {
   id?: string
-  title?: string
-  space?: string
-  body?: string
+  /**
+   * Display props. A bound surface passes a `{path}` (confluence-generative-adapter-v1,
+   * FR-001/FR-002) so a refresh `updateDataModel` re-renders the detail in place; a
+   * static builder passes the literal string. Resolved through `useBound`.
+   */
+  title?: Bound<string>
+  space?: Bound<string>
+  body?: Bound<string>
+  /** Bound busy flag (FR-004) — drives the RefreshButton spinner + aria-busy. */
+  loading?: Bound<boolean>
+  /** Bound recoverable error notice (FR-007) — shown above the stale detail when present. */
+  error?: Bound<string>
 }
 
-export function PageDetail({ title, space, body }: PageDetailNode): React.JSX.Element {
+export function PageDetail({
+  surfaceId,
+  title,
+  space,
+  body,
+  loading,
+  error
+}: PageDetailNode): React.JSX.Element {
+  const titleText = useBound<string>(surfaceId, title, '')
+  const spaceText = useBound<string>(surfaceId, space, '')
+  const bodyText = useBound<string>(surfaceId, body, '')
+  const isLoading = useDataBinding<boolean>(surfaceId, loading, false)
+  const errorMessage = useDataBinding<string | undefined>(surfaceId, error, undefined)
   return (
-    <div className="flex flex-col gap-4 p-3">
+    <div className="flex flex-col gap-4 p-3" aria-busy={isLoading}>
+      <BoundListError message={errorMessage} />
       <div className="flex flex-col gap-2">
-        <h2 className="text-base font-medium leading-snug text-foreground">{title ?? ''}</h2>
-        {space && (
+        <div className="flex items-center justify-between gap-2">
+          <h2 className="text-base font-medium leading-snug text-foreground">{titleText ?? ''}</h2>
+        </div>
+        {spaceText && (
           <div className="flex flex-wrap items-center gap-2">
             <Badge variant="outline" className="px-1.5 py-0 text-[10px]">
-              {space}
+              {spaceText}
             </Badge>
           </div>
         )}
       </div>
-      {hasReadableBody(body) ? (
+      {hasReadableBody(bodyText) ? (
         <p className="whitespace-pre-wrap break-words text-sm leading-relaxed text-card-foreground">
-          {body}
+          {bodyText}
         </p>
       ) : (
         <p className="text-sm text-muted-foreground">This page has no readable body.</p>

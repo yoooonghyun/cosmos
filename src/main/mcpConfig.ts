@@ -287,12 +287,41 @@ export function renderMcpConfigJsonForTarget(
 }
 
 /**
+ * The UNIFORM bindings-first steering clause appended to every data-bearing target's grounding
+ * prompt (bindings-first-generative-ui-v1 v2 — Fix A). The tool-description reframe ALONE did not
+ * make the model comply at runtime: it fetched broadly, partitioned the rows into UI containers
+ * CLIENT-SIDE, and rendered LITERAL rows with NO binding (the panel refresh stays disabled and a
+ * reload re-paints stale rows). Main CANNOT infer those bindings — when the model splits a broad
+ * fetch it never issued the per-container narrowed queries, so each container's narrowed query is
+ * intent only the MODEL knows. This forces the model to DECLARE a binding per data container whose
+ * `query` is that container's OWN narrowed fetch. SECRET-FREE: `query` is non-secret params only.
+ */
+const BINDINGS_FIRST_STEERING = [
+  'REFRESHABILITY IS MANDATORY: EVERY container that displays data MUST carry a binding whose',
+  '`query` is that container\'s OWN narrowed fetch — a kanban column → its status JQL/query; a',
+  'single list → its list query. Pass `bindings` (one entry per data container) on the render',
+  'call. NEVER partition a broad fetch into multiple UI containers without giving each its own',
+  'narrowed-query binding: a container\'s identity is its query, not its rows. The literal rows',
+  'you fetched are a first-paint SEED only — without a binding the surface cannot refresh. If you',
+  'split issues/messages/results into columns by status/category, re-issue (or declare) the',
+  'narrowed query per column and bind it. `query` carries ONLY non-secret params — NEVER a token.',
+  'A binding\'s `descriptor.dataSource` MUST be the ADAPTER SOURCE id, NOT the MCP read-tool name:',
+  'Jira `searchIssues`/`getIssue` (NOT `jira_search_issues`/`jira_get_issue`); Slack',
+  '`listChannels`/`getHistory`/`search` (NOT `slack_list_channels`/`slack_read_history`/`slack_search`);',
+  'Confluence `defaultFeed`/`searchContent`/`getPage` (NOT',
+  '`confluence_search_content`/`confluence_get_page`). A read-tool name is rejected and the surface',
+  'lands un-refreshable.'
+].join(' ')
+
+/**
  * Per-target grounding system prompt for the headless run, or undefined for targets that
  * need none. The jira target gets a hard anti-fabrication instruction: the render tool's
  * description carries an EXAMPLE with placeholder tickets (PROJ-1 …), and the run has no
  * other system prompt — so without this the model will copy the example and invent a board
  * when it lacks real data. This forces it to fetch real tickets first and surface errors as
- * a Notice rather than fabricating.
+ * a Notice rather than fabricating. Every data-bearing target also carries the UNIFORM
+ * {@link BINDINGS_FIRST_STEERING} clause (v2 Fix A) so the model declares a refresh binding per
+ * data container instead of rendering un-refreshable literal rows.
  */
 export function groundingPromptForTarget(
   target: UiRenderTarget = DEFAULT_UI_RENDER_TARGET
@@ -306,7 +335,8 @@ export function groundingPromptForTarget(
       'guess, paraphrase, or use placeholder/example data — the issue keys and summaries shown',
       'in the render_jira_ui description are format illustration only; do NOT copy their values.',
       'If Jira is not connected or a tool returns an error, render a single Notice component',
-      'explaining that (and to connect/reconnect Jira) INSTEAD of fabricating any tickets.'
+      'explaining that (and to connect/reconnect Jira) INSTEAD of fabricating any tickets.',
+      BINDINGS_FIRST_STEERING
     ].join(' ')
   }
   if (target === 'slack') {
@@ -321,7 +351,8 @@ export function groundingPromptForTarget(
       'description are format illustration only; do NOT copy them. If Slack is not connected or',
       'a tool returns an error, render a single Notice component explaining that (and to',
       'connect/reconnect Slack in cosmos) INSTEAD of fabricating any channels, messages, or',
-      'users. If a read returns no results, convey "nothing found" rather than inventing rows.'
+      'users. If a read returns no results, convey "nothing found" rather than inventing rows.',
+      BINDINGS_FIRST_STEERING
     ].join(' ')
   }
   if (target === 'confluence') {
@@ -336,7 +367,8 @@ export function groundingPromptForTarget(
       'copy them. If Confluence is not connected or a tool returns an error, render a single',
       'Notice component explaining that (and to connect/reconnect Confluence in cosmos) INSTEAD',
       'of fabricating any pages. If a read returns no results, convey "nothing found" rather',
-      'than inventing rows.'
+      'than inventing rows.',
+      BINDINGS_FIRST_STEERING
     ].join(' ')
   }
   return undefined
