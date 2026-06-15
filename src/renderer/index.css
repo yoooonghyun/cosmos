@@ -1,4 +1,5 @@
 @import "tailwindcss";
+@plugin "@tailwindcss/typography";
 
 /*
  * Tailwind v4 + shadcn/ui (new-york) theme for cosmos.
@@ -50,6 +51,68 @@
   --color-brand-pink: var(--brand-pink);
   --color-brand-purple: var(--brand-purple);
   --color-brand-foreground: var(--brand-foreground);
+}
+
+/*
+ * prose-cosmos — the cosmos-themed @tailwindcss/typography variant for the Confluence
+ * page-detail rich body (confluence-detail-rich-render-v1, design §7). Maps the plugin's
+ * `--tw-prose-*` knobs onto EXISTING cosmos theme vars (defined in `.dark` below) instead
+ * of using `prose-invert` (which ships a hardcoded gray scale that would drift from the
+ * panel). Defined as a Tailwind `@utility` so it lands in the SAME layered cascade as the
+ * plugin's `.prose` — an unlayered App.css rule must NEVER target `.prose` (cascade-layer
+ * gotcha, DEVELOPMENT.md). Applied ONLY on the body container (not the title/chrome), so
+ * the plugin never restyles panel UI. cosmos is single-mode dark, so one mapping suffices.
+ */
+@utility prose-cosmos {
+  --tw-prose-body: var(--card-foreground);
+  --tw-prose-headings: var(--foreground);
+  --tw-prose-lead: var(--card-foreground);
+  --tw-prose-links: var(--primary);
+  --tw-prose-bold: var(--foreground);
+  --tw-prose-counters: var(--muted-foreground);
+  --tw-prose-bullets: var(--muted-foreground);
+  --tw-prose-hr: var(--border);
+  --tw-prose-quotes: var(--muted-foreground);
+  --tw-prose-quote-borders: var(--border);
+  --tw-prose-captions: var(--muted-foreground);
+  --tw-prose-code: var(--foreground);
+  --tw-prose-pre-code: var(--card-foreground);
+  --tw-prose-pre-bg: var(--muted);
+  --tw-prose-th-borders: var(--border);
+  --tw-prose-td-borders: var(--border);
+
+  /* Inline <code> chip (design §4): a token surface, not bare backtick text. Drop the
+     plugin's default pseudo-quote `…` markers. */
+  & :where(code):not(:where(pre code)) {
+    padding: 0.15em 0.4em;
+    border-radius: var(--radius-sm);
+    background: var(--muted);
+    border: 1px solid var(--border);
+    font-weight: inherit;
+  }
+  & :where(code):not(:where(pre code))::before,
+  & :where(code):not(:where(pre code))::after {
+    content: none;
+  }
+
+  /* Fenced blocks + wide tables scroll horizontally so a large page stays responsive on
+     the narrow rail (design §4, FR-012). */
+  & :where(pre) {
+    border-radius: var(--radius-md);
+    overflow-x: auto;
+  }
+  & :where(table) {
+    display: block;
+    overflow-x: auto;
+  }
+
+  /* Remote Confluence images need auth + will not load (no token-bearing fetch — FR-010/
+     FR-011); collapse a broken image to a thin bordered placeholder, not a tall gap. */
+  & :where(img) {
+    border-radius: var(--radius-md);
+    border: 1px solid var(--border);
+    min-height: 0;
+  }
 }
 
 :root {

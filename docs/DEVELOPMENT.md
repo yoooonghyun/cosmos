@@ -107,6 +107,17 @@ catalogue of conventions and hard-won gotchas. The file-by-file source map lives
   Panel `view` chrome (e.g. a back row) lives OUTSIDE the `A2UIProvider` and resets on `activeTabId`
   change so it doesn't bleed across tabs; the action carries its target id in `action.context` (e.g.
   `{ issueKey }`) since catalog components have no panel callback prop.
+- **When a catalog field becomes a click target, its MCP tool description MUST teach the agent that
+  field's real semantics.** A generative catalog's rows are AGENT-COMPOSED JSON — the model fills each
+  field from the `render_*_ui` tool description, not from the integration's read result directly. So the
+  moment a field starts driving a real call (e.g. `SearchResultRow.id` → `getPage(id)`), the tool
+  description (`confluenceToolDescription.ts` etc.) must (a) state the field is the REAL id from the read
+  tool (`confluence_search_content`), NOT a positional index, (b) use a realistic id-shaped example value
+  (a positional `"id": "1"` teaches the model to emit `"1"`, `"2"`, … → an invalid-id API call), and
+  (c) drop any stale "DISPLAY-ONLY / no actions" wording. A bad agent id is the cause of the
+  `confluence-detail-rich-render-v1` HTTP-500: the native panel never hit it (real ids from a direct
+  read), only the agent-composed surface did. A renderer guard can't rescue this (a positional "1" is a
+  valid-looking non-empty numeric string) — the fix is the description + a graceful `getPage`-error path.
 
 ## Generative adapter — bound surfaces, descriptors & AdapterDispatcher (jira-generative-adapter-v1)
 
@@ -335,6 +346,42 @@ single new `window.cosmos.session` namespace in `src/shared/ipc.ts` (`session:lo
   utilities or `var(--brand-…)` (the `cosmos` Button variant, `CosmosMark`). Colors, type sizes, and
   z-order are design-system foundations — define them in the theme, never as one-off hex/arbitrary
   values in a component.
+- **Rich Confluence HTML renders via `prose-cosmos` + a single sanitized `dangerouslySetInnerHTML`.**
+  Confluence page detail carries server-rendered `body-format=view` HTML; the shared `PageDetailBody`
+  (`confluenceCatalog/components.tsx`, reused by the native `ConfluencePanel` detail AND the gen-UI
+  catalog `PageDetail`) runs `sanitizeConfluenceHtml` (DOMPurify) FIRST — this is the ONE sanctioned
+  raw-HTML site — then renders into a scoped `prose prose-sm prose-cosmos` container. `prose-cosmos` is a
+  custom `@utility` in `index.css` mapping the `--tw-prose-*` knobs onto existing theme vars (NOT
+  `prose-invert`, which hardcodes its own gray scale and ignores cosmos tokens — cosmos is single-mode
+  dark so there's no light↔dark toggle to drive). Keep all prose styling inside the Tailwind utilities
+  layer (`@plugin "@tailwindcss/typography"` + the `@utility` block); do NOT add any `.prose` rule to the
+  unlayered `App.css` or it silently beats the plugin (the cascade-layer rule above). Both detail mount
+  points MUST share the one class string + the one sanitize helper or they drift. DOMPurify v3's default
+  export is a factory; it needs a DOM `window` — the renderer passes the global, node tests pass a `jsdom`
+  window. DOMPurify 3.x ships its own types — do NOT add `@types/dompurify`.
+  - **The allow-list must cover the benign rich markup Confluence actually emits, or it renders
+    broken.** `body-format=view` carries emoji/emoticons as `<img class="emoticon" src=… alt=… data-emoji-*>`
+    and task-list checkboxes as `<input type="checkbox" checked>`. A too-tight `ALLOWED_TAGS`/`ALLOWED_ATTR`
+    silently strips them (emoji/checkbox vanish). `img` + `input` (and `src`/`alt`/`class`/`type`/`checked`/
+    `disabled`/`data-emoji-*`) are allow-listed for this reason.
+  - **DOMPurify permits `data:` URIs on media tags (`img`/`audio`/`video`/…) via its OWN internal
+    allow-list, BYPASSING `ALLOWED_URI_REGEXP`.** So allow-listing `<img src>` re-opens the
+    `data:image/svg+xml,<svg onload=…>` inline-script XSS vector even though the regexp would block it.
+    `sanitize.ts` closes this with an `afterSanitizeAttributes` hook that strips any `src`/`href` whose
+    scheme is `data:`. The SAME hook forces `disabled` on every surviving `<input>` so the read-only
+    viewer's checkboxes show state but are never toggleable. When widening any media allow-list, re-block
+    `data:` explicitly — the regexp is not enough.
+  - **Confluence emits emoji TWO ways; handle both.** (1) Emoticon `<img data-emoji-id="1f5d3" …
+    src="/wiki/s/…">` whose src is RELATIVE + auth-gated (404s in the renderer) — the hook replaces each
+    emoticon `<img>` in place with its real glyph decoded offline from `data-emoji-id` (`emojiIdToGlyph`),
+    degrading to shortname/alt. (2) Emoji as the LITERAL escape text `👥` (double-escaped at the
+    source so it is plain text, not an `<img>`) — the hook decodes `\uXXXX` in element TEXT nodes via the
+    shared `decodeUnicodeEscapes`. Confluence ALSO serializes that literal-escape form into plain
+    `title`/`excerpt`/space fields, so the main process (`confluenceClient` `mapSearchResultsPage` +
+    `getPage`) applies `decodeUnicodeEscapes` at the data source → the search/feed LIST screen, detail
+    header, and gen-UI catalog all show real glyphs. `decodeUnicodeEscapes` lives in `src/shared/confluence.ts`
+    so main + renderer share one transform; decode HTML body at the text-node level (renderer), never on the
+    serialized string (would corrupt attributes).
 
 ## Testing
 

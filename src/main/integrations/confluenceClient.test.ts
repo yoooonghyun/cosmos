@@ -3,6 +3,7 @@ import {
   ConfluenceClient,
   cursorFromNextLink,
   mapConfluenceError,
+  pageViewBody,
   type ConfluenceHttpResponse,
   type FetchLike
 } from './confluenceClient'
@@ -70,6 +71,36 @@ describe('ConfluenceClient.searchContent (FR-C04)', () => {
         { id: '111', title: 'Onboarding', space: 'Engineering', excerpt: 'A short excerpt here' }
       ])
       expect(result.data.nextCursor).toBe('NEXT9')
+    }
+  })
+
+  it('decodes literal \\uXXXX emoji escapes in list title/space/excerpt (re-open)', async () => {
+    // Confluence serializes some emoji as literal escape text even in plain fields; the
+    // LIST screen must show real glyphs, not "👥".
+    const fetchImpl: FetchLike = async () =>
+      res({
+        results: [
+          {
+            title: '\\uD83D\\uDC65 Team page',
+            excerpt: '\\uD83E\\uDD45 Goals',
+            content: { id: '333', title: '\\uD83D\\uDC65 Team page' },
+            resultGlobalContainer: { title: '\\uD83C\\uDFA8 Design' }
+          }
+        ],
+        _links: {}
+      })
+    const client = new ConfluenceClient({ fetchImpl })
+    const result = await client.searchContent(auth, 'team')
+    expect(result.ok).toBe(true)
+    if (result.ok) {
+      expect(result.data.items).toEqual([
+        {
+          id: '333',
+          title: '\u{1F465} Team page',
+          space: '\u{1F3A8} Design',
+          excerpt: '\u{1F945} Goals'
+        }
+      ])
     }
   })
 
@@ -181,16 +212,19 @@ describe('ConfluenceClient.defaultFeed (confluence-default-feed v1, FR-006)', ()
   })
 })
 
-describe('ConfluenceClient.getPage (FR-C04)', () => {
-  it('reads v2 page detail and flattens the storage body to text', async () => {
+describe('ConfluenceClient.getPage (FR-C04; confluence-detail-rich-render-v1 FR-005/FR-006)', () => {
+  it('reads v2 page detail with body-format=view and returns the RAW view HTML unchanged', async () => {
+    const viewHtml = '<h1>Runbook</h1><ul><li>Step one</li><li>Step two</li></ul>'
     const fetchImpl: FetchLike = async (url) => {
       expect(url).toContain('/wiki/api/v2/pages/12345')
-      expect(url).toContain('body-format=storage')
+      // FR-005: the rich view body, NOT storage (no longer flattened to plain text).
+      expect(url).toContain('body-format=view')
+      expect(url).not.toContain('body-format=storage')
       return res({
         id: '12345',
         title: 'Runbook',
         spaceId: 777,
-        body: { storage: { value: '<p>Step one.</p><p>Step two.</p>' } }
+        body: { view: { value: viewHtml } }
       })
     }
     const client = new ConfluenceClient({ fetchImpl })
@@ -200,7 +234,18 @@ describe('ConfluenceClient.getPage (FR-C04)', () => {
       expect(result.data.id).toBe('12345')
       expect(result.data.title).toBe('Runbook')
       expect(result.data.space).toBe('777')
-      expect(result.data.body).toBe('Step one.\nStep two.')
+      // FR-006: raw server-rendered HTML carried unchanged (sanitized later in renderer).
+      expect(result.data.body).toBe(viewHtml)
+    }
+  })
+
+  it('maps an empty / missing view body to "" (safe empty-body state — FR-012)', async () => {
+    const fetchImpl: FetchLike = async () => res({ id: '1', title: 't', body: {} })
+    const client = new ConfluenceClient({ fetchImpl })
+    const result = await client.getPage(auth, '1')
+    expect(result.ok).toBe(true)
+    if (result.ok) {
+      expect(result.data.body).toBe('')
     }
   })
 
@@ -209,6 +254,26 @@ describe('ConfluenceClient.getPage (FR-C04)', () => {
     const client = new ConfluenceClient({ fetchImpl })
     const result = await client.getPage(auth, '1')
     expect(JSON.stringify(result)).not.toContain('at-test')
+  })
+})
+
+describe('pageViewBody (pure body-format=view mapper — FR-005/FR-006/FR-012)', () => {
+  it('returns the raw view HTML string from body.view.value (happy path)', () => {
+    const html = '<table><tbody><tr><td>cell</td></tr></tbody></table>'
+    expect(pageViewBody({ body: { view: { value: html } } })).toBe(html)
+  })
+
+  it('returns "" when view.value is missing (empty body)', () => {
+    expect(pageViewBody({ body: { view: {} } })).toBe('')
+    expect(pageViewBody({ body: {} })).toBe('')
+    expect(pageViewBody({})).toBe('')
+  })
+
+  it('returns "" for a non-string view.value or non-object input (never throws)', () => {
+    expect(pageViewBody({ body: { view: { value: 42 } } })).toBe('')
+    expect(pageViewBody(null)).toBe('')
+    expect(pageViewBody('nope')).toBe('')
+    expect(pageViewBody(undefined)).toBe('')
   })
 })
 

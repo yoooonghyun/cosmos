@@ -118,6 +118,29 @@ export class ConfluenceManager {
     return { token: tokens.accessToken, cloudId: readCloudId(tokens) }
   }
 
+  /**
+   * The live per-call auth (token + cloudId) for the connected session, or `null` when not
+   * connected / no token (confluence-content-images-v1, FR-003). MAIN-ONLY: the sole consumer
+   * is the `cosmos-confluence-img` protocol handler, which attaches the token to its outbound
+   * `net.fetch` and never returns it to the renderer. This is NOT an IPC method and the token
+   * is NEVER put in any IPC payload / bridge frame / surface (SC-009 / FR-002).
+   *
+   * Synchronous (the protocol resolver is sync) and does NOT proactively refresh: an expired
+   * token simply yields a 401 → graceful broken image (FR-010), and the next interactive read
+   * runs the normal `ensureToken` refresh/reconnect path. Returns the CURRENT stored token, so
+   * a refresh applied by a concurrent read is reflected on the next image request.
+   */
+  currentAuth(): ConfluenceCallAuth | null {
+    if (this.state === 'not_connected') {
+      return null
+    }
+    const tokens = this.deps.tokenStore.load()
+    if (!tokens) {
+      return null
+    }
+    return this.auth(tokens)
+  }
+
   private async ensureToken(): Promise<StoredTokenSet | ConfluenceResult<never>> {
     const tokens = this.deps.tokenStore.load()
     if (!tokens) {

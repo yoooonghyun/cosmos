@@ -18,6 +18,27 @@
 
 import type { AdapterDescriptor, AdapterQuery } from './adapter'
 
+/**
+ * Decode literal JS-style `\uXXXX` escape sequences in a text run into their real
+ * characters (confluence-detail-emoji-checkbox-stripped-v1 re-open). Confluence sometimes
+ * serializes emoji as the literal six-character text `👥` (👥) — both in
+ * `body-format=view` HTML AND in plain `title`/`excerpt` fields — rather than the actual
+ * glyph. Each `\uXXXX` is one UTF-16 code unit; emitting the high+low surrogate units
+ * adjacently re-forms the astral glyph naturally (JS strings are UTF-16), so independent
+ * replacement is correct: `👥` → '\uD83D' + '\uDC65' → 👥. Only well-formed
+ * 4-hex-digit escapes are touched; all other text is returned verbatim. Pure; never throws.
+ *
+ * Shared so BOTH the renderer's HTML sanitizer (text-node decode in the page-detail body)
+ * AND the main process (plain `title`/`excerpt` mapping for the search/feed LIST screen)
+ * apply the SAME transform.
+ */
+export function decodeUnicodeEscapes(text: unknown): string {
+  if (typeof text !== 'string' || !text.includes('\\u')) {
+    return typeof text === 'string' ? text : ''
+  }
+  return text.replace(/\\u([0-9a-fA-F]{4})/g, (_m, hex) => String.fromCharCode(parseInt(hex, 16)))
+}
+
 /* ------------------------------------------------------------------------- *
  * Connection status (shared by the panel + status events)
  * ------------------------------------------------------------------------- */
@@ -74,9 +95,13 @@ export interface ConfluenceSearchResult {
 }
 
 /**
- * Full page detail (FR-C04: title, space, body/excerpt). `body` is the page body
- * flattened to plain readable text (storage/HTML-ish → text, no macro rendering —
- * design Q2).
+ * Full page detail (FR-C04: title, space, body). `body` carries the page body as
+ * Confluence SERVER-RENDERED HTML (`body-format=view`) — a raw HTML string
+ * (confluence-detail-rich-render-v1, FR-005/FR-006). It is UNTRUSTED HTML and MUST be
+ * sanitized in the renderer (DOMPurify) before injection via `dangerouslySetInnerHTML`
+ * (FR-008); sanitization is a renderer concern at the display site, so the contract
+ * carries the raw `view` HTML across IPC unchanged. `''` when the page has no body
+ * (the safe "no readable body" state — FR-012).
  */
 export interface ConfluencePageDetail {
   /** Page id. */
@@ -85,7 +110,11 @@ export interface ConfluencePageDetail {
   title: string
   /** Space name (or key); absent when unknown. */
   space?: string
-  /** Page body as flattened, plain readable text; '' when empty (design Q2). */
+  /**
+   * Page body as Confluence server-rendered HTML (`body-format=view`); a RAW,
+   * UNTRUSTED HTML string sanitized in the renderer before display (FR-006/FR-008).
+   * `''` when the page has no readable body (FR-012).
+   */
   body: string
 }
 

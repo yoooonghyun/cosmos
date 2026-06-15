@@ -45,13 +45,18 @@ export const JIRA_OAUTH_SCOPES = [
  * which is why search succeeds while a page read fails). So reads use
  * `read:page:confluence` (v2 page read) + `read:space:confluence` (space-key→id lookup
  * for create) and the single write uses `write:page:confluence`. `search:confluence`
- * stays for the CQL search. `offline_access` enables refresh (FR-A09). Changing the
- * scope set forces an existing connection to disconnect + reconnect to re-consent, and
- * the registered app must have these granular scopes enabled in the Atlassian console.
+ * stays for the CQL search. `read:attachment:confluence` (confluence-content-images-v1,
+ * FR-012) authorizes fetching the page-body content/attachment image bytes the main-process
+ * `cosmos-confluence-img` protocol proxies. `offline_access` enables refresh (FR-A09).
+ * Changing the scope set forces an existing connection to disconnect + reconnect to
+ * re-consent (so already-connected users reconnect ONCE to grant the new attachment scope —
+ * until then asset fetches fail gracefully to a broken image), and the registered app must
+ * have these granular scopes enabled in the Atlassian console.
  */
 export const CONFLUENCE_OAUTH_SCOPES = [
   'read:page:confluence',
   'read:space:confluence',
+  'read:attachment:confluence',
   'search:confluence',
   'write:page:confluence',
   'offline_access'

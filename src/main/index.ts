@@ -124,6 +124,10 @@ import {
   runAtlassianOAuth
 } from './integrations/atlassianOAuth'
 import { CONFLUENCE_OAUTH_SCOPES, JIRA_OAUTH_SCOPES } from './integrations/atlassianConfig'
+import {
+  registerConfluenceImageScheme,
+  installConfluenceImageProtocol
+} from './confluenceImageProtocol'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 
@@ -135,6 +139,11 @@ try {
 } catch {
   // no .env present — fall back to the ambient environment
 }
+
+// confluence-content-images-v1: register the privileged `cosmos-confluence-img` streaming
+// scheme. MUST run BEFORE `app.whenReady` (Electron requires pre-ready scheme registration);
+// the matching `protocol.handle` is installed post-ready alongside createWindow().
+registerConfluenceImageScheme()
 
 // The cosmos app icon (rasterized from assets/logo/cosmos-pastel.svg). Used for the
 // window (Windows/Linux taskbar) and the macOS dock. Resolved from the app root so it
@@ -1336,6 +1345,13 @@ app.whenReady().then(() => {
   }
   registerIpcHandlers()
   createWindow()
+
+  // confluence-content-images-v1: install the `cosmos-confluence-img` handler now that the
+  // app is ready. The resolver reads the LIVE Confluence auth from the manager (token +
+  // cloudId) on each image request; the token is attached only to the handler's outbound
+  // `net.fetch` and never crosses into the renderer (FR-002/FR-003). Not connected → null →
+  // graceful broken image (FR-010).
+  installConfluenceImageProtocol(() => confluenceManager?.currentAuth() ?? null)
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) {

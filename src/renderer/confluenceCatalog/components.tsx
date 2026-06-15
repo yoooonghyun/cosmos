@@ -37,11 +37,36 @@ import {
   boundRows,
   CONFLUENCE_OPEN_DETAIL_ACTION,
   countLabel,
-  hasReadableBody,
   isOpenDetailEmittable,
   showEmptyState,
   showErrorNotice
 } from './logic'
+import { sanitizeConfluenceHtml } from './sanitize'
+
+/**
+ * The SHARED Confluence page-detail BODY (confluence-detail-rich-render-v1, FR-007/FR-008,
+ * design §2/§5). Rendered by BOTH the gen-UI catalog `PageDetail` (below) and the native
+ * `ConfluencePanel.PageDetail`, so the two surfaces are byte-for-byte identical (SC-002):
+ * one component, one class string, one sanitize call.
+ *
+ * `body` is RAW Confluence `body-format=view` HTML. This is the ONE sanctioned
+ * `dangerouslySetInnerHTML` site — `sanitizeConfluenceHtml` (DOMPurify) MUST run first
+ * (FR-008). An empty body (after sanitize) shows the safe "no readable body" state
+ * (FR-012); never an empty `prose` container. The scoped `prose prose-sm prose-cosmos`
+ * container themes the rich content to cosmos tokens (design §3/§7) without leaking into
+ * the surrounding panel chrome.
+ */
+export const PAGE_DETAIL_BODY_CLASS = 'prose prose-sm prose-cosmos max-w-none break-words'
+
+export function PageDetailBody({ body }: { body: string | undefined }): React.JSX.Element {
+  const safeHtml = sanitizeConfluenceHtml(body)
+  if (safeHtml.trim() === '') {
+    return <p className="text-sm text-muted-foreground">This page has no readable body.</p>
+  }
+  return (
+    <div className={PAGE_DETAIL_BODY_CLASS} dangerouslySetInnerHTML={{ __html: safeHtml }} />
+  )
+}
 
 /** Props the SDK injects into every catalog component. */
 interface SdkProps {
@@ -260,13 +285,7 @@ export function PageDetail({
           </div>
         )}
       </div>
-      {hasReadableBody(bodyText) ? (
-        <p className="whitespace-pre-wrap break-words text-sm leading-relaxed text-card-foreground">
-          {bodyText}
-        </p>
-      ) : (
-        <p className="text-sm text-muted-foreground">This page has no readable body.</p>
-      )}
+      <PageDetailBody body={bodyText} />
     </div>
   )
 }

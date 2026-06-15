@@ -43,6 +43,17 @@ for Electron's ABI via a `postinstall` `electron-rebuild` step.
 `nodeIntegration: false`; `sandbox` is intentionally left `false` so the preload can use
 `ipcRenderer` reliably, while the renderer still only sees the `pty` channels.
 
+cosmos registers ONE custom privileged streaming protocol, **`cosmos-confluence-img://`**
+(`registerSchemesAsPrivileged` before `app.ready`; `protocol.handle` after), so the renderer can
+display auth-gated Confluence content/attachment images via an OPAQUE scheme while the access
+token stays in main — the handler fetches the asset with the bearer token and streams it back, and
+the renderer never sees the token, the token-bearing URL, or the raw bytes as a `data:` URL (§4.9).
+The renderer CSP `img-src` is `'self' data: https: cosmos-confluence-img:`: auth-gated `/wiki/…`
+assets load through the opaque proxy scheme, while PUBLIC external-CDN content images (no Confluence
+auth, sanitized-body `<img src="https://…">` left untouched) load directly under `https:`. Images are
+non-executable, so allowing `https:` here does not reopen the script-injection surface that
+`script-src 'self'` and the DOMPurify gate close.
+
 **Tradeoff accepted:** Electron's larger bundle (~100MB) and higher memory use are
 acceptable for an internal tool where development speed and a single Node stack win.
 If hard size/memory limits appear later, the core can migrate to Tauri.
@@ -546,7 +557,20 @@ and `GET /rest/api/3/issue/{key}?fields=…,comment`, and writes via `POST
 to ADF via `plainTextToAdf`; all failures mapped through the existing `mapJiraError` discipline
 (429 → `rate_limited`, 401/403 → `reconnect_needed`, else → `network`). Confluence at
 `…/ex/confluence/{cloudId}/wiki` is a v1+v2 **hybrid** — v2 `GET
-/wiki/api/v2/pages/{id}?body-format=storage` for page reads and v1 `GET /wiki/rest/api/search?cql=…`
+/wiki/api/v2/pages/{id}?body-format=view` for page reads (server-rendered HTML carried RAW through
+`ConfluencePageDetail.body` + sanitized with DOMPurify in the renderer before display —
+confluence-detail-rich-render-v1; supersedes the earlier `body-format=storage` plain-text flattening).
+**Embedded content/attachment images** in that body (relative, auth-gated `<img src>` like
+`/wiki/download/attachments/…` — distinct from emoji, which are converted to glyphs offline) render
+via the **`cosmos-confluence-img://` privileged protocol** (confluence-content-images-v1): the single
+renderer sanitize gate, running AFTER DOMPurify, rewrites each Confluence-content `<img src>` to an
+OPAQUE `cosmos-confluence-img://` reference encoding ONLY the asset's `/wiki/…` relative path; the
+main handler re-resolves it against the gateway base `…/ex/confluence/{cloudId}` (rejecting any ref
+that escapes the Confluence origin — SSRF-safe), fetches with the bearer token, and streams the bytes
+back. The token, the token-bearing URL, and the raw bytes never reach the renderer; the existing
+`data:`-URL strip stays in force (no base64 `data:` rewrite). External (non-Confluence) `<img>` are
+left direct; a missing/expired/unscoped token degrades to a broken `<img>`, never a crash. And v1
+`GET /wiki/rest/api/search?cql=…`
 for content search — and the default personal feed (a fixed personal-CQL variant of the same v1
 search endpoint, §default feed above) — (CQL is not exposed in v2), both paginating by opaque cursor
 (`Link`/`_links.next`) — plus a single v2 write, **`POST /wiki/api/v2/pages`** (create), which first
@@ -556,7 +580,10 @@ resolves the user-supplied space KEY to the numeric `spaceId` the v2 create requ
 storage XHTML via `plainTextToStorage` (the inverse of `storageToPlainText`: one `<p>…</p>` per line,
 HTML-escaped). Scopes: Jira `read:jira-work` + `read:jira-user` + **`write:jira-work`**
 (the least-privilege write scope; create + update reuse it, no new scope); Confluence **granular**
-`read:page:confluence` + `read:space:confluence` + **`write:page:confluence`** (the single create
+`read:page:confluence` + `read:space:confluence` + **`read:attachment:confluence`** (added by
+confluence-content-images-v1 so the bearer can download embedded content/attachment images — a
+scope change that forces a one-time disconnect+reconnect for already-connected users) +
+**`write:page:confluence`** (the single create
 write scope) plus the one **classic** scope `search:confluence` — kept because the v1 CQL
 `/wiki/rest/api/search` endpoint has no granular search-scope equivalent and is the only classic
 content scope still honored on a granular-migrated app (the deprecated `read:confluence-content.all`

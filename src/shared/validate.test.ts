@@ -2,6 +2,7 @@ import { describe, it, expect, vi } from 'vitest'
 import {
   validateAgentPrompt,
   validateConfluenceDefaultFeed,
+  validateConfluencePageDetail,
   validateDispose,
   validateInput,
   validateRequestDefaultView,
@@ -436,4 +437,71 @@ describe('validateConfluenceDefaultFeed (confluence-default-feed v1, FR-006, FR-
       expect(warn).toHaveBeenCalledOnce()
     }
   )
+})
+
+describe('validateConfluencePageDetail (confluence-detail-rich-render-v1, FR-009/SC-007)', () => {
+  it('accepts a valid detail with HTML-string body + optional space (happy path)', () => {
+    const warn = vi.fn()
+    const detail = {
+      id: '12345',
+      title: 'Onboarding',
+      space: 'ENG',
+      body: '<h1>Welcome</h1><p>Hello</p>'
+    }
+    expect(validateConfluencePageDetail(detail, warn)).toEqual(detail)
+    expect(warn).not.toHaveBeenCalled()
+  })
+
+  it('accepts an empty-string body (a page with no readable body is valid — FR-012)', () => {
+    const warn = vi.fn()
+    expect(validateConfluencePageDetail({ id: '1', title: 'T', body: '' }, warn)).toEqual({
+      id: '1',
+      title: 'T',
+      body: ''
+    })
+    expect(warn).not.toHaveBeenCalled()
+  })
+
+  it('accepts a missing optional "space" (must not error)', () => {
+    const warn = vi.fn()
+    expect(
+      validateConfluencePageDetail({ id: '1', title: 'T', body: '<p>x</p>' }, warn)
+    ).toEqual({ id: '1', title: 'T', body: '<p>x</p>' })
+    expect(warn).not.toHaveBeenCalled()
+  })
+
+  it('warns and returns null when required "body" is missing (warn + ignore, never crash)', () => {
+    const warn = vi.fn()
+    expect(validateConfluencePageDetail({ id: '1', title: 'T' }, warn)).toBeNull()
+    expect(warn).toHaveBeenCalledOnce()
+  })
+
+  it('warns and returns null when "body" is not a string', () => {
+    const warn = vi.fn()
+    expect(
+      validateConfluencePageDetail({ id: '1', title: 'T', body: 42 } as unknown, warn)
+    ).toBeNull()
+    expect(warn).toHaveBeenCalledOnce()
+  })
+
+  it('warns and returns null when "id" or "title" is not a string', () => {
+    const warn = vi.fn()
+    expect(validateConfluencePageDetail({ id: 1, title: 'T', body: '' } as unknown, warn)).toBeNull()
+    expect(validateConfluencePageDetail({ id: '1', title: 5, body: '' } as unknown, warn)).toBeNull()
+    expect(warn).toHaveBeenCalledTimes(2)
+  })
+
+  it('warns and returns null when optional "space" is present but not a string', () => {
+    const warn = vi.fn()
+    expect(
+      validateConfluencePageDetail({ id: '1', title: 'T', body: '', space: 9 } as unknown, warn)
+    ).toBeNull()
+    expect(warn).toHaveBeenCalledOnce()
+  })
+
+  it.each([null, 'nope', 7])('warns and returns null for a non-object payload %p', (raw) => {
+    const warn = vi.fn()
+    expect(validateConfluencePageDetail(raw as unknown, warn)).toBeNull()
+    expect(warn).toHaveBeenCalledOnce()
+  })
 })

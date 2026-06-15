@@ -28,6 +28,14 @@ For the authoritative design see `docs/ARCHITECTURE.md`.
   Connect/Reconnect; switching tabs clears an open detail. Logic locked by `confluenceCatalog/logic.test.ts`;
   the click-to-open / back overlay flow was NOT live-exercised (Electron window, not browser-automatable).
 
+- [ ] Manual GUI verification of **Confluence detail rich render + real-id open** (`confluence-detail-rich-render-v1`,
+  via `npm run dev` — renderer + main, HMR enough for the renderer, preload unchanged): open a Confluence
+  page detail with headings / lists / a table / a code block from the NATIVE panel — confirm it renders as
+  rich themed content (cosmos prose colors WIN the cascade), not plain text; an empty-body page shows "This
+  page has no readable body."; the gen-UI overlay renders IDENTICALLY to the native panel; clicking an
+  agent-composed search-result row opens the correct page with NO "HTTP 500"; wide tables/code scroll
+  horizontally and the panel stays responsive. Sanitize/validator/catalog logic locked by node tests; the
+  rich render + cascade-layer win were NOT live-exercised (Electron window).
 - [ ] **Wire a descriptor-emitting compose path for the generative adapter** (the seam flagged by all
   three adapter cycles): the bound builders / resolvers / catalogs are built + unit-tested, but no live
   trigger yet composes a *bound* surface carrying its `{dataSource,query}` descriptor — surfaces are
@@ -177,6 +185,68 @@ For the authoritative design see `docs/ARCHITECTURE.md`.
 
 ## Done
 
+- [x] **Confluence content/attachment images fail to load** (`confluence-content-images-v1`, `/bugfix`→`/sdd`,
+  requested 2026-06-15) — content/attachment images in the Confluence page-detail body 404'd (relative,
+  auth-gated `/wiki/…` src; token main-only). Implemented the `cosmos-confluence-img://` privileged streaming
+  protocol (`src/main/confluenceImageProtocol.ts` Electron wiring + `confluenceImageRef.ts` pure SSRF-safe
+  base64url ref codec): main resolves the live bearer via `ConfluenceManager.currentAuth()`, `net.fetch`es the
+  gateway asset, streams it back — token never leaves main, renderer holds only the opaque scheme. Renderer
+  half is a pure classify + src-rewrite (`confluenceCatalog/contentImageSrc.ts`) invoked from the single
+  sanitize gate. Added `read:attachment:confluence` scope (one-time reconnect). CSP `img-src` widened to
+  `'self' data: https: cosmos-confluence-img:` — `cosmos-confluence-img:` for the proxied auth-gated assets,
+  `https:` so public external-CDN embeds (e.g. `dam-cdn.atl.orangelogic.com`, classified `external` + left
+  untouched per FR-008) load directly; images are non-executable so `https:` does not reopen the XSS surface
+  that `script-src 'self'` + DOMPurify close. typecheck + 1075 tests green (`confluenceImageRef.test.ts`,
+  `contentImageSrc.test.ts`). **GUI-verified by the user 2026-06-15** (clean `npm run dev` relaunch — CSP meta
+  is not HMR-hot-swapped). Spec/plan `.sdd/{specs,plans}/confluence-content-images-v1.md`; `docs/ARCHITECTURE.md`
+  §2 protocol + CSP note.
+- [x] **Confluence emoji/checkbox render — re-open #2** (bug `confluence-detail-emoji-checkbox-stripped-v1`,
+  `/bugfix`, 2026-06-15) — after the emoticon-`<img>`→glyph fix, 👥 (U+1F465) still showed as literal
+  double-escaped `👥` text (it is literal text in element content, NOT an emoticon img), and the
+  same literal-escape form leaked into the document LIST screen. Fixed with a shared `decodeUnicodeEscapes`
+  (`src/shared/confluence.ts`): the sanitize hook decodes `\uXXXX` in direct text-node children of each
+  visited element (surrogate pairs re-form the glyph via UTF-16), and main decodes plain `title`/`excerpt`/
+  `space` at the data source (`confluenceClient.ts` `mapSearchResultsPage` + `getPage`) so the list screen is
+  fixed too. **GUI-verified by the user 2026-06-15.** Locked by `sanitize.test.ts` + `confluenceClient.test.ts`.
+  (If emoji sizing / checkbox styling looks off, route the `prose-cosmos` polish to the designer.)
+- [x] **Confluence detail — emoji/checkbox stripped by sanitizer** (bug
+  `confluence-detail-emoji-checkbox-stripped-v1`, `/bugfix`, requested 2026-06-15) — emojis + task-list
+  checkboxes rendered broken in the shared Confluence `PageDetailBody` (both native + gen-UI). Regression
+  from `confluence-detail-rich-render-v1`: `SANITIZE_CONFIG` (`confluenceCatalog/sanitize.ts`) allow-list
+  omitted `<img>` (emoji = `<img class="emoticon">`) and `<input>` (task checkboxes), so DOMPurify dropped
+  them. Fixed by widening `ALLOWED_TAGS` (+`img`,`input`) + `ALLOWED_ATTR` (+`src`,`alt`,`class`,`width`,
+  `height`,`type`,`checked`,`disabled`,`data-emoji-*`) and adding an `afterSanitizeAttributes` hook that
+  (a) forces `disabled` on every `<input>` (display-only checkboxes, no write path) and (b) strips
+  `data:`-scheme `src`/`href` — closing the DOMPurify media-tag `data:` bypass that lets a
+  `data:image/svg+xml` SVG carry inline script PAST `ALLOWED_URI_REGEXP` (the key security finding).
+  Regression tests (`sanitize.test.ts`): emoji/checkbox survive, input forced inert, `javascript:`/
+  `onerror=`/`data:image/svg+xml`/`<script>`/`<iframe>` still stripped. typecheck green, 1026 tests green.
+  Bug report `.sdd/bugs/confluence-detail-emoji-checkbox-stripped-v1.md`; gotcha in `docs/DEVELOPMENT.md`
+  (Styling, DOMPurify `data:` bypass + allow-list coverage). **GUI verification pending** (renderer-only,
+  HMR enough). Possible `prose-cosmos` design follow-up if emoji sizing/checkbox styling still looks off.
+- [x] **Confluence detail — real-id open + rich render** (`confluence-detail-rich-render-v1`, `/sdd`,
+  requested 2026-06-14) — fixed two bundled defects in the shared Confluence `PageDetail`. **(1) HTTP 500
+  on gen-UI row click:** root cause was the `render_confluence_ui` catalog (`confluenceToolDescription.ts`)
+  still declaring rows "DISPLAY-ONLY: NO actions" and seeding the `SearchResultRow` example with the
+  POSITIONAL `"id": "1"`; once `confluence-page-detail-nav-v1` made the row id the `getPage` click target,
+  the agent copied positional ids → `getPage("1")` → Atlassian 500 (native panel was fine — it uses real
+  ids from `confluence_search_content`). Fixed by rewriting the catalog description: row id MUST be the
+  real page id from `confluence_search_content`, rows are actionable, example uses a realistic numeric id
+  (`"131073"`). A strict-numeric renderer guard was REJECTED (a positional "1" is itself numeric) — the
+  existing non-empty `isOpenDetailEmittable` + the `mapConfluenceError`→Notice path already degrade a bad
+  id safely. **(2) Plain-text readability:** `getPage` flattened storage XHTML to plain text (design Q2);
+  now requests `?body-format=view` (server-rendered HTML), returns RAW HTML through the unchanged
+  `ConfluencePageDetail.body` string (sanitize is a renderer concern). New shared `PageDetailBody`
+  (`confluenceCatalog/components.tsx`) — used by BOTH the native `ConfluencePanel.tsx` detail and the
+  gen-UI catalog `PageDetail` (one class string + one sanitize call so they stay identical) — sanitizes
+  via `sanitizeConfluenceHtml` (DOMPurify, the ONE sanctioned `dangerouslySetInnerHTML` site) then renders
+  in a scoped `prose prose-sm prose-cosmos` container; empty-after-sanitize → "This page has no readable
+  body." Added `@plugin "@tailwindcss/typography"` + a custom `@utility prose-cosmos` (maps `--tw-prose-*`
+  onto existing theme vars — NOT `prose-invert`, since cosmos is single-mode dark) in `index.css`. New deps
+  `dompurify` (ships own types — no `@types/dompurify`) + dev `jsdom`/`@tailwindcss/typography`. typecheck +
+  build clean, 1020 tests green (sanitize/validator/catalog/`pageViewBody`). Spec/plan/design at
+  `.sdd/{specs,plans,designs}/confluence-detail-rich-render-v1.md`; `docs/ARCHITECTURE.md` page-read line.
+  **GUI verification pending** (renderer + main; HMR enough for renderer, preload unchanged).
 - [x] **Confluence generated-UI list → page detail on click** (`confluence-page-detail-nav-v1`, `/sdd`,
   requested 2026-06-14) — clicking an id-bearing document row in a Confluence gen-UI list opens that
   page's detail in place. **DESIGN PIVOT (user-directed):** the originally-specced surface-push design

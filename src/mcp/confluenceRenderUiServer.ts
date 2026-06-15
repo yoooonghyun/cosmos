@@ -30,7 +30,7 @@ import {
   type BridgeServerMessage
 } from '../shared/bridge'
 import { validateSurfaceUpdate } from '../shared/validate'
-import { AdapterFlagPath } from '../shared/adapter'
+import { CONFLUENCE_TOOL_DESCRIPTION } from './confluenceToolDescription'
 import { BindingsFirstEnforcer } from '../shared/dataBearingSpec'
 import { ConfluenceAdapterSource } from '../shared/confluence'
 import type { A2uiAction } from '../shared/ipc'
@@ -152,74 +152,6 @@ class BridgeClient {
     })
   }
 }
-
-/**
- * The render_confluence_ui tool description — teaches the model the Confluence CUSTOM
- * catalog (`catalogId: 'confluence'`) vocabulary. Same A2UI 0.9 flat-list format as
- * render_ui, but the component TYPE NAMES are the Confluence catalog's, and all carry
- * their data as STATIC props (the Confluence resource shapes from
- * src/shared/confluence.ts). DISPLAY-ONLY: there are NO input controls and NO actions.
- */
-const CONFLUENCE_TOOL_DESCRIPTION = [
-  'Render a Confluence UI surface in the cosmos Confluence panel using the Confluence',
-  "custom catalog (catalogId: 'confluence'). Use this for content search results and",
-  'page detail — it matches the native Confluence panel chrome.',
-  '',
-  'ARGUMENT: { spec: { surfaceId: string, components: Component[] } } — A2UI 0.9.',
-  'components is a FLAT array; each is { "id": "<unique>", "component": "<Type>", ...props }.',
-  'Parents reference children by id string. Exactly ONE root (id "root" or the',
-  'component nothing else references).',
-  '',
-  'Confluence component types and their props (all take STATIC props — real Confluence',
-  'data; body/excerpt are pre-flattened plain text):',
-  '  SearchResultRow  { id: string, title: string, space?: string, excerpt: string }',
-  '  SearchResultList { results: SearchResultRow-props[] }  // empty [] => "No content matches."',
-  '  PageDetail  { id: string, title: string, space?: string, body: string }',
-  '  Notice      { noticeKind: "info"|"error", message: string }',
-  '  Text        { text: string, variant?: "label"|"body", muted?: boolean }',
-  '  Column / Row  // layout grouping; reference children by id',
-  '',
-  'Use a Notice (noticeKind "error") when Confluence is not connected or a read fails,',
-  'and (noticeKind "info") for "nothing found" / a page not found. Use Column/Row/Text',
-  'only to group or label.',
-  '',
-  'Example (a search result list — values are ILLUSTRATIVE ONLY, never copy them):',
-  '{ "surfaceId": "confluence-search", "components": [',
-  '  { "id": "root", "component": "SearchResultList", "results": [',
-  '    { "id": "1", "title": "Onboarding", "space": "ENG", "excerpt": "Welcome…" } ] } ] }',
-  '',
-  'Resolves once the surface is shown (display-only — it does not await a user action).',
-  '',
-  '════ REFRESHABLE DATA — compose the layout, declare ONE BINDING per data container ════',
-  'Whenever a container DISPLAYS live Confluence data you just fetched (a content feed, search',
-  'results, page detail), COMPOSE the layout you want and pass the rows you fetched as ORDINARY',
-  'LITERAL props (a "results" array on SearchResultList; the title/space/body on PageDetail) —',
-  'those literals become the first-paint SEED and the surface shows them instantly. To make a',
-  'container REFRESHABLE (the panel refresh control re-fetches + repaints it in place), declare',
-  'ONE binding for it. You do NOT author any "{ path }" data binding yourself — cosmos rewrites',
-  'each bound container\'s data prop to a refreshable path for you, whether you passed literal',
-  'rows or a path.',
-  '',
-  'BINDINGS is the primary way: pass "bindings": one entry per data-bearing container —',
-  '  { "componentId": "<the container\'s id>",',
-  '    "descriptor": { "dataSource": "defaultFeed"|"searchContent"|"getPage", "query": { ... } } }.',
-  'IMPORTANT: "dataSource" is the ADAPTER SOURCE id — EXACTLY "defaultFeed", "searchContent", or',
-  '"getPage" — NOT the MCP read-tool name ("confluence_default_feed"/"confluence_search_content"/',
-  '"confluence_get_page"). Using the tool name makes the surface non-refreshable.',
-  'The descriptor is the SAME read you performed; query holds only NON-SECRET params (a "query"',
-  'for searchContent, a "pageId" for getPage) — NEVER a token (cosmos attaches the token only in',
-  'main at refresh). cosmos KEEPS your custom spec and refreshes it IN PLACE.',
-  '',
-  'SINGLE data container → ONE binding. PARTITIONED layout (side-by-side content feeds) → ONE',
-  'binding PER container, each with its OWN narrowed query — so each refreshes independently and',
-  'a container composed with an EMPTY rows array still re-fetches via its binding.',
-  '',
-  '"descriptor": { "dataSource": ..., "query": { ... } } is the DEGENERATE single-binding form —',
-  'one surface-wide fetcher for a surface with a single data container. Use "descriptor" for one',
-  'region, "bindings" for many — NEVER pass both; if both are present bindings wins.',
-  `You MAY also bind the shared flags ("${AdapterFlagPath.loading}", "${AdapterFlagPath.hasMore}", "${AdapterFlagPath.error}"). Mint a UNIQUE`,
-  'surfaceId per surface. Omit all bindings ONLY for a static surface with no live Confluence data.'
-].join('\n')
 
 /** The valid Confluence `dataSource` ids (bindings-first v3): the adapter source ids, NOT the read-tool names. */
 const VALID_DATA_SOURCES: readonly string[] = Object.values(ConfluenceAdapterSource)

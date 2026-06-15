@@ -37,6 +37,8 @@ import {
 } from './atlassianPanelBits'
 import { confluenceCatalog, CONFLUENCE_CATALOG_ID } from './confluenceCatalog'
 import { CONFLUENCE_OPEN_DETAIL_ACTION } from './confluenceCatalog/logic'
+// Shared page-detail rich body — native panel + gen-UI overlay render IDENTICALLY (SC-002).
+import { PageDetailBody } from './confluenceCatalog/components'
 import { PanelTabStrip, type PanelTab } from './PanelTabStrip'
 import { PanelRefreshButton } from './PanelRefreshButton'
 import { panelRefreshInputsFor } from './panelRefreshLogic'
@@ -80,15 +82,20 @@ function ContentRowSkeletons(): React.JSX.Element {
 }
 
 function PageDetailSkeleton(): React.JSX.Element {
+  // Foreshadow the rich body (design §5 loading state): title + space chip, then a
+  // heading-sized bar, paragraph line groups, and a wide block hinting a code/table region.
   return (
     <div className="flex flex-col gap-4 p-3" aria-busy="true">
       <Skeleton className="h-5 w-3/4" />
       <Skeleton className="h-5 w-20 rounded-full" />
+      <Skeleton className="h-4 w-1/2" />
       <div className="flex flex-col gap-1.5">
-        {[0, 1, 2, 3, 4].map((i) => (
+        {[0, 1, 2].map((i) => (
           <Skeleton key={i} className="h-3 w-full" />
         ))}
+        <Skeleton className="h-3 w-2/3" />
       </div>
+      <Skeleton className="h-16 w-full rounded-md" />
     </div>
   )
 }
@@ -302,13 +309,7 @@ function PageDetail({
             </div>
           )}
         </div>
-        {detail.body.trim() !== '' ? (
-          <p className="whitespace-pre-wrap break-words text-sm leading-relaxed text-card-foreground">
-            {detail.body}
-          </p>
-        ) : (
-          <p className="text-sm text-muted-foreground">This page has no readable body.</p>
-        )}
+        <PageDetailBody body={detail.body} />
       </div>
     </ScrollArea>
   )

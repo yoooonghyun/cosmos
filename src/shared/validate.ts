@@ -55,6 +55,7 @@ import type {
   ConfluenceDefaultFeedParams,
   ConfluenceGetPageParams,
   ConfluenceOpName,
+  ConfluencePageDetail,
   ConfluenceSearchParams
 } from './confluence'
 import { ConfluenceOp } from './confluence'
@@ -1215,6 +1216,50 @@ export function validateConfluenceGetPage(
     return null
   }
   return { pageId: raw.pageId }
+}
+
+/**
+ * Validate a `ConfluencePageDetail` result payload at the main-process boundary
+ * (confluence-detail-rich-render-v1, FR-009). The detail crosses to the renderer both as
+ * the `confluence:getPage` invoke result and as the bound `/page` data-model value; an
+ * invalid payload is warned-and-ignored (null), never crashes the panel (FR-012/SC-007).
+ *
+ * Required: `id` + `title` are strings and `body` is a STRING (the raw `body-format=view`
+ * HTML — `''` is a valid empty body, so emptiness is NOT rejected here; the renderer shows
+ * the safe "no readable body" state). Optional: `space` is a string when present (a missing
+ * `space` must NOT error — it is legitimately absent). Carries NO secret (FR-011): a token
+ * never appears in a page detail, so none is screened here. Pure; never throws.
+ */
+export function validateConfluencePageDetail(
+  raw: unknown,
+  warn: WarnFn = defaultWarn
+): ConfluencePageDetail | null {
+  if (!isObject(raw)) {
+    warn('[confluence] ignoring page detail — payload is not an object:', raw)
+    return null
+  }
+  if (typeof raw.id !== 'string') {
+    warn('[confluence] ignoring page detail — required "id" must be a string:', raw)
+    return null
+  }
+  if (typeof raw.title !== 'string') {
+    warn('[confluence] ignoring page detail — required "title" must be a string:', raw)
+    return null
+  }
+  if (typeof raw.body !== 'string') {
+    warn('[confluence] ignoring page detail — required "body" must be a string (the body-format=view HTML):', raw)
+    return null
+  }
+  if (raw.space !== undefined && typeof raw.space !== 'string') {
+    warn('[confluence] ignoring page detail — optional "space" must be a string when present:', raw)
+    return null
+  }
+  return {
+    id: raw.id,
+    title: raw.title,
+    body: raw.body,
+    ...(typeof raw.space === 'string' ? { space: raw.space } : {})
+  }
 }
 
 /**

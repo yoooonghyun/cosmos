@@ -13,7 +13,7 @@
  *
  * Endpoints (plan §C):
  *   search: GET {base}/wiki/rest/api/search?cql=…&cursor=…       (v1 CQL search)
- *   page:   GET {base}/wiki/api/v2/pages/{id}?body-format=storage (v2 page read)
+ *   page:   GET {base}/wiki/api/v2/pages/{id}?body-format=view    (v2 page read)
  * where `base = https://api.atlassian.com/ex/confluence/{cloudId}`. The page read uses
  * v2 because the connection now requests GRANULAR scopes (`read:page:confluence`),
  * which authorize the v2 API; the classic content scopes are granted on a
@@ -30,8 +30,9 @@ import type {
   ConfluenceResult,
   ConfluenceSearchResult
 } from '../../shared/confluence'
+import { decodeUnicodeEscapes } from '../../shared/confluence'
 import { confluenceApiBase } from './atlassianConfig'
-import { plainTextToStorage, storageToPlainText } from './atlassianText'
+import { plainTextToStorage } from './atlassianText'
 
 /** Minimal `fetch` shape (injectable; defaults to global fetch). */
 export type FetchLike = (
@@ -89,6 +90,23 @@ function parseRetryAfter(value: string | null): number | undefined {
 
 function isRecord(v: unknown): v is Record<string, unknown> {
   return typeof v === 'object' && v !== null
+}
+
+/**
+ * Extract the raw `body-format=view` HTML from a v2 page response body
+ * (confluence-detail-rich-render-v1, FR-005/FR-006). Reads `body.view.value` — the
+ * Confluence server-rendered HTML — and returns it UNCHANGED (sanitization is the
+ * renderer's job at the `dangerouslySetInnerHTML` site, FR-008). A missing/empty/
+ * non-string `view.value` degrades to `''` (the safe "no readable body" state — FR-012).
+ * Pure; never throws. Exported for the body-mapping unit test.
+ */
+export function pageViewBody(responseBody: unknown): string {
+  if (!isRecord(responseBody)) {
+    return ''
+  }
+  const body = isRecord(responseBody.body) ? responseBody.body : {}
+  const view = isRecord(body.view) ? body.view : {}
+  return typeof view.value === 'string' ? view.value : ''
 }
 
 /** Per-call auth + targeting inputs threaded by ConfluenceManager (never stored). */
@@ -244,12 +262,15 @@ export class ConfluenceClient {
   }
 
   /**
-   * Read one page's detail (FR-C04). GET
-   * /wiki/api/v2/pages/{id}?body-format=storage — the v2 read, authorized by the
-   * granular `read:page:confluence` scope (the classic `read:confluence-content.all`
-   * scope is deprecated and no longer honored by the content endpoints → 401 "scope
-   * does not match"). The storage body is flattened to plain text (no macro rendering —
-   * design Q2). v2 returns only a numeric `spaceId`, surfaced as the space chip.
+   * Read one page's detail (FR-C04; confluence-detail-rich-render-v1 FR-005/FR-006). GET
+   * /wiki/api/v2/pages/{id}?body-format=view — the v2 read, authorized by the granular
+   * `read:page:confluence` scope (the classic `read:confluence-content.all` scope is
+   * deprecated and no longer honored by the content endpoints → 401 "scope does not
+   * match"). The `view` body is Confluence SERVER-RENDERED HTML (macros expanded);
+   * cosmos carries it RAW through `ConfluencePageDetail.body` and the renderer sanitizes
+   * it with DOMPurify before display (sanitize is a renderer concern at the
+   * `dangerouslySetInnerHTML` site — FR-008). No plain-text flattening here. v2 returns
+   * only a numeric `spaceId`, surfaced as the space chip.
    */
   async getPage(
     auth: ConfluenceCallAuth,
@@ -257,13 +278,11 @@ export class ConfluenceClient {
   ): Promise<ConfluenceResult<ConfluencePageDetail>> {
     const url =
       `${this.base(auth.cloudId)}/wiki/api/v2/pages/${encodeURIComponent(pageId)}` +
-      `?body-format=storage`
+      `?body-format=view`
     const r = await this.call(url, auth.token)
     if (!r.ok) {
       return r.error
     }
-    const body = isRecord(r.body.body) ? r.body.body : {}
-    const storage = isRecord(body.storage) ? body.storage : {}
     // v2 returns only a numeric spaceId (no expanded space object); surface it as-is.
     const spaceId =
       typeof r.body.spaceId === 'string' && r.body.spaceId !== ''
@@ -275,9 +294,9 @@ export class ConfluenceClient {
       ok: true,
       data: {
         id: typeof r.body.id === 'string' ? r.body.id : String(r.body.id ?? pageId),
-        title: typeof r.body.title === 'string' ? r.body.title : '',
+        title: decodeUnicodeEscapes(typeof r.body.title === 'string' ? r.body.title : ''),
         ...(spaceId ? { space: spaceId } : {}),
-        body: storageToPlainText(storage.value)
+        body: pageViewBody(r.body)
       }
     }
   }
@@ -363,9 +382,11 @@ function mapSearchResultsPage(
           : ''
     return {
       id: typeof content.id === 'string' ? content.id : String(content.id ?? ''),
-      title,
-      ...(typeof space.title === 'string' ? { space: space.title } : {}),
-      excerpt: typeof hit.excerpt === 'string' ? stripHighlight(hit.excerpt) : ''
+      // Decode literal \uXXXX emoji escapes Confluence serializes into plain text fields,
+      // so the search/feed LIST screen shows real glyphs (re-open).
+      title: decodeUnicodeEscapes(title),
+      ...(typeof space.title === 'string' ? { space: decodeUnicodeEscapes(space.title) } : {}),
+      excerpt: typeof hit.excerpt === 'string' ? decodeUnicodeEscapes(stripHighlight(hit.excerpt)) : ''
     }
   })
   const links = isRecord(body._links) ? body._links : {}
