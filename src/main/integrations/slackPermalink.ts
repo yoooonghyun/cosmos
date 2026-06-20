@@ -44,7 +44,6 @@ export function permalinkFromResponse(body: unknown): string | undefined {
     return undefined
   }
   const permalink = (body as Record<string, unknown>).permalink
-  return isOpenableWebUrl(typeof permalink === 'string' ? permalink : undefined)
-    ? permalink
-    : undefined
+  const candidate = typeof permalink === 'string' ? permalink : undefined
+  return isOpenableWebUrl(candidate) ? candidate : undefined
 }
