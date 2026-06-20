@@ -1,9 +1,13 @@
 # Plan: Slack Thread Replies (generated-UI catalog) — v1
 
-**Status**: Draft
+**Status**: Superseded by slack-generative-message-parity-v1 (OQ-4)
 **Created**: 2026-06-08
-**Last updated**: 2026-06-08
+**Last updated**: 2026-06-18
 **Spec**: .sdd/specs/slack-thread-replies-v1.md
+
+> Superseded 2026-06-18: replaced by `.sdd/plans/slack-generative-message-parity-v1.md`, which
+> reuses the EXISTING native thread view (drill-in) instead of this plan's renderer-local
+> inline-expand. See that plan's resolved OQ-1/OQ-4.
 
 ---
 

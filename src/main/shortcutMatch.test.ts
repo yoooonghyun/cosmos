@@ -56,6 +56,26 @@ describe('matchShortcut — primary-modifier combos (mac = Cmd)', () => {
       command: 'tab:prev'
     })
   })
+
+  it('Cmd+Opt+Down → surface:next, Cmd+Opt+Up → surface:prev (panel switch alias)', () => {
+    expect(matchShortcut(key({ code: 'ArrowDown', meta: true, alt: true }), mac)).toEqual({
+      command: 'surface:next'
+    })
+    expect(matchShortcut(key({ code: 'ArrowUp', meta: true, alt: true }), mac)).toEqual({
+      command: 'surface:prev'
+    })
+  })
+})
+
+describe('matchShortcut — panel switch alias on non-mac (Ctrl as primary modifier)', () => {
+  it('Ctrl+Alt+Down → surface:next, Ctrl+Alt+Up → surface:prev', () => {
+    expect(matchShortcut(key({ code: 'ArrowDown', control: true, alt: true }), win)).toEqual({
+      command: 'surface:next'
+    })
+    expect(matchShortcut(key({ code: 'ArrowUp', control: true, alt: true }), win)).toEqual({
+      command: 'surface:prev'
+    })
+  })
 })
 
 describe('matchShortcut — Ctrl+Tab cycling (Ctrl on every platform)', () => {
@@ -111,5 +131,39 @@ describe('matchShortcut — non-matches', () => {
     expect(
       matchShortcut(key({ code: 'ArrowRight', meta: true, alt: true, shift: true }), mac)
     ).toBeNull()
+  })
+
+  it('Cmd+Alt+Down with Shift is not a surface switch (arm requires no Shift)', () => {
+    expect(
+      matchShortcut(key({ code: 'ArrowDown', meta: true, alt: true, shift: true }), mac)
+    ).toBeNull()
+    expect(
+      matchShortcut(key({ code: 'ArrowUp', meta: true, alt: true, shift: true }), mac)
+    ).toBeNull()
+  })
+
+  it('bare Cmd+Down / Cmd+Up (no Alt) is not a surface switch', () => {
+    expect(matchShortcut(key({ code: 'ArrowDown', meta: true }), mac)).toBeNull()
+    expect(matchShortcut(key({ code: 'ArrowUp', meta: true }), mac)).toBeNull()
+  })
+})
+
+describe('matchShortcut — pre-existing arrow/bracket bindings unperturbed by the panel alias', () => {
+  it('horizontal arrows still map to tab cycling (not surfaces)', () => {
+    expect(matchShortcut(key({ code: 'ArrowRight', meta: true, alt: true }), mac)).toEqual({
+      command: 'tab:next'
+    })
+    expect(matchShortcut(key({ code: 'ArrowLeft', meta: true, alt: true }), mac)).toEqual({
+      command: 'tab:prev'
+    })
+  })
+
+  it('Cmd+Shift+bracket still maps to surface switch (the original alias)', () => {
+    expect(matchShortcut(key({ code: 'BracketRight', meta: true, shift: true }), mac)).toEqual({
+      command: 'surface:next'
+    })
+    expect(matchShortcut(key({ code: 'BracketLeft', meta: true, shift: true }), mac)).toEqual({
+      command: 'surface:prev'
+    })
   })
 })

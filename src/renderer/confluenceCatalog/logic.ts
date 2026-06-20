@@ -75,3 +75,25 @@ export function showErrorNotice(error: string | undefined): boolean {
 export function showEmptyState(rowCount: number, error: string | undefined): boolean {
   return rowCount === 0 && !showErrorNotice(error)
 }
+
+/* ------------------------------------------------------------------------- *
+ * Generative layout width-clamp (bug slack-generative-wrap-v1, Confluence latent instance)
+ *
+ * The agent groups Confluence lists/detail with the SDK standard-catalog `Column`/`Row`
+ * (registered in `index.ts`). Those SDK containers render a `<div>` whose className is a
+ * fixed `flex flex-col gap-4` / `flex flex-row gap-3` with NO `min-w-0` — so the flex box
+ * keeps its default `min-width: auto` and grows to its content's INTRINSIC width. A long
+ * unbroken line therefore expands that container past the panel and overflows horizontally;
+ * the leaf's `break-words` and the list root's `min-w-0` never take effect because their
+ * containing block is already wider than the panel.
+ *
+ * We cannot edit the third-party SDK div's className, so the Confluence catalog registers
+ * clamped wrappers (see `layout.tsx`) that render the SDK `Column`/`Row` inside a block box
+ * carrying this class. `min-w-0` defeats the flex `min-width: auto` floor the wrapper
+ * inherits from the panel's flex host; `max-w-full` caps it at the panel width; `w-full`
+ * keeps short content filling the column. The class lives here (not the `.tsx`) so the fix
+ * is assertable in a node (no-jsdom) unit test — mirroring `slackCatalog/logic.ts`.
+ * ------------------------------------------------------------------------- */
+
+/** Width-clamp applied around an agent-emitted SDK Column/Row so its subtree wraps. */
+export const CONFLUENCE_LAYOUT_CLAMP_CLASS = 'w-full min-w-0 max-w-full'

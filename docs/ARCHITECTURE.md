@@ -43,12 +43,12 @@ for Electron's ABI via a `postinstall` `electron-rebuild` step.
 `nodeIntegration: false`; `sandbox` is intentionally left `false` so the preload can use
 `ipcRenderer` reliably, while the renderer still only sees the `pty` channels.
 
-cosmos registers ONE custom privileged streaming protocol, **`cosmos-confluence-img://`**
-(`registerSchemesAsPrivileged` before `app.ready`; `protocol.handle` after), so the renderer can
-display auth-gated Confluence content/attachment images via an OPAQUE scheme while the access
-token stays in main — the handler fetches the asset with the bearer token and streams it back, and
-the renderer never sees the token, the token-bearing URL, or the raw bytes as a `data:` URL (§4.9).
-The renderer CSP `img-src` is `'self' data: https: cosmos-confluence-img:`: auth-gated `/wiki/…`
+cosmos registers TWO custom privileged streaming protocols, **`cosmos-confluence-img://`** and
+**`cosmos-slack-img://`** (`registerSchemesAsPrivileged` before `app.ready`; `protocol.handle`
+after), so the renderer can display auth-gated Confluence/Slack images via an OPAQUE scheme while the
+access token stays in main — the handler fetches the asset with the bearer token and streams it back,
+and the renderer never sees the token, the token-bearing URL, or the raw bytes as a `data:` URL (§4.9).
+The renderer CSP `img-src` is `'self' data: https: cosmos-confluence-img: cosmos-slack-img:`: auth-gated `/wiki/…`
 assets load through the opaque proxy scheme, while PUBLIC external-CDN content images (no Confluence
 auth, sanitized-body `<img src="https://…">` left untouched) load directly under `https:`. Images are
 non-executable, so allowing `https:` here does not reopen the script-injection surface that
@@ -151,6 +151,14 @@ env var (`COSMOS_BRIDGE_SOCKET` for both render entry scripts, which share the o
   terminal. The single-PTY **auto-start at window creation was removed** — each terminal tab issues
   its own `pty:start`. Each session remembers its own `cols`/`rows` so a per-pane restart reuses
   that pane's last size.
+- **Fresh tabs defer their spawn until a working directory is picked** (`terminal-open-directory-
+  picker-v1`). A new terminal tab does not auto-`pty:start`; it shows an `[Open]` empty state and
+  spawns only after the user picks a directory via a new **`pty:pickDirectory`** channel
+  (`dialog.showOpenDialog({ properties: ['openDirectory'] })`, main-only; cancel/error → `{ path:
+  null }`). `pty:start` gains an OPTIONAL `cwd`, boundary-validated. The fresh-vs-resume cwd policy
+  is the pure `resolvePaneSpawn` (`src/main/paneSpawn.ts`): a **resume IGNORES** any override cwd
+  (the snapshot's stored cwd wins), a **fresh spawn uses** `overrideCwd ?? sandboxDir`. Restored
+  tabs skip the picker and auto-resume.
 - Streams raw stdout (ANSI) to the renderer over IPC; relays renderer keystrokes and
   resize events back into the matching PTY (routed by `paneId`).
 - Owns process lifecycle: spawn, restart, kill, exit handling — per pane, plus `killAll()` on
@@ -295,8 +303,23 @@ gotchas are in [`DEVELOPMENT.md`](./DEVELOPMENT.md).
 
 Conventions:
 - One typed IPC contract in `src/shared/ipc.ts`; never define channel strings ad hoc.
+- **The contract is split per-domain behind same-path barrels** (`ipc-modular-refactor-v1`):
+  `ipc.ts` and `validate.ts` are RE-EXPORT barrels over per-domain modules in `src/shared/ipc/`
+  (`common`/`pty`/`ui`/`agent`/`shortcut`/`slack`/`jira`/`confluence`/`googleCalendar`/`session`/
+  `settings`, each with a sibling `*.validate.ts`). Barrel paths are unchanged so all consumers
+  keep importing `../shared/ipc` / `../shared/validate` (zero import churn). Add a channel/payload
+  to its domain module + validator to the matching `*.validate.ts`; predicates shared across
+  domains live in `common.validate.ts`. `ipc.ts` assembles the `CosmosApi` type;
+  `SESSION_SCHEMA_VERSION` stays in the session module; `channelUniqueness.test.ts` guards uniqueness.
 - IPC validators are pure functions with an injectable logger (testable without Electron).
 - Invalid payloads warn and are ignored — never crash the process.
+- **Generative catalogs clamp SDK layout containers** (`slack-generative-wrap-v1`): the SDK
+  standard-catalog `Column`/`Row` carry no `min-w-0`, so as flex boxes they grow to their content's
+  intrinsic width and a long unbroken line overflows the panel before the leaf `break-words` can
+  bite. Each generative catalog (`{slack,jira,confluence}Catalog`) registers CLAMPED wrappers
+  (`layout.tsx`: the SDK container inside a `w-full min-w-0 max-w-full` block, class in each
+  `logic.ts`) in place of the raw `standardCatalog.components.Column/Row`. Mirror this in any new
+  catalog that groups data-bearing containers.
 
 ### 4.7 Third-Party Integration Foundation (main process)
 
@@ -344,6 +367,21 @@ Confluence reuse it). It lives entirely in the **main process** and has three pi
   or MCP result** — it stays strictly within main alongside the encrypted tokens, so this is a
   narrow, sanctioned deviation from the pure public-client model that does NOT weaken the
   token-never-leaves-main invariant.
+- **OAuth client configuration (Settings, main-only)** — the OAuth *client credentials*
+  themselves (Slack client id; the one Atlassian client id + secret shared by Jira and
+  Confluence) are configurable at runtime via a **Settings dialog** (gear button at the bottom
+  of the left rail), not only via `.env`. Saved config is persisted as a **separate
+  `safeStorage`-encrypted main-only blob** (`integrations/clientConfig.enc`, a sibling of the
+  `*.token.enc` blobs, built on the same `tokenStore.ts` pattern). A small **resolver** merges
+  **Settings-over-env** (a saved value wins; the matching `COSMOS_*` env var is the fallback
+  used only when a Settings field is unset) and is the single source the managers'
+  connect/refresh closures read from — so a save takes effect with no restart. The Atlassian
+  **client secret stays in main and never crosses to the renderer**: the renderer learns only a
+  *configured / not-configured* boolean (write-only field); client ids (non-secret) may
+  round-trip for display/edit. Changing a client's effective id/secret while connected
+  **force-disconnects** the affected integration(s) (clears the now-stale token): Slack → Slack;
+  Atlassian → both Jira and Confluence. New typed `settings:` IPC namespace; this feature's design
+  lives in this section (no separate design doc). See `.sdd/specs/settings-oauth-clients-v1.md`.
 - **Per-integration API client + manager** — a single API client is the *only* place the
   provider is called; a manager owns the connection state machine
   (`not_connected → connecting → connected → reconnect_needed`) and is the sole caller of
@@ -377,10 +415,15 @@ Read-only Slack built on §4.7. The user connects by clicking a single **"Connec
 button (no token is ever pasted or typed): cosmos runs a desktop PKCE OAuth flow against its
 OWN registered public Slack client (`client_id` from the `COSMOS_SLACK_CLIENT_ID` env var) and
 receives a **single user token** (`xoxp-…`, from `authed_user.access_token`) that drives EVERY
-read — channels, history, threads, user lookups, AND search. The four read scopes are all
-requested as `user_scope` (`channels:read`, `channels:history`, `users:read`, `search:read`);
-`canSearch` is true iff the granted scopes include `search:read`. One Slack Web API client in
-main serves both surfaces:
+read — channels, history, threads, user lookups, AND search. The read scopes are all
+requested as `user_scope` (`channels:read`, `channels:history`, `users:read`, `search:read`,
+`emoji:read`, `files:read`); `canSearch` is true iff the granted scopes include `search:read`.
+`emoji:read` (slack-rich-message-render-v1) backs the workspace custom-emoji `emoji.list` lookup;
+`files:read` (slack-attachment-image-broken-v1) gates downloading auth-gated `files.slack.com`
+attachment images through the `cosmos-slack-img://` proxy (a PUBLIC `*.slack-edge.com` emoji-CDN
+asset needs no scope, so a working custom emoji does NOT prove an attachment image will load). Both
+are read-only; an existing connection must reconnect once to grant a newly added scope, until then
+the dependent content degrades (custom emoji → literal `:shortcode:`, attachment image → broken). One Slack Web API client in main serves both surfaces:
 
 - **Slack panel** (`src/renderer/SlackPanel.tsx`) — list public channels (paginated), read
   channel history, read a thread's replies, search messages, resolve author display names; with
@@ -392,7 +435,25 @@ main serves both surfaces:
   — ChannelList/MessageList/SearchResultList/UserChip/Notice over `src/shared/slack.ts` shapes).
   **The native browser is the base shown when zero tabs are open;** a composed `target: 'slack'`
   surface fills its originating tab (§4.11), and closing the last tab returns to the native base
-  (generated state cleared on disconnect). The composer is gated on `connected`. The surface is
+  (generated state cleared on disconnect). Message bodies render RICH (slack-rich-message-render-v1)
+  through the ONE canonical `SlackMessageRow` shared by both surfaces: mentions resolve `<@U…>` →
+  `@DisplayName` in main (per-session cached `users.info`; unresolved → plain `@<userId>`); standard
+  `:shortcode:` → glyph offline via `node-emoji`; workspace CUSTOM emoji + attachment images render
+  as `<img>` through the `cosmos-slack-img://` proxy (the renderer parses the decoded text into
+  text/glyph/custom-emoji runs in `slackCatalog/messageContent.ts`). Image refs + the custom-emoji
+  shortcode→ref map ride the existing `SlackMessage`/`SlackSearchMatch` response DTOs (trusted
+  main→renderer), so NO new IPC channel was needed; the renderer holds only opaque refs.
+  Clicking a row's **"N replies"** opens that thread's replies in a panel **docked to the right of
+  the message list** (slack-thread-sidepanel-and-image-viewer-v1) — NOT a whole-view switch.
+  Because `SlackMessageRow` is the one shared row, a single renderer-local open-thread state (per
+  tab, not persisted) serves BOTH surfaces: the native row feeds it via `onOpenThread`, the
+  generative surface via `SLACK_OPEN_THREAD_ACTION` → `handleSurfaceAction`; both reuse the
+  read-only `getReplies` reply list (root dropped) with the parent as header. Above a `32rem`
+  Tailwind container query (`@container/slackbody`) the dock sits side-by-side; below it the dock
+  is a right-drawer overlay (scrim, reduced-motion gated) that does not squeeze the list. Clicking
+  an attachment thumbnail opens an in-app lightbox (reuses the shadcn `Dialog`,
+  `slackCatalog/SlackImageViewer.tsx`) showing the larger image via the SAME opaque
+  `cosmos-slack-img://` ref (no token in the renderer). The composer is gated on `connected`. The surface is
   **display-only** — no write scope, no write tool, no deterministic dispatcher (§4.3 settles its
   render immediately).
 - **Read-only Slack MCP tools** (`src/mcp/slackMcpServer.ts` + `src/main/slackBridge.ts`) —
@@ -705,6 +766,115 @@ trailing `+` new-tab affordance, and horizontal overflow scroll. Tabs are render
 - **Semantics preserved per tab.** The Jira read+write path (deterministic `jira.*` dispatch,
   §4.9) and the Slack/Confluence read-only generative semantics (§4.8/§4.9) are unchanged — now
   scoped to the originating/active tab rather than a panel-wide singleton.
+
+### 4.12 Global keyboard shortcuts (matched in main)
+
+Tab and panel (rail-surface) navigation are driven by **Chrome-style global keyboard shortcuts
+matched in the MAIN process**, NOT in the renderer. Electron's `before-input-event` (on the
+window's `webContents`) hands each keystroke to the pure, node-tested
+`matchShortcut(input, platform)` (`src/main/shortcutMatch.ts`); a match is `preventDefault`'d in
+main and the resolved `ShortcutCommand` is forwarded over the `shortcut:trigger` IPC channel to
+`window.cosmos.shortcuts.onTrigger`. Matching in main (before the renderer/DOM sees the keystroke)
+is load-bearing: it fires regardless of DOM focus — including an **xterm-focused terminal**, which
+would otherwise swallow the keys — so no renderer-side typing/focus guard is needed.
+
+- **Layout independence.** The matcher keys on the physical `input.code` (e.g. `KeyT`, `Digit1`,
+  `BracketRight`, `ArrowDown`), NOT the produced `input.key`, so combos are stable across keyboard
+  layouts. The primary modifier (`mod`) is **Cmd on macOS, Ctrl elsewhere**; `Ctrl+Tab` cycling is
+  the one combo that is Ctrl on every platform (Chrome-faithful).
+- **Command vocabulary** (`ShortcutCommand`, `src/shared/ipc/shortcut.ts`): `tab:new` / `tab:close`
+  / `tab:next` / `tab:prev` / `tab:jump` / `tab:last` are handled **per-panel** by `useTabShortcuts`
+  on the active surface; `surface:next` / `surface:prev` switch the **left-rail panel** and are
+  handled by `AppShell` (`App.tsx`) with functional `setSurface` wrap-around over `RAIL_ITEMS`.
+- **Authoritative key map** (mod = Cmd on darwin, Ctrl elsewhere):
+
+  | Combo | Command | Action |
+  |-------|---------|--------|
+  | mod+T | `tab:new` | open a tab in the active panel |
+  | mod+W | `tab:close` | close the active tab |
+  | Ctrl+Tab / mod+Alt+Right | `tab:next` | next tab (wraps) |
+  | Ctrl+Shift+Tab / mod+Alt+Left | `tab:prev` | previous tab (wraps) |
+  | mod+1..8 | `tab:jump` | jump to tab index 0..7 |
+  | mod+9 | `tab:last` | last tab |
+  | mod+Shift+] / **mod+Alt+Down** | `surface:next` | next left-rail panel (wraps) |
+  | mod+Shift+[ / **mod+Alt+Up** | `surface:prev` | previous left-rail panel (wraps) |
+
+  Horizontal `mod+Alt` arrows move **tabs**, vertical `mod+Alt` arrows move **panels** (symmetric,
+  non-colliding). `mod+Alt+Up`/`Down` (panel-switch-shortcut-v1, #90) is an **additive alias** of the
+  original `mod+Shift+[`/`]` surface switch — same commands, same handler, no new IPC/preload/renderer
+  wiring; the entire change is two arms in the pure matcher.
+
+### 4.13 Terminal File Explorer — 3-pane split + multi-file viewer tabs (renderer)
+
+Each **live** terminal tab (§4.2) embeds a per-tab **file explorer** beside its TUI
+(`src/renderer/fileExplorer/`). This section settles the §4.x debt for both
+`terminal-file-explorer-v1` (#84 — the 3-pane split) and `terminal-file-tabs-v1` (#91 — the
+multi-file viewer tabs). It is wholly **renderer + main-IPC over already-readable files**; it adds
+no agent/MCP/A2UI surface.
+
+**3-pane split (#84).** Once a tab is `live` (a chosen cwd — `isFolderOpen(phase)`, §4.11), the
+tab body is a horizontal row: **terminal (LEFT) | file viewer (MIDDLE) | file tree dock (RIGHT)**,
+with a bespoke 6px `role="separator"` `ResizeDivider` between each. Before `live`, the tab shows
+ONLY a VS Code-style welcome view (the [Open a folder] CTA reusing the #75 directory picker — no
+new IPC). `TerminalPanel` owns the column layout + the two resize clamps (per-column mins;
+re-fits xterm on a terminal-width change); `useExplorerPanes(paneId, live)` returns the ready
+`viewer` + `tree` column elements, both backed by ONE `useFileExplorer(paneId, enabled)` hook
+instance so a tree click retargets the viewer. The tree dock is **always visible** once live — it
+is never replaced by the viewer.
+
+- **IPC contract (#84, unchanged by #91).** The hook addresses every node by `paneId` + a
+  root-**RELATIVE** path only; main (`§4.1` PTY/session map) holds the authoritative root and
+  **confines** every read with real-path confinement (`pathConfine`) — no absolute path, no token,
+  ever crosses into the renderer. `fs:list` (lazy, on first expand) and `fs:read` are validated at
+  the main boundary; an out-of-root / denied / not-found read maps to a calm state, never a crash.
+  There is **no size cap** on the viewer (a deliberate #84 call — see `terminal-file-explorer-v1`).
+- **Privileged image scheme.** Images render via an opaque **`cosmos-file://`** privileged protocol
+  (`buildLocalFileSrc(paneId, relPath)`) registered in main — the renderer never sees bytes or an
+  absolute path, only the per-pane/relPath opaque src.
+- **Watch lifecycle.** `fs:watchStart` on go-live, `fs:watchStop` on teardown; an `fs:changed`
+  re-lists every currently-expanded dir and **merges seamlessly** (no skeleton flash on a re-list,
+  only on a first list). A Linux-recursive-watch limitation is documented in #84.
+- **Monaco** is the first heavyweight renderer-only dependency: a read-only (`readOnly` +
+  `domReadOnly`) editor themed to cosmos-dark, mounted once per viewer instance and swapping its
+  model in place when the active file changes.
+
+**Multi-file viewer tabs (#91).** The MIDDLE viewer column is now a VS Code-style **multi-file
+editor**: a row of **file tabs** sits above the viewer body (one tab per opened file). The design
+is a **collection layer over the per-file `viewerState.ts`**, mirroring the `panelTabs.ts`
+`TabsState<T>` precedent (§4.11), and is **renderer-only — it changes NO `fs:*` channel, the
+`cosmos-file://` scheme, the confinement, or the watcher** (no preload restart, no main edit).
+
+- **`openFiles.ts` (pure, node-tested).** An ordered `OpenFilesState` ( `files: OpenFile[]` +
+  `activeRelPath` ), each `OpenFile` keyed by its relPath and carrying its own resolved
+  `ViewerState`. Transitions: `openOrFocus` (the one delta from `panelTabs.openTab` — an
+  already-open path is **FOCUSED, not duplicated**, so the strip never holds two tabs for the same
+  path), `setActiveFile`, `closeFile` (re-picks the active via the **shared**
+  `panelTabs.adjacentActiveId` neighbour rule — right-else-left-else-null, single-sourced so file
+  tabs and terminal tabs close identically), `updateOpenFile` (patches one file's `ViewerState`
+  without crossing siblings), `activeViewer`. No React/DOM import (the `.ts`/`.test.ts` split).
+- **`useFileExplorer` holds the collection.** `openFile` is now open-or-focus: a fresh open kicks
+  one `fs:read` → `updateOpenFile(resolveRead(...))`; a re-click just activates (reusing the
+  already-resolved viewer — no re-read jolt). The **active** entry's `ViewerState` feeds the
+  unchanged `FileViewer` body. On an `fs:changed`, EVERY open file is re-read; a vanished one
+  invalidates only THAT tab to "no longer available" (`invalidateOpen`) — the tab stays so the
+  user can close it; other tabs are untouched.
+- **`FileTabStrip.tsx` — a light bespoke strip, NOT `PanelTabStrip`.** It reuses the panel strip's
+  exact tokens, focus ring (`ring-[3px] ring-ring/50`), close-`X` reveal idiom, truncation+tooltip,
+  and roving-tabindex keymap VERBATIM, but drops the `+` new-tab, inline rename/F2, run-status
+  glyphs, the terminal glyph, and the trailing slot (a read-only viewer opened only from the tree
+  has none of those). The band rests on `bg-card/60` — one notch quieter than the panel band's
+  `bg-popover` — so it reads as in-column chrome. The strip **replaces** the #84 single-file header
+  (the header folds into the active tab; one `h-8` band; the full relPath rides the tab tooltip).
+  A failed-read tab stays **neutral** (binary/denied/not-found are calm per #84 — no red glyph); the
+  body shows the calm block. No new token, no new shadcn primitive (`components/ui/`+`index.css`
+  untouched).
+- **Tree highlight follows the active tab.** `useExplorerPanes` passes `selectedRelPath =
+  activeRelPath` to the tree (FR-016) — the row for the active file renders selected; `null` (empty
+  strip) → no open-file selection.
+- **Ephemeral, per-`paneId`.** The collection lives in the per-pane `useFileExplorer` instance, so
+  it is independent across terminal tabs and is **NOT persisted** to the session snapshot — it
+  resets to empty on go-live / app restart, matching the existing ephemeral split-ratio + viewer
+  state from #84.
 
 ---
 
@@ -1021,6 +1191,75 @@ notice pointing at the native Connect/Reconnect affordance; no write is attempte
    AT the render tool (the model resubmits) rather than silently passing the MCP boundary; and the
    four tool descriptions plus `BINDINGS_FIRST_STEERING` now state the valid per-integration
    `dataSource` ids and that it is the adapter source id, NOT the read-tool name.
+4i. **Google Calendar integration** (`.sdd/specs/google-calendar-v1.md`,
+   `.sdd/plans/google-calendar-v1.md`, `.sdd/designs/google-calendar-v1.md`, **built**) — a fourth concrete integration and the first
+   non-Atlassian/Slack provider. Reuses the §4.7 foundation as a **confidential client** (client id +
+   secret, PKCE, loopback) like Atlassian, but against Google's own authorize/token endpoints with
+   `access_type=offline` + `prompt=consent` to obtain a refresh token. v1 is **read-only**
+   (`calendar.readonly`, the user's **primary** calendar only; no write scope, no write MCP tool, no
+   deterministic action dispatcher). Adds a **third logical Settings client** (`google`, independent
+   `COSMOS_GOOGLE_CLIENT_ID`/`COSMOS_GOOGLE_CLIENT_SECRET`, Settings-over-env, write-only secret,
+   independent force-disconnect — NOT coupled to the one Atlassian client that drives Jira+Confluence).
+   New rail surface + render target `'google-calendar'` with its own scoped render server
+   (`googleCalendarRenderUiServer.ts` + rollup input + `embeddedMcpConfig` entry), a custom
+   calendar-grid catalog, and a deterministic **main-composed default view** — a calendar grid built
+   from a single bounded `events.list` read and pushed via `ui:render`
+   (`target:'google-calendar'`), mirroring the Jira default-view pattern. Time zones + all-day vs timed
+   events handled in the read mapping. `SESSION_SCHEMA_VERSION` bumps to 6 for the new persisted panel.
+   Default view = a **month grid** rendered for the month containing the read window's `timeMin` (design
+   `.sdd/designs/google-calendar-v1.md` resolved month-over-week: scannable, fits the narrow rail, one
+   bounded read; the builder takes an explicit `{timeMin,timeMax}` window so week is a later config
+   change). The main composer's `googleCalendarDefaultWindow()` reads the **current month** (first instant
+   of this month .. first instant of next month) per FR-012 — `timeMin` MUST be the month's first instant
+   because the catalog's `monthFromWindow` derives the rendered grid's month from it; spillover day cells
+   from adjacent months stay muted/empty by design. Catalog
+   (`src/renderer/googleCalendarCatalog/`, `CATALOG_ID 'google-calendar'`) renders the grid INTERNALLY
+   from the surface builder's locked `EventList` root (`{events,timeMin,timeMax,hasMore}`) —
+   `CalendarMonthGrid`/`DayCell`/`EventChip`/`MonthEmptyNote`, GCal's 11 `colorId`s collapsed onto a
+   6-token `--event-*` family (no raw hex). Rail icon = lucide `CalendarDays`, appended LAST in
+   `RAIL_ITEMS` so existing surfaces' Cmd+Shift+[/] cycle indices stay stable. 1204 tests green.
+   **shared-calendars-v1** (`.sdd/specs/shared-calendars-v1.md`, `.sdd/plans/shared-calendars-v1.md`,
+   `.sdd/designs/shared-calendars-v1.md`, **built**) extends this from PRIMARY-only to **all accessible
+   calendars**: a `calendarList`
+   read (`GET /users/me/calendarList`, covered by the existing `calendar.readonly` scope — **no new
+   scope, no re-consent**) supplies the set of calendars whose events the month view aggregates.
+   `handleGoogleCalendarDefaultView` fans out a **bounded** per-calendar `listEvents` over the same
+   month window (≤25 calendars, ordered primary→`selected`→rest; one bounded page each — no
+   per-calendar pagination; ≤6 concurrent `allSettled` so one calendar's failure never blanks the
+   grid) and MERGES the results, tagging each event with its `calendarId`. The `EventList` root
+   gains additive optional `calendars[]` (the non-secret legend: id, name, resolved color-token,
+   `selected`) + per-event `calendarId`; the catalog renders a **per-calendar legend/toggle** as a
+   **left-sidebar rail** (`calendar-legend-sidebar-v1`: a self-suppressing `<aside w-44>` that returns
+   `null` at ≤1 calendar so the single-primary view is unchanged; mirrors the GCal web left-side
+   checkboxes — renderer-only `hiddenCalendarIds` re-derived from each calendar's Google `selected`
+   flag each mount; toggling filters events from the grid instantly with no reload). The month grid is
+   the sibling flex column that fills the **remaining width AND height** (`flex-1`, no max cap; weeks
+   via `auto-rows-fr` with a per-cell `min-h` floor). It colors every event **by its owning calendar**
+   (replacing per-event-`colorId`). The
+   calendar→token mapping is deterministic (recognized GCal palette hex → nearest `--event-*` token,
+   else stable-hash of calendar id → token, else `gray` fallback); the token NAME is resolved once in
+   the surface builder so legend swatch + chip always agree and no raw hex reaches a component. Still
+   **read-only** (no write scope/tool, no action dispatcher). Renderer-only toggles + additive optional
+   surface fields ⇒ no `SESSION_SCHEMA_VERSION` bump expected. Legend + per-calendar color is a new
+   renderer surface ⇒ a Step 2.5 design (`.sdd/designs/shared-calendars-v1.md`) precedes interface.
+   **Month/year navigation** (`calendar-month-year-nav-v1`, **built**): the default month view gains
+   prev/next month (with Dec↔Jan year carry), prev/next year (month preserved), and a Today control.
+   The displayed-month INTENT is a `{ year, month }` pair held **per-tab** in a `Map` in
+   `GoogleCalendarPanel.tsx` (survives the `A2UIProvider key={tab.id}` remount) — `month` is 0-based
+   internally; pure nav arithmetic lives in `src/renderer/calendarNavLogic.ts`. The wire param is
+   **1-based** `{ year, month }`, and the single 0→1 conversion is `toWirePayload` (main subtracts 1
+   when building the `Date`). A new `validateGoogleCalendarRequestDefaultView` returns `{}` for an
+   absent/invalid payload (⇒ current-month fallback) and `null` only for a non-object. The nav
+   cluster reaches INTO the catalog via a context seam (`googleCalendarCatalog/navContext.ts`:
+   `CalendarNavContext` + `useCalendarNav()`), NOT surface props, and REPLACES the in-grid `<h2>`
+   month header — gated non-null only for the LIVE default view (`isConnected && surface != null &&
+   composed === false`) so composed snapshots/disconnected states render the plain label. Refresh of
+   this un-bound view is driven by `PanelRefreshButton`'s OPTIONAL `onRefresh` override (re-issues
+   `requestDefaultView(toWirePayload(intent))`), since the descriptor-gated button is otherwise
+   disabled for a binding-less surface. A latest-wins stale-read gate (`isSurfaceForIntent` via
+   `monthFromWindow`) rejects an out-of-order landed surface for a superseded month. The displayed
+   label is English (`"June 2026"`), a designer override of the spec's Korean `YYYY년 M월` (the app
+   carries zero Korean strings / no i18n) — **pending a user decision**.
 5. ~~Decide whether session control stays purely interactive (PTY) or adds Agent SDK for
    background work.~~ Resolved (§4.5, §4.10): a headless `claude -p` `AgentRunner` runs alongside
    the interactive PTY — the `claude` binary is reused, NOT the Agent SDK.

@@ -9,6 +9,7 @@ dist/
 .cosmos-render-ui.sock
 .playwright-mcp/
 .omc/
+.claude/worktrees/
 *.original.md
 .env
 .env.*

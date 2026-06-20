@@ -102,6 +102,33 @@ describe('buildTerminalDraft (FR-008/FR-021)', () => {
     // no sessionId/cwd in the draft — those are main's to add.
     expect(JSON.stringify(draft)).not.toContain('sessionId')
   })
+
+  it('carries openFiles for a pane with ≥1 open file (persist-workdir-open-files-v1, FR-003)', () => {
+    const state: LiveTabsState<LiveTerminalTab> = {
+      tabs: [{ id: 'p1', label: 'Terminal' }],
+      activeTabId: 'p1'
+    }
+    const draft = buildTerminalDraft(state, 1, {}, { p1: { files: ['a.ts', 'b.ts'], activeRelPath: 'b.ts' } })
+    expect(draft.tabs[0].openFiles).toEqual({ files: ['a.ts', 'b.ts'], activeRelPath: 'b.ts' })
+  })
+
+  it('omits openFiles for a pane with an EMPTY collection (no field → empty-strip restore default)', () => {
+    const state: LiveTabsState<LiveTerminalTab> = {
+      tabs: [{ id: 'p1', label: 'Terminal' }],
+      activeTabId: 'p1'
+    }
+    const draft = buildTerminalDraft(state, 1, {}, { p1: { files: [], activeRelPath: null } })
+    expect(draft.tabs[0]).not.toHaveProperty('openFiles')
+  })
+
+  it('omits openFiles when no open-files map is supplied at all (backward-compatible call)', () => {
+    const state: LiveTabsState<LiveTerminalTab> = {
+      tabs: [{ id: 'p1', label: 'Terminal' }],
+      activeTabId: 'p1'
+    }
+    const draft = buildTerminalDraft(state, 1, {})
+    expect(draft.tabs[0]).not.toHaveProperty('openFiles')
+  })
 })
 
 describe('hydrateGenerativeTabs (FR-008/FR-009/FR-013)', () => {
@@ -172,6 +199,27 @@ describe('hydrateTerminalTabs (FR-008/FR-011)', () => {
       { id: 'p2', label: 'Mine', renamed: true }
     ])
     expect(out.activeTabId).toBe('p1') // dangling active id falls back to first
+  })
+
+  it('surfaces a restored openFiles slice per tab; omits it when absent/empty (persist-workdir-open-files-v1, FR-004)', () => {
+    const out = hydrateTerminalTabs({
+      tabs: [
+        {
+          id: 'p1',
+          label: 'T',
+          sessionId: 's1',
+          cwd: '/w',
+          openFiles: { files: ['a.ts', 'b.ts'], activeRelPath: 'b.ts' }
+        },
+        { id: 'p2', label: 'T2', sessionId: 's2', cwd: '/w' },
+        { id: 'p3', label: 'T3', sessionId: 's3', cwd: '/w', openFiles: { files: [], activeRelPath: null } }
+      ],
+      activeTabId: 'p1',
+      everOpened: 3
+    })
+    expect(out.tabs[0].openFiles).toEqual({ files: ['a.ts', 'b.ts'], activeRelPath: 'b.ts' })
+    expect(out.tabs[1]).not.toHaveProperty('openFiles')
+    expect(out.tabs[2]).not.toHaveProperty('openFiles')
   })
 })
 

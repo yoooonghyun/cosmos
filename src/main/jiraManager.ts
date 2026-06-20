@@ -133,7 +133,10 @@ export class JiraManager {
   }
 
   private auth(tokens: StoredTokenSet): JiraCallAuth {
-    return { token: tokens.accessToken, cloudId: readCloudId(tokens) }
+    // jira-dock-autoapply-weblink-v1 (FR-010): carry the NON-SECRET site origin so getIssue can
+    // assemble the issue's browse `webUrl`. Spread-when-present — absent siteUrl → no webUrl.
+    const siteUrl = readSiteUrl(tokens)
+    return { token: tokens.accessToken, cloudId: readCloudId(tokens), ...(siteUrl ? { siteUrl } : {}) }
   }
 
   /**
@@ -310,6 +313,17 @@ function toStoredTokenSet(oauth: AtlassianOAuthResult): StoredTokenSet {
 function readCloudId(tokens: StoredTokenSet): string {
   const extra = tokens.extra
   return extra && typeof extra.cloudId === 'string' ? extra.cloudId : ''
+}
+
+/**
+ * The NON-SECRET connected site origin (e.g. `https://acme.atlassian.net`) from the persisted
+ * `extra.siteUrl` (jira-dock-autoapply-weblink-v1, FR-010). Already captured at OAuth time
+ * (`toStoredTokenSet`). Absent on an older token set → `undefined` (browse `webUrl` omitted —
+ * FR-011). NEVER a token/secret.
+ */
+function readSiteUrl(tokens: StoredTokenSet): string | undefined {
+  const extra = tokens.extra
+  return extra && typeof extra.siteUrl === 'string' ? extra.siteUrl : undefined
 }
 
 function readSiteName(tokens: StoredTokenSet | null): string | undefined {

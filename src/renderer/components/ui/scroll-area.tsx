@@ -2,6 +2,7 @@ import * as React from "react"
 import { ScrollArea as ScrollAreaPrimitive } from "radix-ui"
 
 import { cn } from "@/lib/utils"
+import { SCROLL_AREA_VIEWPORT_CLASS } from "./scroll-area.classes"
 
 function ScrollArea({
   className,
@@ -16,7 +17,10 @@ function ScrollArea({
     >
       <ScrollAreaPrimitive.Viewport
         data-slot="scroll-area-viewport"
-        className="size-full rounded-[inherit] transition-[color,box-shadow] outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-1"
+        // The `[&>div]:!block [&>div]:!min-w-full` segment defeats Radix's inline
+        // `display: table` content wrapper so `whitespace-pre-wrap` text wraps to the
+        // panel width instead of overflowing horizontally (bug slack-message-overflow-wrap).
+        className={SCROLL_AREA_VIEWPORT_CLASS}
       >
         {children}
       </ScrollAreaPrimitive.Viewport>

@@ -17,7 +17,7 @@
  *   CommentList · AddCommentControl · Notice
  */
 
-import { standardCatalog, type Catalog } from '@a2ui-sdk/react/0.9'
+import { type Catalog } from '@a2ui-sdk/react/0.9'
 import {
   AddCommentControl,
   CommentList,
@@ -33,6 +33,10 @@ import {
   TicketCard,
   TransitionPicker
 } from './components'
+// bug slack-generative-wrap-v1 (Jira latent instance): register width-clamped Column/Row
+// wrappers in place of the raw SDK layout containers so an agent-grouped list/detail wraps
+// instead of overflowing horizontally.
+import { Column, Row } from './layout'
 
 /** The `catalogId` stamped on the Jira panel's `createSurface` envelope. */
 export const JIRA_CATALOG_ID = 'jira'
@@ -43,6 +47,13 @@ export const JIRA_CATALOG_ID = 'jira'
  * `SLACK_OPEN_CHANNEL_ACTION` re-export).
  */
 export { JIRA_OPEN_DETAIL_ACTION } from './logic'
+
+/**
+ * The detail surfaceId + the unsolicited-frame discriminator (#86, R-A), re-exported so
+ * the panel can route a `jira:requestIssueDetail` detail frame into its dock slot instead
+ * of clobbering the tab's list surface.
+ */
+export { JIRA_DETAIL_SURFACE_ID, isDetailSurfaceSpec } from './logic'
 
 /**
  * The Jira custom catalog. The six contract components, the `Notice` block the
@@ -69,8 +80,8 @@ export const jiraCatalog: Catalog = {
     PaginationBar,
     Notice,
     Text,
-    Column: standardCatalog.components.Column,
-    Row: standardCatalog.components.Row
+    Column,
+    Row
   },
   functions: {}
 }

@@ -24,7 +24,7 @@
  */
 
 import { useDataBinding, useDispatchAction } from '@a2ui-sdk/react/0.9'
-import { Info, TriangleAlert } from 'lucide-react'
+import { ExternalLink, Info, TriangleAlert } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { cn } from '@/lib/utils'
@@ -65,6 +65,62 @@ export function PageDetailBody({ body }: { body: string | undefined }): React.JS
   }
   return (
     <div className={PAGE_DETAIL_BODY_CLASS} dangerouslySetInnerHTML={{ __html: safeHtml }} />
+  )
+}
+
+/**
+ * Is `webUrl` a usable, absolute `http(s)` URL? Belt-and-suspenders guard at the render
+ * site (confluence-detail-weblink-v1 #87, FR-010) — the main-side `confluenceWebUrl`
+ * assembler already enforces this, but the bound/native value re-validates here so a
+ * non-`http(s)` value can never become a live link. Pure; never throws.
+ */
+function isOpenableWebUrl(webUrl: string | undefined): webUrl is string {
+  if (typeof webUrl !== 'string' || webUrl.trim() === '') {
+    return false
+  }
+  try {
+    const u = new URL(webUrl)
+    return u.protocol === 'http:' || u.protocol === 'https:'
+  } catch {
+    return false
+  }
+}
+
+/**
+ * The SHARED Confluence page-detail TITLE (confluence-detail-weblink-v1 #87, design §1).
+ * Rendered by BOTH the gen-UI catalog `PageDetail` (below) and the native
+ * `ConfluencePanel.PageDetail`, so the title treatment cannot drift (SC-005): one
+ * component, one class string.
+ *
+ * When a usable absolute `http(s)` `webUrl` is present the title text becomes an inline
+ * external link (with a trailing `ExternalLink` glyph) that opens the page in the system
+ * browser via the existing `setWindowOpenHandler` → `shell.openExternal` hand-off (#85's
+ * integration-agnostic handler; no new IPC/scope/fetch). The link inherits the heading's
+ * `text-foreground` (NOT `--primary`). When `webUrl` is absent it degrades to plain title
+ * text — no anchor, no icon, no extra tab stop (FR-004). The caller owns the `h2` wrapper
+ * (typography + heading semantics stay on the `h2`).
+ */
+export function PageDetailTitle({
+  title,
+  webUrl
+}: {
+  title: string
+  webUrl?: string
+}): React.JSX.Element {
+  if (!isOpenableWebUrl(webUrl)) {
+    return <>{title}</>
+  }
+  return (
+    <a
+      href={webUrl}
+      target="_blank"
+      rel="noreferrer"
+      title={`${title} — open in Confluence`}
+      className="group inline-flex max-w-full items-center gap-1.5 rounded-sm hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 focus-visible:ring-offset-card"
+    >
+      <span className="min-w-0">{title}</span>
+      <ExternalLink className="size-3.5 shrink-0 text-muted-foreground" aria-hidden="true" />
+    </a>
   )
 }
 
@@ -251,6 +307,12 @@ export interface PageDetailNode extends SdkProps {
   title?: Bound<string>
   space?: Bound<string>
   body?: Bound<string>
+  /**
+   * Bound canonical web URL (confluence-detail-weblink-v1 #87). When present + absolute
+   * `http(s)`, the title renders as an "Open in Confluence" external link; absent → plain
+   * title (degrade-to-omit, FR-004). Non-secret — assembled from the page read's `_links`.
+   */
+  webUrl?: Bound<string>
   /** Bound busy flag (FR-004) — drives the RefreshButton spinner + aria-busy. */
   loading?: Bound<boolean>
   /** Bound recoverable error notice (FR-007) — shown above the stale detail when present. */
@@ -262,12 +324,14 @@ export function PageDetail({
   title,
   space,
   body,
+  webUrl,
   loading,
   error
 }: PageDetailNode): React.JSX.Element {
   const titleText = useBound<string>(surfaceId, title, '')
   const spaceText = useBound<string>(surfaceId, space, '')
   const bodyText = useBound<string>(surfaceId, body, '')
+  const webUrlText = useBound<string>(surfaceId, webUrl, '')
   const isLoading = useDataBinding<boolean>(surfaceId, loading, false)
   const errorMessage = useDataBinding<string | undefined>(surfaceId, error, undefined)
   return (
@@ -275,7 +339,9 @@ export function PageDetail({
       <BoundListError message={errorMessage} />
       <div className="flex flex-col gap-2">
         <div className="flex items-center justify-between gap-2">
-          <h2 className="text-base font-medium leading-snug text-foreground">{titleText ?? ''}</h2>
+          <h2 className="text-base font-medium leading-snug text-foreground">
+            <PageDetailTitle title={titleText ?? ''} webUrl={webUrlText || undefined} />
+          </h2>
         </div>
         {spaceText && (
           <div className="flex flex-wrap items-center gap-2">

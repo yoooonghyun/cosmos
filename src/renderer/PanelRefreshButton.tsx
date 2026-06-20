@@ -36,6 +36,14 @@ export interface PanelRefreshButtonProps {
    * Absent ⇒ no refreshable surface, so the control is disabled regardless.
    */
   requestId: string | null
+  /**
+   * calendar-month-year-nav-v1 (FR-012): an OPTIONAL panel-supplied refresh override for an
+   * UN-BOUND surface the `adapter.refresh` path cannot drive (the Google Calendar live
+   * default view). When supplied, the control is ENABLED and clicking it calls this instead
+   * of dispatching `adapter.refresh` — the panel re-issues its displayed-month request. When
+   * absent the control behaves exactly as before (descriptor-gated `adapter.refresh`).
+   */
+  onRefresh?: () => void
 }
 
 /**
@@ -45,15 +53,27 @@ export interface PanelRefreshButtonProps {
  */
 export function PanelRefreshButton({
   activeTab,
-  requestId
+  requestId,
+  onRefresh
 }: PanelRefreshButtonProps): React.JSX.Element {
   const state = derivePanelRefreshState(activeTab)
+  // calendar-month-year-nav-v1 (FR-012): a panel-supplied override enables the control for
+  // an UN-BOUND surface (the live default view) that `adapter.refresh` cannot drive. It
+  // takes precedence over the descriptor-gated path; absent it, behavior is unchanged.
+  const useOverride = onRefresh !== undefined
   // No requestId ⇒ cannot dispatch ⇒ treat as disabled (defensive; enabled implies a
   // surface, which implies a requestId in practice).
-  const enabled = state.enabled && requestId !== null
+  const enabled = useOverride || (state.enabled && requestId !== null)
   const busy = state.busy
 
   const onClick = (): void => {
+    if (busy) {
+      return // guarded while a read is in flight (design §3.2)
+    }
+    if (useOverride) {
+      onRefresh()
+      return
+    }
     if (!requestId || !shouldDispatchRefresh(state) || !state.refresh) {
       return // guarded: disabled or busy is a no-op (design §3.2/§3.3)
     }

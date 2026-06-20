@@ -25,10 +25,10 @@ function makeFakeStore(initial: StoredTokenSet | null = null) {
   }
 }
 
-/** A connected token set: one user token grants every read incl. search. */
+/** A connected token set: one user token grants every read incl. search + send. */
 const connectedTokens: StoredTokenSet = {
   accessToken: 'xoxp-1',
-  scopes: ['channels:read', 'channels:history', 'users:read', 'search:read'],
+  scopes: ['channels:read', 'channels:history', 'users:read', 'search:read', 'chat:write'],
   accountId: 'T1',
   accountName: 'Acme'
 }
@@ -49,6 +49,7 @@ function makeClient(overrides?: Partial<SlackClient>): SlackClient {
     getReplies: vi.fn(ok),
     search: vi.fn(ok),
     getUser: vi.fn(async () => ({ ok: true, data: { id: 'U1', displayName: 'Ada' } })),
+    postMessage: vi.fn(async () => ({ ok: true, data: { ts: '1700000000.000100' } })),
     ...overrides
   } as unknown as SlackClient
 }
@@ -78,6 +79,7 @@ describe('SlackManager state machine (FR-008, FR-009, SC-007, SC-010)', () => {
     expect(status.state).toBe('connected')
     expect(status.workspaceName).toBe('Acme')
     expect(status.canSearch).toBe(true)
+    expect(status.canSend).toBe(true)
   })
 
   it('connect() runs the OAuth flow, persists the user token, and goes connected', async () => {
@@ -177,7 +179,16 @@ describe('SlackManager state machine (FR-008, FR-009, SC-007, SC-010)', () => {
     const client = makeClient()
     const { manager } = makeManager({ store, client })
     await manager.getHistory({ channelId: 'C1' })
-    expect(client.getHistory).toHaveBeenCalledWith({ token: 'xoxp-1' }, 'C1', undefined)
+    // slack-rich-message-render-v1: a per-session resolvers object is threaded as the 4th arg.
+    expect(client.getHistory).toHaveBeenCalledWith(
+      { token: 'xoxp-1' },
+      'C1',
+      undefined,
+      expect.objectContaining({
+        resolveUserName: expect.any(Function),
+        resolveCustomEmojiRef: expect.any(Function)
+      })
+    )
   })
 
   it('a reconnect_needed result mid-read flips connection state (SC-007)', async () => {
@@ -214,7 +225,15 @@ describe('SlackManager state machine (FR-008, FR-009, SC-007, SC-010)', () => {
     const client = makeClient()
     const { manager } = makeManager({ store, client })
     await manager.search({ query: 'hi' })
-    expect(client.search).toHaveBeenCalledWith({ token: 'xoxp-1' }, 'hi', undefined)
+    expect(client.search).toHaveBeenCalledWith(
+      { token: 'xoxp-1' },
+      'hi',
+      undefined,
+      expect.objectContaining({
+        resolveUserName: expect.any(Function),
+        resolveCustomEmojiRef: expect.any(Function)
+      })
+    )
   })
 
   it('canSearch is false when the search scope is absent (FR-015)', () => {
@@ -229,5 +248,108 @@ describe('SlackManager state machine (FR-008, FR-009, SC-007, SC-010)', () => {
     const { manager } = makeManager({ store })
     const json = JSON.stringify(manager.getStatus())
     expect(json).not.toContain('xoxp-1')
+  })
+})
+
+describe('SlackManager.sendMessage (slack-send-message-v1, FR-006..FR-009, FR-015)', () => {
+  it('getStatus reports canSend true when chat:write is granted', () => {
+    const { store } = makeFakeStore(connectedTokens)
+    const { manager } = makeManager({ store })
+    expect(manager.getStatus().canSend).toBe(true)
+  })
+
+  it('getStatus reports canSend false when chat:write is absent (read-only-era token)', () => {
+    const noWrite: StoredTokenSet = { ...connectedTokens, scopes: ['channels:read', 'search:read'] }
+    const { store } = makeFakeStore(noWrite)
+    const { manager } = makeManager({ store })
+    expect(manager.getStatus().canSend).toBe(false)
+  })
+
+  it('a send while not_connected returns not_connected without calling the client', async () => {
+    const { store } = makeFakeStore(null)
+    const client = makeClient()
+    const { manager } = makeManager({ store, client })
+    const result = await manager.sendMessage({ channelId: 'C1', text: 'hi' })
+    expect(result.ok).toBe(false)
+    if (!result.ok) {
+      expect(result.kind).toBe('not_connected')
+    }
+    expect(client.postMessage).not.toHaveBeenCalled()
+  })
+
+  it('short-circuits to write_not_authorized when chat:write is absent (NO client call — FR-008)', async () => {
+    const noWrite: StoredTokenSet = { ...connectedTokens, scopes: ['channels:read'] }
+    const { store } = makeFakeStore(noWrite)
+    const client = makeClient()
+    const { manager } = makeManager({ store, client })
+    const result = await manager.sendMessage({ channelId: 'C1', text: 'hi' })
+    expect(result.ok).toBe(false)
+    if (!result.ok) {
+      expect(result.kind).toBe('write_not_authorized')
+    }
+    expect(client.postMessage).not.toHaveBeenCalled()
+  })
+
+  it('posts a channel message with the user token and no thread_ts (FR-006)', async () => {
+    const { store } = makeFakeStore(connectedTokens)
+    const client = makeClient()
+    const { manager } = makeManager({ store, client })
+    const result = await manager.sendMessage({ channelId: 'C1', text: 'hello' })
+    expect(result.ok).toBe(true)
+    if (result.ok) {
+      expect(result.data.ts).toBe('1700000000.000100')
+    }
+    expect(client.postMessage).toHaveBeenCalledWith({ token: 'xoxp-1' }, 'C1', 'hello', undefined)
+  })
+
+  it('posts a thread reply carrying thread_ts when threadTs is present (FR-002)', async () => {
+    const { store } = makeFakeStore(connectedTokens)
+    const client = makeClient()
+    const { manager } = makeManager({ store, client })
+    await manager.sendMessage({ channelId: 'C1', text: 'reply', threadTs: '1.2' })
+    expect(client.postMessage).toHaveBeenCalledWith({ token: 'xoxp-1' }, 'C1', 'reply', '1.2')
+  })
+
+  it('a reconnect_needed send result flips connection state (FR-015)', async () => {
+    const { store } = makeFakeStore(connectedTokens)
+    const client = makeClient({
+      postMessage: vi.fn(
+        async (): Promise<SlackResult<unknown>> => ({
+          ok: false,
+          kind: 'reconnect_needed',
+          message: 'expired'
+        })
+      ) as unknown as SlackClient['postMessage']
+    })
+    const { manager } = makeManager({ store, client })
+    await manager.sendMessage({ channelId: 'C1', text: 'hi' })
+    expect(manager.getStatus().state).toBe('reconnect_needed')
+  })
+
+  it('maps a network error to a graceful result (no crash — FR-014)', async () => {
+    const { store } = makeFakeStore(connectedTokens)
+    const client = makeClient({
+      postMessage: vi.fn(
+        async (): Promise<SlackResult<unknown>> => ({
+          ok: false,
+          kind: 'network',
+          message: 'Could not reach Slack.'
+        })
+      ) as unknown as SlackClient['postMessage']
+    })
+    const { manager } = makeManager({ store, client })
+    const result = await manager.sendMessage({ channelId: 'C1', text: 'hi' })
+    expect(result.ok).toBe(false)
+    if (!result.ok) {
+      expect(result.kind).toBe('network')
+    }
+  })
+
+  it('never leaks the token into a send result (SC-006)', async () => {
+    const secretTokens: StoredTokenSet = { ...connectedTokens, accessToken: 'xoxp-secret' }
+    const { store } = makeFakeStore(secretTokens)
+    const { manager } = makeManager({ store })
+    const result = await manager.sendMessage({ channelId: 'C1', text: 'hi' })
+    expect(JSON.stringify(result)).not.toContain('xoxp-secret')
   })
 })

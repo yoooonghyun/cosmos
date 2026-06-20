@@ -12,14 +12,16 @@
  * latest state survives a quit.
  */
 
-import { createContext, useContext, useEffect, useMemo, useRef, useState } from 'react'
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react'
 import type {
+  EnabledIntegrations,
+  GateableIntegration,
   GenerativePanelKey,
   GenerativePanelSnapshot,
   SessionSnapshot,
   TerminalPanelSnapshot
 } from '../shared/ipc'
-import { SessionRegistry, type PanelKey } from './sessionRegistry'
+import { emptyEnabled, SessionRegistry, type PanelKey } from './sessionRegistry'
 import type { TerminalPanelDraft } from './sessionSnapshot'
 
 interface SessionContextValue {
@@ -106,6 +108,52 @@ export function useReportPanel(): <K extends PanelKey>(
       },
     []
   )
+}
+
+/**
+ * The per-integration `enabled` rail-visibility preference, restored from the snapshot
+ * and made live (settings-redesign-v1, FR-003/FR-004/FR-006).
+ *
+ * Returns the current `enabled` map plus a `setEnabled(id, on)` setter. The map seeds
+ * from the restored snapshot (all-disabled for a clean session — FR-008); a clean
+ * `enabled` was already normalized at the main boundary so missing keys arrive `false`.
+ * Each toggle updates React state (so the rail re-renders live — FR-004) AND reports
+ * the new map to the debounced save coordinator (D2 — no new IPC channel). The restored
+ * map is also seeded into the registry on mount so a save triggered by another panel
+ * before the user toggles anything preserves the restored enabled state.
+ */
+export function useEnabledIntegrations(): {
+  enabled: EnabledIntegrations
+  setEnabled: (id: GateableIntegration, on: boolean) => void
+} {
+  const { snapshot, registry } = useSessionContext()
+  const [enabled, setEnabledState] = useState<EnabledIntegrations>(
+    () => snapshot?.enabled ?? emptyEnabled()
+  )
+
+  // Seed the registry with the restored map once so a save that fires before any
+  // user toggle still persists the restored enabled state (not all-disabled).
+  useEffect(() => {
+    registry.setEnabled(snapshot?.enabled ?? emptyEnabled())
+    // Restoring once at mount; the snapshot is fixed for the provider's lifetime.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [registry])
+
+  const setEnabled = useCallback(
+    (id: GateableIntegration, on: boolean): void => {
+      setEnabledState((prev) => {
+        if (prev[id] === on) {
+          return prev
+        }
+        const next = { ...prev, [id]: on }
+        registry.setEnabled(next)
+        return next
+      })
+    },
+    [registry]
+  )
+
+  return { enabled, setEnabled }
 }
 
 /**

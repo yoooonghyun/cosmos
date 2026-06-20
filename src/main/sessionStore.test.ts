@@ -52,8 +52,10 @@ function goodSnapshot(): SessionSnapshot {
       'generated-ui': { tabs: [], activeTabId: null, everOpened: 0 },
       jira: { tabs: [], activeTabId: null, everOpened: 0 },
       slack: { tabs: [], activeTabId: null, everOpened: 0 },
-      confluence: { tabs: [], activeTabId: null, everOpened: 0 }
-    }
+      confluence: { tabs: [], activeTabId: null, everOpened: 0 },
+      'google-calendar': { tabs: [], activeTabId: null, everOpened: 0 }
+    },
+    enabled: { slack: false, jira: false, confluence: false, 'google-calendar': false }
   }
 }
 
@@ -210,8 +212,10 @@ describe('SessionStore — load fallback (FR-005)', () => {
           everOpened: 1
         },
         slack: { tabs: [], activeTabId: null, everOpened: 0 },
-        confluence: { tabs: [], activeTabId: null, everOpened: 0 }
-      }
+        confluence: { tabs: [], activeTabId: null, everOpened: 0 },
+        'google-calendar': { tabs: [], activeTabId: null, everOpened: 0 }
+      },
+      enabled: { slack: false, jira: false, confluence: false, 'google-calendar': false }
     } as unknown as SessionSnapshot
     store.save(snap)
     expect(store.load()).toEqual(snap)

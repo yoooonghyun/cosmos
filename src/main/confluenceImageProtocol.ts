@@ -20,6 +20,8 @@ import type { ConfluenceCallAuth } from './integrations/confluenceClient'
 import {
   COSMOS_CONFLUENCE_IMG_SCHEME,
   buildAssetUrl,
+  buildAttachmentMetaUrl,
+  buildDownloadUrl,
   decodeImageRef
 } from './confluenceImageRef'
 
@@ -53,16 +55,19 @@ function brokenImageResponse(status: number): Response {
 
 /**
  * Build the `protocol.handle` handler. Decodes + validates the reference (forged → 400),
- * resolves the live auth (not connected → 401), builds the gateway URL, and streams
- * `net.fetch` with the bearer token. Never throws (FR-010) — any failure becomes a non-2xx
- * Response. No size cap — the response is streamed.
+ * resolves the live auth (not connected → 401), then either:
+ *   - ATTACHMENT ref → resolves the bytes via the granular-authorized v2 attachments API
+ *     (`GET /wiki/api/v2/attachments/{id}` → `downloadLink` → bytes fetch), or
+ *   - PATH ref → fetches the relative `/wiki/...` asset directly,
+ * streaming `net.fetch` with the bearer token. Never throws (FR-010) — any failure becomes a
+ * non-2xx Response. No size cap — the byte response is streamed.
  */
 export function handleConfluenceImage(
   resolveAuth: ConfluenceAuthResolver
 ): (request: Request) => Promise<Response> {
   return async (request: Request): Promise<Response> => {
-    const relativePath = decodeImageRef(request.url)
-    if (!relativePath) {
+    const ref = decodeImageRef(request.url)
+    if (!ref) {
       // Forged / malformed reference — SSRF guard rejected it. Broken image, no fetch.
       return brokenImageResponse(400)
     }
@@ -76,17 +81,61 @@ export function handleConfluenceImage(
       // Not connected / no token — degrade to a broken image (no token-prompt loop, FR-010).
       return brokenImageResponse(401)
     }
-    const url = buildAssetUrl(auth.cloudId, relativePath)
+    const headers = { Authorization: `Bearer ${auth.token}` }
     try {
-      // net.fetch streams the upstream response transparently; a non-2xx upstream status is
-      // passed straight through to the <img> as a broken image (FR-010).
-      return await net.fetch(url, {
-        headers: { Authorization: `Bearer ${auth.token}` }
-      })
+      // Attachment ref (confluence-attachment-scope-v1): the embedded legacy
+      // `/wiki/download/attachments/...` blob URL 401s under granular scopes, so resolve the
+      // bytes URL via the v2 attachments metadata read (authorized by `read:attachment:confluence`)
+      // before fetching the bytes.
+      if (ref.kind === 'attachment') {
+        const bytesUrl = await resolveAttachmentBytesUrl(auth.cloudId, ref.attachmentId, headers)
+        if (bytesUrl === null) {
+          // Metadata read failed / no usable downloadLink — broken image (FR-010).
+          return brokenImageResponse(502)
+        }
+        return await net.fetch(bytesUrl, { headers })
+      }
+      // Path ref: fetch the relative `/wiki/...` asset directly. net.fetch streams the upstream
+      // response transparently; a non-2xx upstream status passes straight through as a broken
+      // image (FR-010).
+      const assetUrl = buildAssetUrl(auth.cloudId, ref.relativePath)
+      return await net.fetch(assetUrl, { headers })
     } catch {
       // Network error / rejection — broken image, never a main crash (FR-010).
       return brokenImageResponse(502)
     }
+  }
+}
+
+/**
+ * Resolve an attachment id to its absolute, gateway-authorized bytes URL via the v2 attachments
+ * metadata read. `GET /wiki/api/v2/attachments/{id}` (authorized by `read:attachment:confluence`)
+ * returns JSON carrying a `downloadLink`; {@link buildDownloadUrl} normalizes + SSRF-guards that
+ * link into an absolute gateway URL. Returns `null` on a non-2xx metadata read, an unreadable
+ * body, or a missing/forged `downloadLink` (the caller degrades to a broken image, FR-010).
+ * Never throws.
+ */
+async function resolveAttachmentBytesUrl(
+  cloudId: string,
+  attachmentId: string,
+  headers: Record<string, string>
+): Promise<string | null> {
+  try {
+    const metaUrl = buildAttachmentMetaUrl(cloudId, attachmentId)
+    const metaResp = await net.fetch(metaUrl, {
+      headers: { ...headers, Accept: 'application/json' }
+    })
+    if (!metaResp.ok) {
+      return null
+    }
+    const meta = (await metaResp.json()) as unknown
+    const downloadLink =
+      typeof meta === 'object' && meta !== null
+        ? (meta as Record<string, unknown>).downloadLink
+        : undefined
+    return buildDownloadUrl(cloudId, downloadLink)
+  } catch {
+    return null
   }
 }
 

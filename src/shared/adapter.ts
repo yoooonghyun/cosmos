@@ -106,7 +106,9 @@ export const AdapterSourcePath = {
   // Confluence
   defaultFeed: '/feed',
   searchContent: '/results',
-  getPage: '/page'
+  getPage: '/page',
+  // Google Calendar
+  listEvents: '/events'
 } as const
 
 export type AdapterSourceId = keyof typeof AdapterSourcePath

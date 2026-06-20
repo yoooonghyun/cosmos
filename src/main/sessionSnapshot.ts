@@ -16,6 +16,8 @@
 import {
   SESSION_SCHEMA_VERSION,
   type A2uiSurfaceUpdate,
+  type EnabledIntegrations,
+  type GateableIntegration,
   type GenerativePanelKey,
   type GenerativePanelSnapshot,
   type GenerativeTabSnapshot,
@@ -29,7 +31,16 @@ import { validateAdapterBindings, validateAdapterDescriptor } from '../shared/va
 export type WarnFn = (message: string, ...rest: unknown[]) => void
 const defaultWarn: WarnFn = (message, ...rest) => console.warn(message, ...rest)
 
-const GENERATIVE_KEYS: GenerativePanelKey[] = ['generated-ui', 'jira', 'slack', 'confluence']
+const GENERATIVE_KEYS: GenerativePanelKey[] = [
+  'generated-ui',
+  'jira',
+  'slack',
+  'confluence',
+  'google-calendar'
+]
+
+/** The gateable integrations carrying an `enabled` rail-visibility flag (FR-003). */
+const GATEABLE_KEYS: GateableIntegration[] = ['slack', 'jira', 'confluence', 'google-calendar']
 
 function isObject(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
@@ -51,6 +62,30 @@ export function emptyTerminalPanel(): TerminalPanelSnapshot {
   return { tabs: [], activeTabId: null, everOpened: 0 }
 }
 
+/** First-run / fallback `enabled` map — every gateable integration disabled (FR-008). */
+export function emptyEnabledIntegrations(): EnabledIntegrations {
+  return { slack: false, jira: false, confluence: false, 'google-calendar': false }
+}
+
+/**
+ * Normalize the inbound `enabled` map (settings-redesign-v1, FR-008/FR-016/FR-018).
+ *
+ * Each gateable key is read as a strict boolean; a missing key, a non-boolean value,
+ * or a non-object map all normalize to `false` (disabled) — never crash, never an
+ * `undefined` key. This is the in-version migration: a v7 snapshot whose `enabled`
+ * map is absent/partial/malformed is repaired to a complete all-default-false map.
+ */
+function validateEnabled(value: unknown): EnabledIntegrations {
+  const out = emptyEnabledIntegrations()
+  if (!isObject(value)) {
+    return out
+  }
+  for (const key of GATEABLE_KEYS) {
+    out[key] = value[key] === true
+  }
+  return out
+}
+
 /** A clean, empty session snapshot — the FR-005 fallback when no/bad snapshot exists. */
 export function emptySnapshot(): SessionSnapshot {
   return {
@@ -60,15 +95,50 @@ export function emptySnapshot(): SessionSnapshot {
       'generated-ui': emptyGenerativePanel(),
       jira: emptyGenerativePanel(),
       slack: emptyGenerativePanel(),
-      confluence: emptyGenerativePanel()
+      confluence: emptyGenerativePanel(),
+      'google-calendar': emptyGenerativePanel()
+    },
+    enabled: emptyEnabledIntegrations()
+  }
+}
+
+/**
+ * Normalize ONE terminal tab's optional `openFiles` slice (persist-workdir-open-files-v1,
+ * FR-009/FR-012). Additive at the boundary: returns the cleaned `{ files, activeRelPath }`
+ * — keeping only non-empty, de-duplicated string paths, and an `activeRelPath` that names
+ * a surviving path (else `null`) — or `undefined` when the field is absent/malformed or
+ * nothing valid survives (so the tab restores with no open files, the safe default).
+ * NEVER throws; a present-but-garbage value degrades to `undefined`.
+ */
+function validateOpenFiles(
+  value: unknown
+): { files: string[]; activeRelPath: string | null } | undefined {
+  if (!isObject(value) || !Array.isArray(value.files)) {
+    return undefined
+  }
+  const seen = new Set<string>()
+  const files: string[] = []
+  for (const relPath of value.files) {
+    if (isNonEmptyString(relPath) && !seen.has(relPath)) {
+      seen.add(relPath)
+      files.push(relPath)
     }
   }
+  if (files.length === 0) {
+    return undefined
+  }
+  const activeRelPath =
+    isNonEmptyString(value.activeRelPath) && seen.has(value.activeRelPath)
+      ? value.activeRelPath
+      : null
+  return { files, activeRelPath }
 }
 
 /**
  * Validate ONE terminal tab. Required: non-empty id, sessionId, cwd (FR-019); a
  * string label (defaulted if missing). Optional: renamed (bool), scrollback
- * (string). Returns null + warns on a required-field violation (FR-004).
+ * (string), openFiles (normalized per-tab open-files slice). Returns null + warns on
+ * a required-field violation (FR-004).
  */
 function validateTerminalTab(value: unknown, warn: WarnFn): TerminalTabSnapshot | null {
   if (!isObject(value)) {
@@ -87,6 +157,10 @@ function validateTerminalTab(value: unknown, warn: WarnFn): TerminalTabSnapshot 
   }
   if (value.renamed === true) tab.renamed = true
   if (typeof value.scrollback === 'string') tab.scrollback = value.scrollback
+  // persist-workdir-open-files-v1 (FR-003/FR-009/FR-012): an absent/malformed slice
+  // normalizes to undefined (omitted) — additive, never affecting required fields.
+  const openFiles = validateOpenFiles(value.openFiles)
+  if (openFiles) tab.openFiles = openFiles
   return tab
 }
 
@@ -243,7 +317,9 @@ export function validateSnapshot(value: unknown, warn: WarnFn = defaultWarn): Se
       'generated-ui': generative['generated-ui'],
       jira: generative.jira,
       slack: generative.slack,
-      confluence: generative.confluence
-    }
+      confluence: generative.confluence,
+      'google-calendar': generative['google-calendar']
+    },
+    enabled: validateEnabled(value.enabled)
   }
 }

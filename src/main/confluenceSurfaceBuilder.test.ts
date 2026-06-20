@@ -98,13 +98,15 @@ describe('buildBoundSearchResultsSurface (FR-002/FR-003/FR-006)', () => {
 describe('buildBoundPageDetailSurface (FR-002/FR-003/FR-006/FR-010)', () => {
   const surface = buildBoundPageDetailSurface(DETAIL)
 
-  it('binds title/space/body to sub-paths of the single /page value (no literal props)', () => {
+  it('binds title/space/body/webUrl to sub-paths of the single /page value (no literal props)', () => {
     const root = rootOf(surface.spec)
     expect(surface.spec.surfaceId).toBe(SURFACE_CONFLUENCE_PAGE)
     expect(root.component).toBe('PageDetail')
     expect(root.title).toEqual({ path: `${CONFLUENCE_PAGE_PATH}/title` })
     expect(root.space).toEqual({ path: `${CONFLUENCE_PAGE_PATH}/space` })
     expect(root.body).toEqual({ path: `${CONFLUENCE_PAGE_PATH}/body` })
+    // #87: the bound webUrl sub-path rides the same /page value (omit-when-absent in data).
+    expect(root.webUrl).toEqual({ path: `${CONFLUENCE_PAGE_PATH}/webUrl` })
     expect(root.loading).toEqual({ path: '/loading' })
     expect(root.error).toEqual({ path: '/error' })
     // refresh-only: no load-more / hasMore / hasPrev binding.
@@ -117,6 +119,24 @@ describe('buildBoundPageDetailSurface (FR-002/FR-003/FR-006/FR-010)', () => {
       { surfaceId: SURFACE_CONFLUENCE_PAGE, path: CONFLUENCE_PAGE_PATH, value: DETAIL },
       { surfaceId: SURFACE_CONFLUENCE_PAGE, path: '/loading', value: false }
     ])
+  })
+
+  it('does not error and carries no webUrl in the seed when the detail omits it (#87 FR-004)', () => {
+    // DETAIL has no webUrl key; the seed serializes the whole value, so a missing optional
+    // simply does not appear — the bound webUrl path resolves to absent → affordance omitted.
+    const seed = surface.dataModel.find((d) => d.path === CONFLUENCE_PAGE_PATH)
+    expect(seed?.value).toEqual(DETAIL)
+    expect('webUrl' in (seed?.value as object)).toBe(false)
+  })
+
+  it('carries webUrl through the seed when the detail has it (#87 FR-003)', () => {
+    const withUrl: ConfluencePageDetail = {
+      ...DETAIL,
+      webUrl: 'https://acme.atlassian.net/wiki/spaces/ENG/pages/P1/Page-One'
+    }
+    const s = buildBoundPageDetailSurface(withUrl)
+    const seed = s.dataModel.find((d) => d.path === CONFLUENCE_PAGE_PATH)
+    expect((seed?.value as ConfluencePageDetail).webUrl).toBe(withUrl.webUrl)
   })
 
   it('emits a secret-free getPage descriptor carrying the pageId', () => {

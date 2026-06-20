@@ -1,12 +1,15 @@
 import { describe, it, expect } from 'vitest'
 import { JSDOM } from 'jsdom'
 import {
+  attachmentIdOf,
   classifyImg,
   confluenceRelativePath,
+  toAttachmentOpaqueSrc,
   toOpaqueSrc,
   encodeRelativePath,
   isEmoticonImgEl,
-  COSMOS_CONFLUENCE_IMG_SCHEME
+  COSMOS_CONFLUENCE_IMG_SCHEME,
+  COSMOS_CONFLUENCE_ATTACHMENT_REF_PREFIX
 } from './contentImageSrc'
 
 /*
@@ -110,6 +113,54 @@ describe('isEmoticonImgEl', () => {
     expect(isEmoticonImgEl(img({ class: 'emoticon' }))).toBe(true)
     expect(isEmoticonImgEl(img({ src: '/wiki/download/attachments/1/x.png' }))).toBe(false)
     expect(isEmoticonImgEl(doc.createElement('div'))).toBe(false)
+  })
+})
+
+describe('attachmentIdOf (confluence-attachment-scope-v1)', () => {
+  it('extracts the attachment id from an embedded attachment <img>', () => {
+    // The real failing-page markup: a LEGACY download URL src + data-linked-resource-id.
+    expect(
+      attachmentIdOf(
+        img({
+          class: 'confluence-embedded-image',
+          src: 'https://cosmos-works.atlassian.net/wiki/download/attachments/65822/recently_updated.svg?version=1&api=v2',
+          'data-linked-resource-id': '65846',
+          'data-linked-resource-type': 'attachment'
+        })
+      )
+    ).toBe('65846')
+  })
+
+  it('accepts an attachment id when resource-type is absent (id alone suffices)', () => {
+    expect(attachmentIdOf(img({ 'data-linked-resource-id': '777' }))).toBe('777')
+  })
+
+  it('returns null for a non-attachment linked resource', () => {
+    expect(
+      attachmentIdOf(img({ 'data-linked-resource-id': '5', 'data-linked-resource-type': 'page' }))
+    ).toBeNull()
+  })
+
+  it('returns null for a missing / non-numeric id and non-img', () => {
+    expect(attachmentIdOf(img({ src: '/wiki/download/attachments/1/x.png' }))).toBeNull()
+    expect(attachmentIdOf(img({ 'data-linked-resource-id': 'abc' }))).toBeNull()
+    expect(attachmentIdOf(img({ 'data-linked-resource-id': '' }))).toBeNull()
+    expect(attachmentIdOf(doc.createElement('div'))).toBeNull()
+  })
+})
+
+describe('toAttachmentOpaqueSrc (confluence-attachment-scope-v1 regression)', () => {
+  it('encodes attachment:<id> — NOT the legacy /wiki/download/attachments path', () => {
+    const out = toAttachmentOpaqueSrc('65846')
+    const prefix = `${COSMOS_CONFLUENCE_IMG_SCHEME}://confluence/`
+    expect(out.startsWith(prefix)).toBe(true)
+    const seg = out.slice(prefix.length)
+    expect(seg).toMatch(/^[A-Za-z0-9_-]+$/)
+    // Decode the segment back and assert it carries the attachment id, not the legacy blob path.
+    const b64 = seg.replace(/-/g, '+').replace(/_/g, '/')
+    const decoded = Buffer.from(b64, 'base64').toString('utf8')
+    expect(decoded).toBe(`${COSMOS_CONFLUENCE_ATTACHMENT_REF_PREFIX}65846`)
+    expect(decoded).not.toContain('/wiki/download/attachments/')
   })
 })
 

@@ -54,8 +54,8 @@ function payload(command: ShortcutCommand, index?: number): ShortcutTriggerPaylo
  *  - Ctrl+Shift+Tab / mod+Alt+Left → tab:prev
  *  - mod+1..8                      → tab:jump (index 0..7)
  *  - mod+9                         → tab:last
- *  - mod+Shift+]                   → surface:next
- *  - mod+Shift+[                   → surface:prev
+ *  - mod+Shift+] / mod+Alt+Down    → surface:next
+ *  - mod+Shift+[ / mod+Alt+Up      → surface:prev
  */
 export function matchShortcut(
   input: KeyInput,
@@ -77,13 +77,20 @@ export function matchShortcut(
     return null
   }
 
-  // mod+Alt+Arrow tab cycling (no Shift).
+  // mod+Alt+Arrow navigation (no Shift): horizontal cycles tabs, vertical
+  // switches left-rail panels (an additive alias of mod+Shift+bracket).
   if (input.alt && !input.shift) {
     if (input.code === 'ArrowRight') {
       return payload('tab:next')
     }
     if (input.code === 'ArrowLeft') {
       return payload('tab:prev')
+    }
+    if (input.code === 'ArrowDown') {
+      return payload('surface:next')
+    }
+    if (input.code === 'ArrowUp') {
+      return payload('surface:prev')
     }
   }
 

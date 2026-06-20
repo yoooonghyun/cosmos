@@ -5,7 +5,8 @@ import {
   validateSlackHistory,
   validateSlackListChannels,
   validateSlackReplies,
-  validateSlackSearch
+  validateSlackSearch,
+  validateSlackSend
 } from './validate'
 import { SlackOp } from './slack'
 
@@ -88,6 +89,72 @@ describe('Slack IPC validators (FR-023, SC-007)', () => {
       const warn = vi.fn()
       expect(validateSlackGetUser({}, warn)).toBeNull()
       expect(warn).toHaveBeenCalledOnce()
+    })
+  })
+
+  describe('validateSlackSend (slack-send-message-v1, FR-005)', () => {
+    it('accepts a channel message (no threadTs — happy path)', () => {
+      const warn = vi.fn()
+      expect(validateSlackSend({ channelId: 'C1', text: 'hello' }, warn)).toEqual({
+        channelId: 'C1',
+        text: 'hello'
+      })
+      expect(warn).not.toHaveBeenCalled()
+    })
+    it('accepts a thread reply (optional threadTs present)', () => {
+      const warn = vi.fn()
+      expect(validateSlackSend({ channelId: 'C1', text: 'hi', threadTs: '1.2' }, warn)).toEqual({
+        channelId: 'C1',
+        text: 'hi',
+        threadTs: '1.2'
+      })
+      expect(warn).not.toHaveBeenCalled()
+    })
+    it('missing optional threadTs does not error (omitted from result)', () => {
+      const warn = vi.fn()
+      const out = validateSlackSend({ channelId: 'C1', text: 'hi' }, warn)
+      expect(out).not.toBeNull()
+      expect(out).not.toHaveProperty('threadTs')
+      expect(warn).not.toHaveBeenCalled()
+    })
+    it('warns + null when required channelId is missing (safe fallback)', () => {
+      const warn = vi.fn()
+      expect(validateSlackSend({ text: 'hi' }, warn)).toBeNull()
+      expect(warn).toHaveBeenCalledOnce()
+    })
+    it('warns + null on empty channelId', () => {
+      const warn = vi.fn()
+      expect(validateSlackSend({ channelId: '', text: 'hi' }, warn)).toBeNull()
+      expect(warn).toHaveBeenCalledOnce()
+    })
+    it.each(['', '   ', '\n\t'])('warns + null on empty/whitespace text %p', (text) => {
+      const warn = vi.fn()
+      expect(validateSlackSend({ channelId: 'C1', text }, warn)).toBeNull()
+      expect(warn).toHaveBeenCalledOnce()
+    })
+    it('warns + null when text is missing', () => {
+      const warn = vi.fn()
+      expect(validateSlackSend({ channelId: 'C1' }, warn)).toBeNull()
+      expect(warn).toHaveBeenCalledOnce()
+    })
+    it('warns + null on a non-string threadTs (invalid optional)', () => {
+      const warn = vi.fn()
+      expect(validateSlackSend({ channelId: 'C1', text: 'hi', threadTs: 5 }, warn)).toBeNull()
+      expect(warn).toHaveBeenCalledOnce()
+    })
+    it.each([null, undefined, 'x', 7])('warns + null on non-object %p', (raw) => {
+      const warn = vi.fn()
+      expect(validateSlackSend(raw as unknown, warn)).toBeNull()
+      expect(warn).toHaveBeenCalledOnce()
+    })
+    it('strips a token field if present (no token leakage — SC-006)', () => {
+      const out = validateSlackSend({
+        channelId: 'C1',
+        text: 'hi',
+        token: 'xoxp-secret'
+      } as unknown)
+      expect(out).toEqual({ channelId: 'C1', text: 'hi' })
+      expect(JSON.stringify(out)).not.toContain('xoxp-secret')
     })
   })
 

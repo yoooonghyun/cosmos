@@ -45,12 +45,53 @@
   --color-status-done: var(--status-done);
   --color-status-done-foreground: var(--status-done-foreground);
 
+  /* Google Calendar event-color chips (google-calendar-v1 design §5) — a bounded,
+     dark-tuned 6-hue accent family the GCal colorId palette collapses into. Color
+     is reinforcement only; the event title always carries the meaning. The dot uses
+     the solid token; the all-day bar uses the token at low alpha + a left accent. */
+  --color-event-blue: var(--event-blue);
+  --color-event-blue-foreground: var(--event-blue-foreground);
+  --color-event-green: var(--event-green);
+  --color-event-green-foreground: var(--event-green-foreground);
+  --color-event-purple: var(--event-purple);
+  --color-event-purple-foreground: var(--event-purple-foreground);
+  --color-event-red: var(--event-red);
+  --color-event-red-foreground: var(--event-red-foreground);
+  --color-event-amber: var(--event-amber);
+  --color-event-amber-foreground: var(--event-amber-foreground);
+  --color-event-gray: var(--event-gray);
+  --color-event-gray-foreground: var(--event-gray-foreground);
+  /* shared-calendars-v1 (design §2.2) — six added hues so the per-calendar color mapping
+     spreads many calendars across mutually-distinguishable swatches. Same dot/bar usage. */
+  --color-event-teal: var(--event-teal);
+  --color-event-teal-foreground: var(--event-teal-foreground);
+  --color-event-cyan: var(--event-cyan);
+  --color-event-cyan-foreground: var(--event-cyan-foreground);
+  --color-event-indigo: var(--event-indigo);
+  --color-event-indigo-foreground: var(--event-indigo-foreground);
+  --color-event-magenta: var(--event-magenta);
+  --color-event-magenta-foreground: var(--event-magenta-foreground);
+  --color-event-pink: var(--event-pink);
+  --color-event-pink-foreground: var(--event-pink-foreground);
+  --color-event-olive: var(--event-olive);
+  --color-event-olive-foreground: var(--event-olive-foreground);
+
   /* cosmos brand identity tokens — single source of truth for the pastel
      pink→purple gradient used in the logo mark and brand-styled controls.
      Surfaces MUST reference these vars; no raw hex outside this block. */
   --color-brand-pink: var(--brand-pink);
   --color-brand-purple: var(--brand-purple);
   --color-brand-foreground: var(--brand-foreground);
+
+  /* cosmos active-affordance accent (settings-visual-v1) — the single SOLID brand
+     accent for active/selected/connected chrome (rail indicator, active tab pill
+     accents, Switch on-track, connected status dot, focus ring). It is the purple
+     end of the brand gradient (== --brand-purple), continuing the #94 file-tab/
+     divider direction. The pink→purple GRADIENT stays reserved for the logo mark;
+     this solid token is what affordances reference so active state never reverts to
+     the old blue. Consumable as bg-/text-/ring-/before:bg-brand-accent. */
+  --color-brand-accent: var(--brand-accent);
+  --color-brand-accent-foreground: var(--brand-accent-foreground);
 }
 
 /*
@@ -124,8 +165,10 @@
   --card-foreground: #1e1e1e;
   --popover: #ffffff;
   --popover-foreground: #1e1e1e;
-  --primary: #4a9eff;
-  --primary-foreground: #ffffff;
+  /* settings-visual-v1: retired blue #4a9eff → brand purple. --primary is the
+     active/actionable color; dark-violet foreground stays legible on the pastel. */
+  --primary: #d8b4fe;
+  --primary-foreground: #2e1065;
   --secondary: #f4f4f5;
   --secondary-foreground: #1e1e1e;
   --muted: #f4f4f5;
@@ -136,7 +179,8 @@
   --destructive-foreground: #ffffff;
   --border: #e4e4e7;
   --input: #e4e4e7;
-  --ring: #4a9eff;
+  /* settings-visual-v1: focus ring follows the brand accent (was blue #4a9eff). */
+  --ring: #d8b4fe;
 
   /* Jira status-category chips — light fallback (design §3.1). */
   --status-todo: #f4f4f5;
@@ -146,11 +190,42 @@
   --status-done: #dcf5e6;
   --status-done-foreground: #1d6b3f;
 
+  /* Google Calendar event-color chips — light fallback (design §5). Lighter
+     tints of the same 6 hues; foregrounds stay dark for legibility on the tint. */
+  --event-blue: #c7ddf7;
+  --event-blue-foreground: #1e497a;
+  --event-green: #cdeed8;
+  --event-green-foreground: #1d6b3f;
+  --event-purple: #e3d8ff;
+  --event-purple-foreground: #4b3b8f;
+  --event-red: #ffd6d6;
+  --event-red-foreground: #9a2f2f;
+  --event-amber: #ffe9c2;
+  --event-amber-foreground: #855a17;
+  --event-gray: #e4e4e7;
+  --event-gray-foreground: #3f3f46;
+  /* shared-calendars-v1 (design §2.2) — six added hues, light tints. */
+  --event-teal: #c3ece4;
+  --event-teal-foreground: #15695c;
+  --event-cyan: #c5e9f2;
+  --event-cyan-foreground: #176079;
+  --event-indigo: #d6daff;
+  --event-indigo-foreground: #353f9a;
+  --event-magenta: #f6d4ee;
+  --event-magenta-foreground: #8a2675;
+  --event-pink: #ffd4e3;
+  --event-pink-foreground: #9a2750;
+  --event-olive: #e0e7c2;
+  --event-olive-foreground: #5c6417;
+
   /* cosmos brand identity — light fallback (same pastel values; gradient is
      brand-fixed and does not invert in light mode). */
   --brand-pink: #f9a8d4;
   --brand-purple: #d8b4fe;
   --brand-foreground: #2e1065;
+  /* Solid active-affordance accent (settings-visual-v1) — the purple gradient end. */
+  --brand-accent: #d8b4fe;
+  --brand-accent-foreground: #2e1065;
 }
 
 .dark {
@@ -161,8 +236,9 @@
   --card-foreground: #e0e0e0;
   --popover: #252526;
   --popover-foreground: #e0e0e0;
-  --primary: #4a9eff;
-  --primary-foreground: #0b1622;
+  /* settings-visual-v1: retired blue #4a9eff → brand purple (active/actionable). */
+  --primary: #d8b4fe;
+  --primary-foreground: #2e1065;
   --secondary: #3a3a3c;
   --secondary-foreground: #dddddd;
   --muted: #252526;
@@ -173,7 +249,9 @@
   --destructive-foreground: #1e1e1e;
   --border: #333333;
   --input: #4a4a4c;
-  --ring: #4a4a4c;
+  /* settings-visual-v1: focus ring follows the brand accent (was neutral #4a4a4c,
+     nearly invisible on the dark bg). */
+  --ring: #d8b4fe;
 
   /* Jira status-category chips — cosmos dark values (design §3.1). Picked to sit
      on the #1e1e1e-family background with legible light foregrounds. */
@@ -184,6 +262,35 @@
   --status-done: #1f3d2b;
   --status-done-foreground: #7fd6a0;
 
+  /* Google Calendar event-color chips — cosmos dark values (design §5). Muted hues
+     legible on the #1b1b1c card, harmonizing with --primary #4a9eff; the *-foreground
+     light tints are the chip/dot text and read on the muted token backgrounds. */
+  --event-blue: #3b6ea5;
+  --event-blue-foreground: #cfe2ff;
+  --event-green: #3f7d57;
+  --event-green-foreground: #cdeed8;
+  --event-purple: #6f5a9e;
+  --event-purple-foreground: #e3d8ff;
+  --event-red: #a85757;
+  --event-red-foreground: #ffd6d6;
+  --event-amber: #a8843f;
+  --event-amber-foreground: #ffe9c2;
+  --event-gray: #4a4a4c;
+  --event-gray-foreground: #dddddd;
+  /* shared-calendars-v1 (design §2.2) — six added hues, cosmos dark values. */
+  --event-teal: #2f8074;
+  --event-teal-foreground: #c3ece4;
+  --event-cyan: #2f7d95;
+  --event-cyan-foreground: #c5e9f2;
+  --event-indigo: #5560b8;
+  --event-indigo-foreground: #d6daff;
+  --event-magenta: #9c4a8c;
+  --event-magenta-foreground: #f6d4ee;
+  --event-pink: #a8557a;
+  --event-pink-foreground: #ffd4e3;
+  --event-olive: #7a8240;
+  --event-olive-foreground: #e0e7c2;
+
   /* cosmos brand identity — dark values (brand pastel gradient is intentionally
      the SAME in dark mode; the light pastels are the brand identity and read
      well on the dark popover surface). The on-pastel foreground stays dark violet
@@ -191,6 +298,10 @@
   --brand-pink: #f9a8d4;
   --brand-purple: #d8b4fe;
   --brand-foreground: #2e1065;
+  /* Solid active-affordance accent (settings-visual-v1) — same purple in both modes,
+     like the rest of the brand block (the pastel reads on the dark surfaces). */
+  --brand-accent: #d8b4fe;
+  --brand-accent-foreground: #2e1065;
 }
 
 @layer base {

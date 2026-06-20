@@ -20,6 +20,7 @@ import type { AdapterBinding, AdapterDescriptor } from './adapter'
 import type { SlackOpName, SlackResult } from './slack'
 import type { JiraOpName, JiraResult } from './jira'
 import type { ConfluenceOpName, ConfluenceResult } from './confluence'
+import type { GoogleCalendarOpName, GoogleCalendarResult } from './googleCalendar'
 
 /**
  * Resolve the render_ui bridge socket path. Derived from the project dir so the
@@ -60,6 +61,16 @@ export function jiraBridgeSocketPath(projectDir: string): string {
  */
 export function confluenceBridgeSocketPath(projectDir: string): string {
   return `${projectDir}/.cosmos-confluence.sock`
+}
+
+/**
+ * Resolve the Google Calendar bridge socket path — a fully separate sibling socket
+ * (independent of Slack/Atlassian). The Google Calendar MCP entry script connects
+ * here; main threads it via `COSMOS_GOOGLE_CALENDAR_BRIDGE_SOCKET`. Kept short to
+ * stay within the platform's sun_path limit.
+ */
+export function googleCalendarBridgeSocketPath(projectDir: string): string {
+  return `${projectDir}/.cosmos-gcal.sock`
 }
 
 /**
@@ -245,6 +256,40 @@ export type ConfluenceBridgeClientMessage = ConfluenceBridgeCallRequest
 /** Any message main sends back to the Confluence entry script over the socket. */
 export type ConfluenceBridgeServerMessage = ConfluenceBridgeResultResponse
 
+/* ------------------------------------------------------------------------- *
+ * Google Calendar bridge frames (fully separate sibling; read-only v1)
+ *
+ * The Google Calendar MCP entry script (`src/mcp/googleCalendarMcpServer.ts`)
+ * connects to `src/main/googleCalendarBridge.ts`. Independent socket + pending-call
+ * state. READ-ONLY (v1). Carries NO token.
+ * ------------------------------------------------------------------------- */
+
+/** S->M. The Google Calendar MCP entry script asks main to run one read operation. */
+export interface GoogleCalendarBridgeCallRequest {
+  kind: 'google_cal_call'
+  /** Entry-script-side correlation id for this tool call. */
+  callId: string
+  /** Which read operation to run. */
+  op: GoogleCalendarOpName
+  /** The operation's params (shape depends on `op`; validated in main). */
+  params: Record<string, unknown>
+}
+
+/** M->S. Main returns the typed `GoogleCalendarResult` for a prior call. NO token. */
+export interface GoogleCalendarBridgeResultResponse {
+  kind: 'google_cal_result'
+  /** Echoes the `callId` from the matching GoogleCalendarBridgeCallRequest. */
+  callId: string
+  /** The typed read result (success data or a structured GoogleCalendarError). */
+  result: GoogleCalendarResult<unknown>
+}
+
+/** Any message the Google Calendar entry script sends to main over the socket. */
+export type GoogleCalendarBridgeClientMessage = GoogleCalendarBridgeCallRequest
+
+/** Any message main sends back to the Google Calendar entry script over the socket. */
+export type GoogleCalendarBridgeServerMessage = GoogleCalendarBridgeResultResponse
+
 /** Serialize a bridge message as one newline-delimited JSON frame. */
 export function encodeBridgeMessage(
   message:
@@ -256,6 +301,8 @@ export function encodeBridgeMessage(
     | JiraBridgeServerMessage
     | ConfluenceBridgeClientMessage
     | ConfluenceBridgeServerMessage
+    | GoogleCalendarBridgeClientMessage
+    | GoogleCalendarBridgeServerMessage
 ): string {
   return `${JSON.stringify(message)}\n`
 }

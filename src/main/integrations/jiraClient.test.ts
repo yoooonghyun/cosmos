@@ -186,6 +186,33 @@ describe('JiraClient.getIssue (FR-J04)', () => {
     expect(JSON.stringify(result)).not.toContain('at-test')
   })
 
+  // jira-dock-autoapply-weblink-v1 (FR-010): when auth carries the non-secret siteUrl,
+  // getIssue assembles `<siteUrl>/browse/<KEY>`; absent siteUrl → webUrl omitted (FR-011).
+  it('sets webUrl from auth.siteUrl when present (FR-010)', async () => {
+    const fetchImpl: FetchLike = async () =>
+      res({ key: 'ABC-1', fields: { summary: 's', status: {} } })
+    const client = new JiraClient({ fetchImpl })
+    const result = await client.getIssue(
+      { token: 'at-test', cloudId: 'cloud-1', siteUrl: 'https://acme.atlassian.net' },
+      'ABC-1'
+    )
+    expect(result.ok).toBe(true)
+    if (result.ok) {
+      expect(result.data.webUrl).toBe('https://acme.atlassian.net/browse/ABC-1')
+    }
+  })
+
+  it('omits webUrl when auth.siteUrl is absent (FR-011)', async () => {
+    const fetchImpl: FetchLike = async () =>
+      res({ key: 'ABC-1', fields: { summary: 's', status: {} } })
+    const client = new JiraClient({ fetchImpl })
+    const result = await client.getIssue(auth, 'ABC-1')
+    expect(result.ok).toBe(true)
+    if (result.ok) {
+      expect(result.data.webUrl).toBeUndefined()
+    }
+  })
+
   it('surfaces availableTransitions from the transitions read (D3)', async () => {
     const fetchImpl: FetchLike = async (url) => {
       if (url.endsWith('/transitions')) {

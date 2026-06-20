@@ -25,9 +25,21 @@
 export const COSMOS_CONFLUENCE_IMG_SCHEME = 'cosmos-confluence-img'
 
 /** The fixed authority segment of an opaque content-image URL. The real Confluence host is
- * NEVER encoded into the reference — only the `/wiki/...` relative path is — so a forged
- * reference can never redirect the main-process fetch off the Confluence origin (FR-011). */
+ * NEVER encoded into the reference — only an attachment id or a `/wiki/...` relative path is —
+ * so a forged reference can never redirect the main-process fetch off the Confluence origin
+ * (FR-011). */
 export const COSMOS_CONFLUENCE_IMG_AUTHORITY = 'confluence'
+
+/**
+ * Prefix marking an opaque ref as an ATTACHMENT-ID ref (the granular-scope path). Confluence
+ * embeds an attachment image with a LEGACY `/wiki/download/attachments/...` blob URL that 401s
+ * under granular OAuth scopes ("scope does not match" — classic content endpoint, not authorized
+ * by `read:attachment:confluence`). The `<img>` also carries `data-linked-resource-id` (the
+ * attachment id), so we encode `attachment:<id>` instead and let main resolve the bytes via the
+ * granular-authorized v2 attachments API (`GET /wiki/api/v2/attachments/{id}` → `downloadLink`).
+ * The legacy relative-path ref (no prefix) is kept as a fallback for any non-attachment content
+ * image whose `/wiki/...` src is granular-fetchable as-is. */
+export const COSMOS_CONFLUENCE_ATTACHMENT_REF_PREFIX = 'attachment:'
 
 /**
  * How an `<img>` in a sanitized Confluence body is treated:
@@ -97,6 +109,45 @@ export function confluenceRelativePath(src: unknown): string | null {
     return null
   }
   return `${url.pathname}${url.search}`
+}
+
+/**
+ * Extract a Confluence attachment id from an `<img>`'s `data-linked-resource-id` when the
+ * element is an embedded ATTACHMENT (`data-linked-resource-type="attachment"`). Returns the
+ * numeric id string (e.g. `"65846"`) or `null` when absent/not-an-attachment/malformed. The id
+ * is the key for the granular-scope v2 attachments fetch (so we never use the legacy
+ * `/wiki/download/attachments/...` blob URL the `src` carries). Pure; never throws.
+ */
+export function attachmentIdOf(el: Element): string | null {
+  if (!el || el.tagName !== 'IMG') {
+    return null
+  }
+  const type = el.getAttribute('data-linked-resource-type')
+  if (type !== null && type !== 'attachment') {
+    // An explicitly non-attachment linked resource — not the v2-attachment path.
+    return null
+  }
+  const id = el.getAttribute('data-linked-resource-id')
+  if (typeof id !== 'string') {
+    return null
+  }
+  const trimmed = id.trim()
+  // Confluence attachment ids are positive integers; reject anything else (SSRF/path safety —
+  // main double-checks, but keep the renderer ref clean).
+  return /^[0-9]+$/.test(trimmed) ? trimmed : null
+}
+
+/**
+ * Build the opaque content-image src for a Confluence attachment id (the granular-scope path).
+ * Encodes `attachment:<id>` under the fixed authority — never a host, never a token, never the
+ * legacy blob URL. Main decodes the id and resolves the bytes via the v2 attachments API.
+ *
+ * `cosmos-confluence-img://confluence/<base64url('attachment:<id>')>`
+ */
+export function toAttachmentOpaqueSrc(attachmentId: string): string {
+  return `${COSMOS_CONFLUENCE_IMG_SCHEME}://${COSMOS_CONFLUENCE_IMG_AUTHORITY}/${encodeRelativePath(
+    `${COSMOS_CONFLUENCE_ATTACHMENT_REF_PREFIX}${attachmentId}`
+  )}`
 }
 
 /**

@@ -332,6 +332,10 @@ export function buildBoundIssueDetailSurface(
 
   // Header: the issue as a TicketCard (reads the whole bound issue value). Refresh is now
   // a panel-chrome control (panel-refresh-v1, FR-006) — no in-card RefreshButton.
+  // jira-dock-autoapply-weblink-v1 (FR-010/FR-022): the non-secret browse `webUrl` rides this
+  // same whole-issue value seeded at JIRA_DETAIL_PATH (no extra data-model entry), so TicketCard
+  // reads `boundIssue.webUrl` and the link survives the post-write re-push (the re-read DTO
+  // carries `webUrl`). The list/board builder never binds `webUrl` → dock-only (FR-012/FR-020).
   const header = id('ticket')
   components.push({
     id: header,

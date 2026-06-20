@@ -18,10 +18,13 @@
  * §7 CommentRow/CommentList, §8 AddCommentControl, §9.5 post-write notice.
  */
 
+import { useState } from 'react'
 import { useDataBinding, useDispatchAction, useFormBinding } from '@a2ui-sdk/react/0.9'
 import type { DynamicValue } from '@a2ui-sdk/types/0.9'
 import {
   Check,
+  ExternalLink,
+  Loader2,
   Lock,
   SquareKanban,
   TriangleAlert,
@@ -64,10 +67,12 @@ import {
   diffUpdateFields,
   isCommentSubmittable,
   isCreateSubmittable,
+  isOpenableJiraWebUrl,
   isOpenDetailEmittable,
   isTransitionSubmittable,
   isUpdateSubmittable,
   JIRA_OPEN_DETAIL_ACTION,
+  shouldShowIssueEmptyState,
   statusBadgeLabel,
   statusBadgeStyle,
   ticketCardSummary
@@ -167,6 +172,12 @@ interface TicketIssueValue {
   statusName?: string
   statusCategory?: JiraStatusCategory
   assignee?: JiraUserRef
+  /**
+   * Non-secret browse URL (jira-dock-autoapply-weblink-v1, FR-012). Present ONLY on the dock
+   * header's bound issue (the list/board path never binds it), so the ticket-key link is
+   * dock-only. Re-validated with `isOpenableJiraWebUrl` before rendering the anchor.
+   */
+  webUrl?: string
 }
 
 export interface TicketCardNode extends SdkProps {
@@ -207,6 +218,9 @@ export function TicketCard({
   // (the list-card path). useDataBinding returns the literal as-is when not a binding.
   const boundIssue = useBound<TicketIssueValue>(surfaceId, issue, undefined)
   const key = boundIssue?.key ?? issueKey
+  // jira-dock-autoapply-weblink-v1 (FR-012): the ticket-key link is dock-only — only the
+  // bound (detail) issue ever carries `webUrl`; the list/board path leaves it undefined.
+  const webUrl = boundIssue?.webUrl
   const summaryValue = boundIssue?.summary ?? summary
   const statusNameValue = boundIssue?.statusName ?? statusName
   const statusCategoryValue = boundIssue?.statusCategory ?? statusCategory
@@ -223,7 +237,25 @@ export function TicketCard({
     >
       <div className="flex items-center justify-between gap-2">
         <Badge variant="secondary" className="shrink-0 font-mono text-[10px]">
-          {key ?? '—'}
+          {/* jira-dock-autoapply-weblink-v1 (FR-012/FR-013/FR-015): the WHOLE key is a single
+              external-link anchor (key + icon) opening the ticket's Jira web page in the system
+              browser, mirroring Confluence's PageDetailTitle. Renders only when `webUrl` is an
+              openable http(s) URL (dock-only); otherwise the plain badge text, exactly as before. */}
+          {key && isOpenableJiraWebUrl(webUrl) ? (
+            <a
+              href={webUrl}
+              target="_blank"
+              rel="noreferrer"
+              aria-label={`Open ${key} in Jira`}
+              title={`${key} — open in Jira`}
+              className="group inline-flex items-center gap-1 rounded-sm hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 focus-visible:ring-offset-card"
+            >
+              <span>{key}</span>
+              <ExternalLink className="size-3 shrink-0 text-muted-foreground" aria-hidden="true" />
+            </a>
+          ) : (
+            (key ?? '—')
+          )}
         </Badge>
         <div className="flex items-center gap-1.5">
           <StatusBadge
@@ -300,10 +332,14 @@ export function IssueList({
   ) : null
 
   if (items.length === 0) {
+    // jira-empty-flash-v1: only a SEEDED, settled, genuinely-empty list shows the empty
+    // state. While bound rows are unseeded (rows === undefined) or loading, suppress it so
+    // the skeleton→first-paint gap never flashes "No issues found." (a real error still shows).
+    const showEmptyState = shouldShowIssueEmptyState(rows, isLoading)
     return (
       <div className="flex flex-col gap-2" aria-busy={isLoading}>
         {errorBlock}
-        {!errorMessage && (
+        {!errorMessage && showEmptyState && (
           <div className="flex flex-col items-center gap-2 py-8">
             <SquareKanban className="size-7 text-muted-foreground" />
             <p className="text-sm text-muted-foreground">No issues found.</p>
@@ -397,16 +433,28 @@ export function TransitionPicker({
     { path: PATH_TRANSITION_ID },
     ''
   )
+  // jira-dock-autoapply-weblink-v1 (FR-003): the in-flight lock. There is NO success callback —
+  // the write is deterministic + async via main, which re-reads the issue and re-pushes a fresh
+  // detail frame that REMOUNTS this component idle (applying=false). So this flag only needs to
+  // guard against a second dispatch within this instance's lifetime (no double-dispatch).
+  const [applying, setApplying] = useState(false)
   const transitions = Array.isArray(transitionsValue) ? transitionsValue : []
 
   if (transitions.length === 0) {
     return <p className="text-sm text-muted-foreground">No transitions available.</p>
   }
 
-  const apply = (): void => {
-    if (!isTransitionSubmittable(transitionId) || !issueKeyValue) {
+  // jira-dock-autoapply-weblink-v1 (FR-001/FR-006): apply ON SELECT — no Apply button. Dispatch
+  // only for a valid, non-placeholder id that differs from the in-flight/current selection
+  // (no-op/placeholder guard), and only while not already applying (FR-003). NO optimistic
+  // status — the displayed status changes only when main's re-read re-pushes a fresh frame
+  // (FR-004); a failure surfaces the existing Notice (FR-005).
+  const onSelect = (next: string): void => {
+    if (applying || !issueKeyValue || !isTransitionSubmittable(next, transitionId)) {
       return
     }
+    setTransitionId(next)
+    setApplying(true)
     dispatch(surfaceId, componentId, {
       name: JiraBoundAction.Transition,
       context: { issueKey: issueKeyValue, transitionId: { path: PATH_TRANSITION_ID } }
@@ -417,8 +465,8 @@ export function TransitionPicker({
     <div className="flex flex-col gap-2">
       <span className="text-xs font-medium text-muted-foreground">Move to</span>
       <div className="flex items-center gap-2">
-        <Select value={transitionId} onValueChange={setTransitionId}>
-          <SelectTrigger className="flex-1" aria-label="Select a transition">
+        <Select value={transitionId} onValueChange={onSelect} disabled={applying}>
+          <SelectTrigger className="w-full" aria-label="Select a transition" aria-busy={applying}>
             <SelectValue placeholder="Select a transition" />
           </SelectTrigger>
           <SelectContent>
@@ -429,15 +477,14 @@ export function TransitionPicker({
             ))}
           </SelectContent>
         </Select>
-        <Button
-          type="button"
-          variant="default"
-          size="sm"
-          disabled={!isTransitionSubmittable(transitionId)}
-          onClick={apply}
-        >
-          Apply
-        </Button>
+        {/* Busy affordance (FR-003 / SC-002): the shared LoadMoreButton spinner idiom; the
+            "Applying…" text + aria-busy convey the state not by color alone. */}
+        {applying && (
+          <span className="flex items-center gap-1.5 text-xs text-muted-foreground">
+            <Loader2 className="size-3.5 animate-spin text-muted-foreground" aria-hidden="true" />
+            Applying…
+          </span>
+        )}
       </div>
     </div>
   )

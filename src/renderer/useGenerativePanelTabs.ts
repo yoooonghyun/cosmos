@@ -25,7 +25,8 @@ import type {
   AgentStatusPayload,
   GenerativePanelSnapshot,
   UiRenderPayload,
-  UiRenderTarget
+  UiRenderTarget,
+  ViewContext
 } from '../shared/ipc'
 import { usePanelTabs, type PanelTabsController } from './usePanelTabs'
 import {
@@ -37,6 +38,7 @@ import {
   shouldFlushDeferredDefault
 } from './panelTabs'
 import { buildGenerativePanel, hydrateGenerativeTabs } from './sessionSnapshot'
+import { shouldReleaseInFlightOnCompleted } from './promptComposerLogic'
 import { useReportPanel } from './SessionProvider'
 import type { GenerativePanelKey } from '../shared/ipc'
 import type { AdapterBinding, AdapterDescriptor } from '../shared/adapter'
@@ -96,6 +98,17 @@ export interface GenerativeTab {
    * Slack/Confluence/Generated UI tabs never carry it.
    */
   loadingDefault?: boolean
+  /**
+   * True while a TAB-SWITCH auto-refresh is outstanding for THIS tab (jira-tab-switch-auto-
+   * refresh-v1). Set when a bound surface is RE-activated (switch-back remounts its A2UI host,
+   * discarding its live data) so the parent fires a one-shot `adapter.refresh`; gates the
+   * DATA-REGION loading skeleton while the fresh `updateDataModel` is in flight, then cleared
+   * when a surface/error frame lands (same render-subscription path that clears
+   * `loadingDefault`). Per-tab so a sibling tab's auto-refresh never drives the active tab's
+   * skeleton (FR-011). Optional: only Jira sets it; Slack/Confluence/Generated UI tabs never
+   * carry it (Jira-only, target-agnostic mechanism wired only here in v1).
+   */
+  autoRefreshing?: boolean
   /**
    * True when this tab's surface came from a user compose (a solicited render frame
    * correlated via `originatingTabIdRef`), as opposed to an unsolicited deterministic
@@ -159,6 +172,17 @@ export interface GenerativePanelTabs extends PanelTabsController<GenerativeTab> 
    * subscription.
    */
   requestDefaultInActiveTab: (request: () => void) => void
+  /**
+   * jira-ticket-detail-v1 (#86, R-A; FR-009): fire-or-defer an UNSOLICITED-frame request
+   * against the shared `originatingTabIdRef` slot WITHOUT touching any tab's loading state.
+   * `requestDefaultInActiveTab` marks the active tab `loadingDefault` (its LIST skeleton),
+   * which is wrong for the ticket-detail read — that frame is routed away into the dock slot
+   * by `onUnsolicitedFrame`, so it never clears `loadingDefault` (the list would hang in a
+   * skeleton). The dock has its OWN loading (`detailSurface == null`), so the detail read
+   * only needs the fire-or-defer discipline, not the list-skeleton flag. Fires now when the
+   * correlation is idle, else defers and flushes when the in-flight run resolves.
+   */
+  fireOrDefer: (request: () => void) => void
   /** Close a tab, cancelling any unresolved blocking surface + dropping correlation. */
   closeTab: (tabId: string) => void
 }
@@ -186,6 +210,28 @@ export interface GenerativePanelTabsOptions {
    * (FR-015). Absent for a clean session.
    */
   initial?: GenerativePanelSnapshot
+  /**
+   * jira-ticket-detail-v1 (#86, approach R-A): an optional interceptor for UNSOLICITED
+   * frames (a `ui:render` for this panel's `target` that no submit was awaiting). When
+   * supplied, every unsolicited frame is offered to it FIRST; if it returns `true` the
+   * frame is considered consumed and is NOT filed into the active tab's `surface` — the
+   * panel routes it elsewhere (Jira routes its `jira:requestIssueDetail` detail frame
+   * into a per-tab dock slot so the list surface is never clobbered). Returning `false`
+   * (or omitting the option) falls through to the normal active-tab filing. SOLICITED
+   * frames (a compose's awaited answer) are never offered to it. Generic: the hook stays
+   * free of Jira specifics — it only asks "did the panel take this unsolicited frame?".
+   */
+  onUnsolicitedFrame?: (payload: UiRenderPayload) => boolean
+  /**
+   * open-prompt-view-context-v1 (FR-004/FR-011): an optional provider that returns the
+   * active panel's current non-secret {@link ViewContext} (the open ticket/channel/thread/
+   * page/event) read from the state the panel ALREADY holds. Called at SEND time inside
+   * `submit()` so the context reflects what is on screen when Enter is pressed (Edge Cases:
+   * selection may change while the composer is open). Best-effort + non-blocking: if it
+   * throws or returns undefined, submit proceeds WITHOUT a viewContext (FR-005/FR-011).
+   * The generic Generated-UI panel omits it (FR-003 — no panel selection).
+   */
+  getViewContext?: () => ViewContext | undefined
 }
 
 /**
@@ -196,7 +242,19 @@ export interface GenerativePanelTabsOptions {
 export function useGenerativePanelTabs(
   options: GenerativePanelTabsOptions
 ): GenerativePanelTabs {
-  const { target, panelName, cancelOnClose = false, initial } = options
+  const { target, panelName, cancelOnClose = false, initial, onUnsolicitedFrame, getViewContext } =
+    options
+  // Read the unsolicited-frame interceptor through a ref so the long-lived render
+  // subscription never re-subscribes when the panel passes a fresh closure each render.
+  const onUnsolicitedFrameRef = useRef<GenerativePanelTabsOptions['onUnsolicitedFrame']>(
+    onUnsolicitedFrame
+  )
+  onUnsolicitedFrameRef.current = onUnsolicitedFrame
+  // open-prompt-view-context-v1: read the view-context provider through a ref so `submit`
+  // stays a stable callback while always invoking the LATEST closure at SEND time (the
+  // panel passes a fresh closure each render that closes over its current selection).
+  const getViewContextRef = useRef<GenerativePanelTabsOptions['getViewContext']>(getViewContext)
+  getViewContextRef.current = getViewContext
   // session-persistence-v1: seed the collection from the restored slice (composed
   // surfaces re-instated with a fresh requestId — FR-013). PURE lazy initializer, so a
   // StrictMode double-invoke is idempotent (mintRequestId returns fresh ids, but the
@@ -275,6 +333,13 @@ export function useGenerativePanelTabs(
           return // FR-027: originating tab closed — discard.
         }
       } else {
+        // jira-ticket-detail-v1 (#86, R-A): offer an UNSOLICITED frame to the panel's
+        // interceptor first. If it takes the frame (e.g. Jira routes its detail frame to
+        // a per-tab dock slot), do NOT file it into the active tab's surface — the list
+        // surface is never clobbered. A solicited (compose) frame is never offered.
+        if (onUnsolicitedFrameRef.current?.(payload) === true) {
+          return
+        }
         // Unsolicited (Jira default view / write re-push, FR-019/FR-020): land in the
         // active tab; if there are zero tabs, auto-create one to hold it.
         tabId = activeTabIdRef.current
@@ -326,6 +391,10 @@ export function useGenerativePanelTabs(
         // new-tab-base-view-v1 FR-008/FR-010: a landed surface (default board OR a
         // recoverable Notice) clears this tab's default-loading skeleton.
         loadingDefault: false,
+        // jira-tab-switch-auto-refresh-v1 (FR-008): a landed surface/Notice also clears the
+        // tab-switch auto-refresh skeleton so it is replaced by the repainted surface (and
+        // never hangs on a failed refresh). Per-tab, like loadingDefault.
+        autoRefreshing: false,
         // Mark composed vs. native data view so panels (Jira) can hide compose-only
         // chrome on generated surfaces while keeping it for ticket browsing.
         composed: wasSolicited,
@@ -358,6 +427,31 @@ export function useGenerativePanelTabs(
           update(tabId, { inFlight: false, error: status.message ?? 'The run failed.' })
         }
       }
+      // open-prompt-spinner-gating-v1 (FR-004 — the root-cause fix): a `completed` run that
+      // produced NO `generated-ui` surface (a plain command) must release the originating
+      // tab; otherwise its `inFlight` (set unconditionally at submit) leaves the panel stuck
+      // on the "Generating…" spinner forever. A true UI-generation run's surface already
+      // landed via `ui:render` (clearing `inFlight` + `originatingTabIdRef`), so this is a
+      // no-op for it. `producedSurface` makes the no-surface release deterministic; absent ⇒
+      // fall back to surface-presence (shouldReleaseInFlightOnCompleted, FR-008). Clears the
+      // correlation BEFORE the deferred-default flush below (which reads it idle).
+      if (status.state === 'completed') {
+        const tabId = originatingTabIdRef.current
+        if (tabId && tabIdsRef.current.has(tabId)) {
+          const tab = tabsByIdRef.current.get(tabId)
+          if (
+            shouldReleaseInFlightOnCompleted({
+              inFlight: tab?.inFlight === true,
+              hasSurface: tab?.surface != null,
+              producedSurface: status.producedSurface
+            })
+          ) {
+            originatingTabIdRef.current = null
+            pendingUtteranceRef.current.delete(tabId)
+            update(tabId, { inFlight: false })
+          }
+        }
+      }
       // A run resolved — try to flush a deferred default request. Only fire when a
       // request is queued AND the correlation is now idle (a second compose may have
       // started in between → stay deferred, never hang the tab — the new tab still
@@ -380,7 +474,7 @@ export function useGenerativePanelTabs(
   }, [update])
 
   const submit = useCallback(
-    (utterance: string) => {
+    (utterance: string, options?: { contextDismiss?: 'none' | 'thread' | 'all' }) => {
       // FR-012 / FR-012a: fill the active tab, or auto-create the first tab when zero.
       let targetTabId = activeTabId
       if (!targetTabId) {
@@ -404,7 +498,25 @@ export function useGenerativePanelTabs(
       }
       originatingTabIdRef.current = targetTabId
       pendingUtteranceRef.current.set(targetTabId, utterance)
-      window.cosmos.agent.submit({ utterance, target })
+      // open-prompt-view-context-v1 (FR-004/FR-011): capture the active panel's current
+      // view context LIVE at send time so it reflects what is on screen now (Edge Cases).
+      // Best-effort + non-blocking: a thrown/undefined provider submits without context.
+      let viewContext: ViewContext | undefined
+      try {
+        viewContext = getViewContextRef.current?.()
+      } catch {
+        viewContext = undefined
+      }
+      // Apply the composer chip's dismiss choice (design §5): 'all' drops the whole context
+      // for this submit; 'thread' drops only the Slack thread dimension (the channel rides on).
+      const dismiss = options?.contextDismiss ?? 'none'
+      if (dismiss === 'all') {
+        viewContext = undefined
+      } else if (dismiss === 'thread' && viewContext?.threadTs) {
+        const { threadTs: _dropped, ...rest } = viewContext
+        viewContext = rest
+      }
+      window.cosmos.agent.submit({ utterance, target, ...(viewContext ? { viewContext } : {}) })
     },
     [activeTabId, open, update, target]
   )
@@ -505,6 +617,7 @@ export function useGenerativePanelTabs(
     newTab,
     newTabWithDefault,
     requestDefaultInActiveTab,
+    fireOrDefer: fireOrDeferDefault,
     closeTab
   }
 }

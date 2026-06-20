@@ -94,6 +94,13 @@ export interface AuthorizeUrlParams {
    * authorize URL is unchanged.
    */
   prompt?: string
+  /**
+   * Extra provider-specific authorize params (Google: `access_type=offline` so a
+   * refresh token is issued, `include_granted_scopes=true`). Each is added verbatim
+   * to the query ONLY when present, so existing call sites (Slack/Atlassian) are
+   * byte-for-byte unchanged. NEVER carry a secret here — secrets go in the token POST.
+   */
+  extraParams?: Record<string, string>
 }
 
 /**
@@ -122,6 +129,11 @@ export function buildAuthorizeUrl(params: AuthorizeUrlParams): string {
   url.searchParams.set('state', params.state)
   if (params.prompt) {
     url.searchParams.set('prompt', params.prompt)
+  }
+  if (params.extraParams) {
+    for (const [key, value] of Object.entries(params.extraParams)) {
+      url.searchParams.set(key, value)
+    }
   }
   url.searchParams.set('code_challenge', params.codeChallenge)
   url.searchParams.set('code_challenge_method', 'S256')

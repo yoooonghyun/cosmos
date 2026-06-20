@@ -157,6 +157,71 @@ describe('AgentRunner.run — happy path (SC-001, FR-005, FR-007, FR-011, FR-013
   })
 })
 
+describe('AgentRunner.run — view-context grounding (open-prompt-view-context-v1)', () => {
+  it('appends the view-context clause AND the per-target grounding into --append-system-prompt; -p stays the raw utterance (FR-007/SC-003)', () => {
+    const h = makeRunner()
+    h.runner.run('summarize this ticket', 'jira', { selectedIssueKey: 'PROJ-123' })
+
+    const [, args] = h.spawn.mock.calls[0]
+    // SC-003: the -p value is byte-for-byte the user's utterance (no id spliced in).
+    expect(args[args.indexOf('-p') + 1]).toBe('summarize this ticket')
+    // The system prompt carries BOTH the per-target grounding and the view-context clause.
+    const prompt = args[args.indexOf('--append-system-prompt') + 1]
+    expect(prompt).toContain('PROJ-123')
+    expect(prompt).toContain('Jira') // per-target grounding still present
+  })
+
+  it('threads a slack channel + thread into the grounding clause', () => {
+    const h = makeRunner()
+    h.runner.run('what was decided here', 'slack', {
+      selectedChannelId: 'C1',
+      selectedChannelName: 'general',
+      threadTs: '1700000000.0001'
+    })
+    const [, args] = h.spawn.mock.calls[0]
+    const prompt = args[args.indexOf('--append-system-prompt') + 1]
+    expect(prompt).toContain('C1')
+    expect(prompt).toContain('1700000000.0001')
+  })
+
+  it('does NOT change --allowedTools or --mcp-config when a viewContext is supplied (SC-006)', () => {
+    const withCtx = makeRunner()
+    withCtx.runner.run('x', 'jira', { selectedIssueKey: 'PROJ-1' })
+    const [, ctxArgs] = withCtx.spawn.mock.calls[0]
+
+    const withoutCtx = makeRunner()
+    withoutCtx.runner.run('x', 'jira')
+    const [, baselineArgs] = withoutCtx.spawn.mock.calls[0]
+
+    expect(ctxArgs[ctxArgs.indexOf('--allowedTools') + 1]).toBe(
+      baselineArgs[baselineArgs.indexOf('--allowedTools') + 1]
+    )
+    expect(ctxArgs[ctxArgs.indexOf('--mcp-config') + 1]).toBe(
+      baselineArgs[baselineArgs.indexOf('--mcp-config') + 1]
+    )
+  })
+
+  it('behaves exactly as baseline when viewContext is omitted (no extra prompt content)', () => {
+    const h = makeRunner()
+    h.runner.run('show #general', 'slack')
+    const [, args] = h.spawn.mock.calls[0]
+    const prompt = args[args.indexOf('--append-system-prompt') + 1]
+    // Only the per-target grounding, no view-context clause (no channel id present).
+    expect(prompt).toContain('Slack')
+    expect(prompt).not.toContain('currently viewing')
+  })
+
+  it('appends the view-context clause even when the target has NO per-target grounding (generated-ui has none, so no clause either since target carries no selection)', () => {
+    // generated-ui never carries a viewContext (FR-003), so verify the run is unchanged.
+    const h = makeRunner()
+    h.runner.run('build a form', 'generated-ui', { selectedIssueKey: 'PROJ-1' })
+    const [, args] = h.spawn.mock.calls[0]
+    // No per-target grounding for generated-ui, and the clause is empty for this target →
+    // no --append-system-prompt at all (baseline).
+    expect(args).not.toContain('--append-system-prompt')
+  })
+})
+
 describe('AgentRunner.run — error paths (FR-014)', () => {
   it('emits error with a message when the child exits non-zero', () => {
     const h = makeRunner()

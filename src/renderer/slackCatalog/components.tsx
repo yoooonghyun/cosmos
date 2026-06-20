@@ -18,6 +18,7 @@
  * §2.5 SearchResultRow, §2.6 SearchResultList, §2.7 UserChip, §2.8 Notice, §2.9 Text.
  */
 
+import { useRef } from 'react'
 import { useDataBinding, useDispatchAction } from '@a2ui-sdk/react/0.9'
 import { Hash, Info, TriangleAlert } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
@@ -29,21 +30,48 @@ import { cn } from '@/lib/utils'
 // Slack registers LoadMoreButton only — never PaginationBar (append-only). Refresh moved to
 // the panel chrome (panel-refresh-v1, FR-006) — no in-surface RefreshButton.
 import { LoadMoreButton, useBound, type Bound } from '../catalogShared/controls'
+// slack-generative-message-parity-v1 (OQ-3 = full unification): the ONE canonical row,
+// shared with the native panel; the catalog list skeleton (design §5).
+import { SlackMessageRow } from './SlackMessageRow'
+import { MessageSkeleton } from './MessageSkeleton'
+import { parseMessageRuns } from './messageContent'
+import type { SlackImageRef } from '../../shared/slack'
 import {
   authorName,
   boundRows,
+  buildOpenThreadContext,
   countLabel,
   formatTs,
   initials,
   showEmptyState,
   showErrorNotice,
-  SLACK_OPEN_CHANNEL_ACTION
+  showSkeletonState,
+  SLACK_OPEN_CHANNEL_ACTION,
+  SLACK_OPEN_THREAD_ACTION
 } from './logic'
 
 /** Props the SDK injects into every catalog component. */
 interface SdkProps {
   surfaceId: string
   componentId: string
+}
+
+/**
+ * Derive a "has loaded at least once" signal renderer-locally (slack-generative-message-
+ * parity-v1, FR-015). The bound surface does NOT carry a `loaded` flag (the node props are
+ * rows/loading/hasMore/error only), so each bound list latches loaded-once when it first
+ * sees a non-empty result OR a settled (not-loading) state. Until then, an empty list is
+ * treated as "loading" (skeleton) rather than "genuinely empty" (mirrors the native panel's
+ * `loaded` flag). The ref never un-latches, so a later refresh that momentarily clears rows
+ * keeps `loaded=true` and the gating shows the skeleton (not the empty state) only while
+ * `loading` is true.
+ */
+function useLoadedOnce(rowCount: number, loading: boolean): boolean {
+  const loadedRef = useRef(false)
+  if (!loadedRef.current && (rowCount > 0 || !loading)) {
+    loadedRef.current = true
+  }
+  return loadedRef.current
 }
 
 /* ------------------------------------------------------------------------- *
@@ -58,7 +86,7 @@ export interface ChannelRowNode extends SdkProps {
 
 export function ChannelRow({ name, isMember }: ChannelRowNode): React.JSX.Element {
   return (
-    <div className="flex h-8 items-center gap-1.5 rounded-md px-2 hover:bg-accent/40">
+    <div className="flex h-8 w-full min-w-0 items-center gap-1.5 rounded-md px-2 hover:bg-accent/40">
       <Hash className="size-3.5 shrink-0 text-muted-foreground" aria-hidden="true" />
       <span className="truncate text-foreground">{name ?? ''}</span>
       {isMember && (
@@ -119,6 +147,9 @@ export function ChannelList({
   const isLoading = useDataBinding<boolean>(surfaceId, loading, false)
   const errorMessage = useDataBinding<string | undefined>(surfaceId, error, undefined)
   const items = boundRows(rows)
+  // slack-generative-message-parity-v1 (FR-014/FR-015): gating order error > skeleton >
+  // empty > rows, with loaded-once derived renderer-locally.
+  const loaded = useLoadedOnce(items.length, isLoading)
   // A row click navigates to that channel's native conversation view. The action is
   // handled renderer-locally by the Slack panel (not sent to main/the agent). A channel
   // missing an id is non-navigable (still shown). Coexists with the header/footer
@@ -136,7 +167,10 @@ export function ChannelList({
       }
     })
   }
-  if (showEmptyState(items.length, errorMessage)) {
+  if (showSkeletonState(items.length, isLoading, loaded, errorMessage)) {
+    return <MessageSkeleton />
+  }
+  if (showEmptyState(items.length, errorMessage, loaded, isLoading)) {
     return (
       <div className="flex flex-col items-center gap-2 py-8 text-center" aria-busy={isLoading}>
         <Hash className="size-7 text-muted-foreground" aria-hidden="true" />
@@ -145,7 +179,7 @@ export function ChannelList({
     )
   }
   return (
-    <div className="flex flex-col gap-1" aria-busy={isLoading}>
+    <div className="flex w-full max-w-full min-w-0 flex-col gap-1" aria-busy={isLoading}>
       <BoundListError message={errorMessage} />
       <div className="flex items-center justify-between gap-2 px-2 py-1.5">
         <p className="text-xs text-muted-foreground" aria-live="polite">
@@ -182,36 +216,61 @@ export interface MessageRowNode extends SdkProps {
   userName?: string
   text?: string
   replyCount?: number
+  /** Per-message custom-emoji shortcode → opaque ref map (slack-rich-message-render-v1,
+   * FR-006/FR-007). Forwarded to the shared row's inline-emoji rendering. */
+  customEmoji?: Record<string, string>
+  /** Inline image attachment refs (FR-009/FR-010). Forwarded to the shared row's thumbnails. */
+  images?: SlackImageRef[]
+  /**
+   * Non-secret thread coordinates (slack-generative-message-parity-v1, FR-013). Carried
+   * by channel-history rows only (the adapter injects `channelId` + `threadTs = ts` for the
+   * getHistory branch); absent on search rows. Their presence turns the "N replies"
+   * affordance into the interactive reply drill-in; absent → the non-interactive label
+   * (FR-012). NEVER a token/secret.
+   */
+  channelId?: string
+  threadTs?: string
 }
 
 export function MessageRow({
+  surfaceId,
+  componentId,
   ts,
   userId,
   userName,
   text,
-  replyCount
+  replyCount,
+  customEmoji,
+  images,
+  channelId,
+  threadTs
 }: MessageRowNode): React.JSX.Element {
-  const name = authorName(userId ?? '', userName)
+  const dispatch = useDispatchAction()
+  // slack-generative-message-parity-v1 (FR-005/FR-008/FR-013): build the secret-free reply
+  // drill-in context from this row's coords. Null when coords are absent → no onOpenThread
+  // → the shared row renders the non-interactive label (FR-012). The action is handled
+  // renderer-locally by the Slack panel (intercepted, never sent to main/the agent). The
+  // list passes its real surfaceId/componentId so the dispatch routes through the SDK.
+  const threadCtx = buildOpenThreadContext({ channelId, threadTs, ts, userId, userName, text, replyCount })
+  const onOpenThread = threadCtx
+    ? (): void => {
+        dispatch(surfaceId, componentId, {
+          name: SLACK_OPEN_THREAD_ACTION,
+          context: { ...threadCtx }
+        })
+      }
+    : undefined
   return (
-    <div className="flex gap-2.5 border-b border-border/60 px-3 py-2 last:border-b-0">
-      <Avatar size="sm" className="mt-0.5">
-        <AvatarFallback>{initials(name)}</AvatarFallback>
-      </Avatar>
-      <div className="min-w-0 flex-1">
-        <div className="flex items-baseline gap-2">
-          <span className="truncate text-sm font-medium text-foreground">{name}</span>
-          <span className="shrink-0 text-xs text-muted-foreground">{formatTs(ts ?? '')}</span>
-        </div>
-        <p className="whitespace-pre-wrap break-words text-sm text-card-foreground">
-          {text ?? ''}
-        </p>
-        {typeof replyCount === 'number' && replyCount > 0 && (
-          <p className="text-xs text-muted-foreground">
-            {replyCount} {replyCount === 1 ? 'reply' : 'replies'}
-          </p>
-        )}
-      </div>
-    </div>
+    <SlackMessageRow
+      ts={ts}
+      userId={userId}
+      userName={userName}
+      text={text}
+      replyCount={replyCount}
+      {...(customEmoji ? { customEmoji } : {})}
+      {...(images ? { images } : {})}
+      {...(onOpenThread ? { onOpenThread } : {})}
+    />
   )
 }
 
@@ -246,7 +305,11 @@ export function MessageList({
   const isLoading = useDataBinding<boolean>(surfaceId, loading, false)
   const errorMessage = useDataBinding<string | undefined>(surfaceId, error, undefined)
   const items = boundRows(rows)
-  if (showEmptyState(items.length, errorMessage)) {
+  const loaded = useLoadedOnce(items.length, isLoading)
+  if (showSkeletonState(items.length, isLoading, loaded, errorMessage)) {
+    return <MessageSkeleton />
+  }
+  if (showEmptyState(items.length, errorMessage, loaded, isLoading)) {
     return (
       <p className="px-3 py-6 text-center text-sm text-muted-foreground" aria-busy={isLoading}>
         No messages.
@@ -254,7 +317,7 @@ export function MessageList({
     )
   }
   return (
-    <div className="flex flex-col" aria-busy={isLoading}>
+    <div className="flex w-full max-w-full min-w-0 flex-col" aria-busy={isLoading}>
       <BoundListError message={errorMessage} />
       <div className="flex items-center justify-between gap-2 px-3 py-1.5">
         <p className="text-xs text-muted-foreground" aria-live="polite">
@@ -262,7 +325,9 @@ export function MessageList({
         </p>
       </div>
       {items.map((m, i) => (
-        <MessageRow key={m.ts ?? i} {...m} surfaceId="" componentId="" />
+        // slack-generative-message-parity-v1 (FR-005): pass the list's real
+        // surfaceId/componentId so the row's reply-drill-in dispatch routes through the SDK.
+        <MessageRow key={m.ts ?? i} {...m} surfaceId={surfaceId} componentId={componentId} />
       ))}
       <LoadMoreButton surfaceId={surfaceId} componentId={componentId} loading={loading} hasMore={hasMore} region={region} />
     </div>
@@ -278,6 +343,9 @@ export interface SearchResultRowNode extends SdkProps {
   userId?: string
   userName?: string
   text?: string
+  /** Per-match custom-emoji shortcode → opaque ref map (slack-rich-message-render-v1,
+   * FR-006/FR-012) so a search row renders custom emoji like a history row. */
+  customEmoji?: Record<string, string>
   channelId?: string
   channelName?: string
 }
@@ -287,11 +355,13 @@ export function SearchResultRow({
   userId,
   userName,
   text,
+  customEmoji,
   channelName
 }: SearchResultRowNode): React.JSX.Element {
   const name = authorName(userId ?? '', userName)
+  const runs = parseMessageRuns(text ?? '', customEmoji)
   return (
-    <div className="flex gap-2.5 border-b border-border/60 px-3 py-2 last:border-b-0">
+    <div className="flex w-full min-w-0 gap-2.5 border-b border-border/60 px-3 py-2 last:border-b-0">
       <Avatar size="sm" className="mt-0.5">
         <AvatarFallback>{initials(name)}</AvatarFallback>
       </Avatar>
@@ -308,7 +378,19 @@ export function SearchResultRow({
           </span>
         </div>
         <p className="whitespace-pre-wrap break-words text-sm text-card-foreground">
-          {text ?? ''}
+          {runs.map((run, i) =>
+            run.kind === 'custom-emoji' ? (
+              <img
+                key={i}
+                src={run.ref}
+                alt={`:${run.shortcode}:`}
+                title={`:${run.shortcode}:`}
+                className="inline-block h-[1.25em] w-auto translate-y-[0.15em] align-baseline"
+              />
+            ) : (
+              run.text
+            )
+          )}
         </p>
       </div>
     </div>
@@ -346,7 +428,11 @@ export function SearchResultList({
   const isLoading = useDataBinding<boolean>(surfaceId, loading, false)
   const errorMessage = useDataBinding<string | undefined>(surfaceId, error, undefined)
   const items = boundRows(rows)
-  if (showEmptyState(items.length, errorMessage)) {
+  const loaded = useLoadedOnce(items.length, isLoading)
+  if (showSkeletonState(items.length, isLoading, loaded, errorMessage)) {
+    return <MessageSkeleton />
+  }
+  if (showEmptyState(items.length, errorMessage, loaded, isLoading)) {
     return (
       <p className="px-3 py-6 text-center text-sm text-muted-foreground" aria-busy={isLoading}>
         No results.
@@ -354,7 +440,7 @@ export function SearchResultList({
     )
   }
   return (
-    <div className="flex flex-col" aria-busy={isLoading}>
+    <div className="flex w-full max-w-full min-w-0 flex-col" aria-busy={isLoading}>
       <BoundListError message={errorMessage} />
       <div className="flex items-center justify-between gap-2 px-3 py-2">
         <p className="text-xs text-muted-foreground" aria-live="polite">

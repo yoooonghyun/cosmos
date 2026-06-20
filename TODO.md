@@ -16,6 +16,80 @@ For the authoritative design see `docs/ARCHITECTURE.md`.
 
 ## Next
 
+- [ ] Manual GUI verification of the **panel-switch shortcut** (`panel-switch-shortcut-v1`, #90) via
+  `npm run dev` (HMR is enough — no preload/IPC change): Cmd+Opt+Down advances the left-rail panel one
+  step with wrap-around (Confluence → Terminal), Cmd+Opt+Up retreats with wrap-around (Terminal →
+  Confluence); the shortcut still fires with the embedded terminal FOCUSED (panel switches, no stray
+  chars reach xterm); and the pre-existing bindings are unchanged — Cmd+Shift+]/[ still switches panels
+  and Cmd+Opt+Left/Right still cycles tabs. Matcher logic is locked by `shortcutMatch.test.ts`; the live
+  rail switch / xterm-focus behavior was NOT exercised headless.
+- [ ] Manual GUI verification of the **terminal file explorer split** (`terminal-file-explorer-v1`,
+  #84) via `npm run dev` (**full restart — NEW preload `window.cosmos.fs.*` + NEW `cosmos-file://`
+  protocol**): in a started terminal tab, the right pane shows a file tree rooted at the tab's cwd;
+  drag the bespoke divider (or ArrowLeft/Right on it) and confirm the terminal re-fits (no clipped
+  xterm) with the 20rem/16rem mins honored; expand a dir (skeleton only on FIRST list, none on a
+  watch re-list); create/delete a file on disk and confirm the tree refreshes SEAMLESSLY (no flash);
+  click a text/code file → read-only Monaco viewer REPLACES the tree with a Back affordance (Esc /
+  Backspace / ChevronLeft all return); click an image → it streams via `cosmos-file://` (broken ref
+  → calm ImageOff block, never a red Notice); a binary/denied/not-found file → calm centered state
+  block. Logic locked by node tests (`tree.test.ts`, `fsExplorer`, `fileKind`, `localFileRef`,
+  `pathConfine`); the rendered tree/viewer/divider/image-stream were NOT live-exercised headless.
+- [ ] **DECISION (user): calendar month/year label language** — the nav cluster currently shows the
+  English label `"June 2026"` (designer override of spec FR-001's Korean `YYYY년 M월`, on the grounds
+  that the whole app carries zero Korean strings / no i18n). Confirm English, or request the Korean form.
+- [ ] Manual GUI verification of the **generative-UI line-break clamp** (`slack-generative-wrap-v1` +
+  Jira/Confluence follow-up) via `npm run dev` (OAuth-gated): compose a Slack/Jira/Confluence surface
+  whose data has a long unbroken token, in BOTH `Column`- and `Row`-grouped layouts — confirm the line
+  wraps within the panel with NO horizontal scroll. Logic locked by the catalog `logic.test.ts` clamp
+  assertions; the rendered wrap was NOT live-exercised.
+- [ ] Manual GUI verification of **calendar month/year navigation** (`calendar-month-year-nav-v1`) via
+  `npm run dev` (**full restart — preload changed**; OAuth-gated): prev/next month (incl Dec↔Jan), prev/
+  next year, and Today all re-read the right month; a tab round-trip keeps the displayed month; refresh
+  re-reads the displayed (not current) month; the nav cluster shows only on the live default view (not on
+  a composed snapshot / disconnected). Logic locked by `calendarNavLogic.test.ts`; not live-exercised.
+- [ ] Manual GUI verification of the **terminal [Open] directory picker** (`terminal-open-directory-
+  picker-v1`) via `npm run dev` (**full restart — preload changed**): a new tab shows the `[Open]` empty
+  state with NO auto-spawn; picking a dir starts `claude` in that cwd; cancelling keeps `[Open]`; a
+  restored session auto-resumes without a pick. Logic locked by `paneSpawn` tests; not live-exercised.
+- [ ] Manual GUI verification of the **terminal picker spinner-hang fix** (`terminal-picker-spinner-
+  hang-v1`) via `npm run dev` (StrictMode dev): open a fresh terminal tab → click `[Open a folder]` →
+  pick a directory → confirm `claude` spawns in that cwd and the "Opening…" spinner clears (no infinite
+  spin); cancelling keeps `[Open]`. This was the reproduce-in-dev defect; verify it no longer hangs.
+- [ ] Manual GUI verification of the **Jira skeleton-width fix** (`jira-skeleton-width-v1`) via
+  `npm run dev` (OAuth-gated): trigger a Jira default-view load (rail switch / tab-switch refresh) and
+  a multi-region kanban load — confirm the loading skeleton fills the panel width and the swap to the
+  rendered surface does NOT jump horizontally. Renderer/CSS-only; not live-exercised headless.
+- [ ] Manual GUI verification of the **Slack rich message render** (`slack-rich-message-render-v1`)
+  via `npm run dev` (**full restart — CSP `img-src` widened; reconnect Slack once to grant the new
+  `emoji:read` + `files:read` scopes**; OAuth-gated, needs a connected workspace): open a channel whose
+  history has a `<@U…>` mention, a standard `:tada:` emoji, a workspace custom emoji, and an image
+  attachment — confirm the mention shows `@DisplayName` (not the ID), the standard emoji shows its glyph,
+  the custom emoji + attachment render as inline images, and a broken ref degrades. **Mentions + standard
+  + custom emoji CONFIRMED working** post-reconnect (2026-06-20); attachment images pending the
+  `files:read` reconnect (`slack-attachment-image-broken-v1`) (literal `:shortcode:` / browser broken-
+  image) without crashing — on BOTH the native panel and an agent-composed Slack surface. Logic locked by
+  node tests (`slackImageRef`, `slackImageExtract`, `slackEmoji`, `slackEmojiList`, `messageContent`,
+  `slackText`); rows NOT live-exercised. **Also decide two cosmetic design-spec deviations** (developer
+  shipped lazy variants): attachment thumbnails use `flex-wrap max-h-40 max-w-[12rem] object-cover` vs the
+  design spec's `grid grid-cols-2 gap-1.5 max-h-60 object-contain`; resolved mentions render as plain text
+  vs the spec's `font-medium text-primary` accent. Keep as-is or align to `.sdd/designs/slack-rich-message-render-v1.md`.
+- [ ] Manual GUI verification of the **Slack text-rendering fix** (`slack-text-rendering-v1`) via
+  `npm run dev` (OAuth-gated — needs a connected Slack workspace): open a channel whose history has a
+  multi-line message and an emoji (e.g. `:tada:`) — confirm newlines render on separate lines and the
+  emoji shows as the glyph (not literal `:tada:` / escaped entities / raw `<@U…>` markup), on both the
+  native panel and an agent-composed Slack surface. Decode logic locked by `slackText.test.ts`; the
+  rendered rows were NOT live-exercised (no Slack workspace in the build env).
+- [ ] Manual GUI verification of **Google Calendar integration** (`google-calendar-v1`, `/sdd`,
+  requested 2026-06-15) via `npm run dev` (**requires a full restart, not HMR — new preload
+  `googleCalendar` sub-API**): the rail shows the `CalendarDays` icon LAST; with the Google client
+  configured + connected, activating the surface fires the default **month grid** of the current month
+  (today chip, all-day tinted bars vs timed dot+time chips, `+N more` overflow, spillover days muted,
+  empty-month note); not-connected/connecting/reconnect states + connect/disconnect via the footer
+  reuse the shared treatments; Settings → Google Calendar section saves client id/secret, a changed
+  id/secret while connected force-disconnects Google ONLY (Slack/Atlassian untouched), secret shows
+  configured/source only. Real OAuth needs a Google Cloud client (id+secret) registered with the
+  runtime loopback redirect. Logic locked by node tests (`googleCalendarCatalog/logic.test.ts`,
+  `validateGoogleCalendar.test.ts`, `clientConfigResolver.test.ts`); GUI NOT live-exercised.
 - [ ] **Loading skeleton UI** (requested 2026-06-14): show a skeleton placeholder while a surface /
   list is loading (in place of blank/spinner-only), across the generative panels.
 - [ ] Manual GUI verification of **Confluence page detail on click v1** (`confluence-page-detail-nav-v1`,
@@ -182,9 +256,249 @@ For the authoritative design see `docs/ARCHITECTURE.md`.
   `CONFLUENCE_TOOL_GRANTS` + relax the grounding prompt to permit the write) — deliberately deferred
   to keep the generative panel read-only; the create tool is interactive-TUI-only for now.
 - [ ] Confluence writes beyond create (edit/delete/labels).
+- [ ] **Trim the Monaco bundle** (`terminal-file-explorer-v1` follow-up): the read-only viewer
+  imports the `monaco-editor` BARREL, which pulls every basic-language monarch tokenizer + the
+  ts/json/css/html language modes/workers (~9MB main chunk + ~15MB unused language workers). Only the
+  base `editor.worker` is ever instantiated. Trim later (slim `monaco-editor/esm/vs/editor/editor.api`
+  + per-language `*.contribution` + custom worker resolution) ONLY if bundle size becomes a real
+  problem — the slim path fights tsc's Bundler `moduleResolution` (no `exports`-mapped types), so it's
+  not free. Acceptable today: desktop app loads from disk, not the network. See the ponytail comment
+  in `src/renderer/fileExplorer/monacoSetup.ts`.
+- [ ] **File-explorer fs-watch on Linux** (`terminal-file-explorer-v1` follow-up): the main-side watch
+  uses Node `fs.watch`, which is non-recursive on Linux (recursive only on macOS/Windows). Nested-dir
+  changes there won't auto-refresh until the dir is re-listed. Add `chokidar` (or per-expanded-dir
+  watchers) only if Linux is targeted.
+- [ ] **File-explorer search / write ops** (`terminal-file-explorer-v1` follow-up): the explorer is
+  read-only browse + view today (no rename/create/delete/move, no name filter/search). Add when needed.
 
 ## Done
 
+- [x] **Calendar event detail dock** (`calendar-event-detail-v1`, `/sdd`, #85) — clicking a calendar
+  event chip opens a right-side **detail dock beside the still-mounted grid** (reuses the Slack thread
+  side-dock: `@container/calbody` two-pane, side-by-side ≥32rem / drawer-overlay + click-away scrim
+  when narrow, X dismiss, single dock retargets, transient — resets on tab switch / disconnect / month
+  nav). `EventChip` became an interactive `<button>` (hover/focus-ring/`aria-pressed`, inert when no
+  id) emitting renderer-local `calendarNav.openDetail` (the whole event in `action.context`, cast
+  `as unknown`, never crosses IPC) intercepted by `GoogleCalendarPanel.onAction`. NO new fetch (detail
+  renders from the clicked chip's props), NO new IPC channel, NO new OAuth scope: enriched the existing
+  `events.list` mapping (`toEvent` adds non-secret `description`/`attendees`/`htmlLink`/`recurring`,
+  omit-when-absent) + `eventRow` passthrough. New `eventDetailLogic.ts` pure helpers (timed/all-day,
+  multi-day inclusive-range w/ Google exclusive-end correction, attendee normalization, title degrade,
+  external-link http(s) guard). External "Open in Google Calendar" opens the system browser via a new
+  `webContents.setWindowOpenHandler` (window config, NOT IPC) → `shell.openExternal`. Selected-chip
+  marker flows via new `CalendarDetailContext`. typecheck (node+web) + 1591 tests green (56 in the 3
+  Calendar suites). **Live GUI not exercised** (needs a real connected Google Calendar). Spec/plan/
+  design `.sdd/{specs,plans,designs}/calendar-event-detail-v1.md`. Not committed. ARCHITECTURE.md §4i
+  update pending architect.
+- [x] **Terminal file explorer split** (`terminal-file-explorer-v1`, #84) — each started terminal tab
+  now hosts a right-pane READ-ONLY file explorer beside the live terminal, split by a bespoke
+  resizable `role="separator"` divider (pointer + ArrowLeft/Right keyboard, default 60%/40%, terminal
+  min 20rem / explorer min 16rem; drag re-fits the xterm FitAddon + `pty.resize`). Main-side per-pane
+  fs sandbox (`fsExplorer.ts` list/read/watch, `pathConfine.ts` real-path confinement to the tab's
+  cwd subtree — no `..` escape, never throws, `fileKind.ts` text/binary/image classify) over ONE typed
+  IPC contract (`fs:*` channels in `src/shared/ipc.ts`, `validateFs*` validators in
+  `src/shared/validate.ts` — invalid payloads warn + ignore, never crash). Tree (`tree.ts` pure state
+  + `FileTree.tsx`): role=tree/treeitem, roving tabindex + ARIA keymap, dirs-first
+  case-insensitive sort, lazy expand with skeleton only on FIRST list, SEAMLESS watch-driven re-list
+  (node identity + expansion preserved, no flash). Click a file → read-only **Monaco** viewer
+  (`FileViewer.tsx`, cosmos-dark theme from CSS vars, `?worker` auto-bundled for dev + packaged, no
+  electron.vite config change) that REPLACES the tree with a Back affordance (ChevronLeft / Esc /
+  Backspace); images stream over a NEW privileged `cosmos-file://` scheme (`localFileRef.ts` pure
+  codec + `localFileProtocol.ts` Electron wiring, reuses `pathConfine`; renderer builds URLs via
+  `localFileSrc.ts`; `cosmos-file:` added to the renderer CSP `img-src`). Binary/denied/not-found/
+  broken-image are calm centered state blocks (never a red Notice). No image/text size cap. 1591 tests
+  green (incl. `tree.test.ts`, `fsExplorer`, `fileKind`, `localFileRef`, `pathConfine`); the
+  feature's typecheck is clean and it builds (editor.worker chunk emitted). Spec/plan/design at
+  `.sdd/{specs,plans,designs}/terminal-file-explorer-v1.md`; `docs/PROJECT-STRUCTURE.md` +
+  `docs/DEVELOPMENT.md` ("Terminal file explorer") updated. **ARCHITECTURE.md §4.x Terminal File
+  Explorer addition still owed (architect-owned — flagged, not written by developer).** GUI
+  verification pending (see Next). Not committed.
+
+- [x] **Confluence attachment images still broken — downloadLink normalization gap**
+  (`confluence-attachment-scope-v1`, `/bugfix`, #71) — the v2-attachments-API fix was correct in
+  approach but had a second live blocker: the v2 metadata `downloadLink` comes back rooted at the
+  SITE (`/rest/api/content/.../download`), and `buildDownloadUrl` only normalized a `/download/...`
+  prefix to `/wiki/...`, so the `/rest/...` link failed the `/wiki/`-anchored `safeWikiPath` guard
+  → `bytesUrl=null` → 502. Fix (`src/main/confluenceImageRef.ts`): prefix `/wiki` to ANY non-`/wiki/`
+  site-root path (still rejects `//host`, `..`). Regression test (`confluenceImageRef.test.ts`:
+  normalizes a `/rest/...` link). Temp diagnostics removed from `confluenceImageProtocol.ts`.
+  typecheck + 20 ref-tests green. **Live GUI-confirmed 2026-06-20** (both `.svg` attachments render,
+  bytes 200 `image/svg+xml`). Bug report `.sdd/bugs/confluence-attachment-scope-v1.md`. Not committed.
+- [x] **Shared calendars — all accessible calendars** (`shared-calendars-v1`, `/sdd`, #76) — extended
+  Google Calendar from PRIMARY-only to **all accessible calendars**: a `calendarList` read
+  (`GET /users/me/calendarList`, existing `calendar.readonly` scope — no new scope/re-consent;
+  `toCalendar` maps items, drops malformed) supplies the calendar set; `googleCalendarManager`
+  default-view handler fans out a BOUNDED per-calendar `listEvents` over the month window (≤25
+  calendars, ≤6-concurrent `Promise.allSettled` so one failure never blanks the grid) and MERGES,
+  tagging each event with its `calendarId`. `EventList` root gained additive optional `calendars[]`
+  (non-secret legend: id/name/resolved color-token/`selected`) + per-event `calendarId`; the catalog
+  renders the per-calendar legend/toggle as a self-suppressing left-sidebar `<aside>`
+  (`calendar-legend-sidebar-v1`, returns null at ≤1 calendar; renderer-only `hiddenCalendarIds`).
+  Events colored by owning calendar (deterministic palette-hex→`--event-*` token, else stable-hash,
+  else gray; resolved once in the surface builder so no raw hex reaches a component). Still read-only;
+  additive optional fields → no `SESSION_SCHEMA_VERSION` bump. Spec/plan/design at
+  `.sdd/{specs,plans,designs}/shared-calendars-v1.md`; `docs/ARCHITECTURE.md` §4i (flipped planned→built).
+  Tests green. **GUI verification pending** (folded into the Google Calendar manual-verify item under
+  Next). Not committed.
+- [x] **Slack replies affordance trim** (`slack-replies-affordance-trim-v1`, `/bugfix`) — two cosmetic
+  removals on the shared canonical row: (1) thread side-panel ROOT message no longer shows a redundant
+  "N replies" label — `SlackThreadPanel` (`SlackPanel.tsx`) omits `replyCount` from the reconstructed
+  `parent` so `RepliesAffordance` §3.3 returns null; (2) removed the `MessageSquare` icon before the
+  "replies" text in the body affordance (`SlackMessageRow.tsx`, dropped now-unused import). Renderer-only
+  JSX, no logic/contract change → visual-only, no node regression test. Typecheck clean, 1467 tests green.
+  GUI-verify pending (Task #82). Not committed.
+- [x] **Terminal panel tone mismatch** (`terminal-panel-tone-mismatch-v1`, `/bugfix`) — terminal screen
+  background read darker than other panels. Root cause: `TerminalPanel` constructed xterm `Terminal` with
+  a hardcoded `theme:{ background:'#1e1e1e' (=--background), foreground:'#e0e0e0' }`, but every panel
+  `<section>` wrapper is `bg-card` = `--card` `#1b1b1c` — so the screen (`#1e1e1e`) and its container
+  (`#1b1b1c`) mismatched. Fix: new pure helper `terminalThemeFromTokens(read)` (`src/renderer/terminalTheme.ts`,
+  node-tested) maps `--card`→background / `--card-foreground`→foreground from a `getComputedStyle(documentElement)`
+  reader, read ONCE at Terminal construction; `TerminalPanel.css` `.terminal-panel` bg `#1e1e1e`→`var(--card)`;
+  awaiting empty-state comment updated. xterm theme can't take CSS vars (needs concrete strings) — gotcha in
+  `docs/DEVELOPMENT.md` (Styling). cosmos forces `.dark` once at startup with no toggle, so a one-shot read is
+  correct (`ponytail:` comment names the re-read ceiling). +4 cases (`terminalTheme.test.ts`, fails on old
+  hardcoded theme). typecheck clean, 1467 tests green. **GUI-verified by the user 2026-06-20.** Not committed.
+- [x] **Slack attachment images broken** (`slack-attachment-image-broken-v1`, `/bugfix`) — after
+  `slack-rich-message-render-v1` + reconnect, custom emoji rendered but image attachments stayed broken.
+  Root cause: `SLACK_USER_OAUTH_SCOPES` omitted `files:read`, so auth-gated `files.slack.com`
+  `url_private`/`thumb_*` downloads through the `cosmos-slack-img://` proxy got a non-image response
+  (the public `*.slack-edge.com` emoji CDN needs no scope, which isolated the defect). Fix: add
+  `files:read` (read-only) to the requested `user_scope`; regression test `slackConfig.test.ts` asserts
+  the scope list (+ no `:write`). Typecheck + 1447 tests green; needs a Slack reconnect to grant the
+  scope, then GUI verify (see Next).
+- [x] **Slack rich message render** (`slack-rich-message-render-v1`, `/sdd` — escalated from
+  `.sdd/bugs/slack-image-emoji-mention-broken-v1.md`) — mentions/emoji/attachment-images were broken on
+  BOTH Slack surfaces. Fix across 5 tracks: (A) `SlackMessage`/`SlackSearchMatch` DTOs carry attachment
+  image refs + a custom-emoji shortcode→ref map (no new IPC channel — they ride the existing trusted
+  main→renderer response); (B) `toMessages` is async, mentions resolve `<@U…>` → `@DisplayName` via a
+  per-session cached `users.info`; (C) curated emoji table replaced by `node-emoji` (`glyphFor` adapter)
+  + `emoji.list` custom-emoji resolver (new `emoji:read` scope); (D) new SSRF-safe `cosmos-slack-img://`
+  privileged protocol (`slackImageRef.ts` codec + `slackImageProtocol.ts` wiring, 2-host allowlist
+  `files.slack.com` + `*.slack-edge.com`, token stays in main); (E) `SlackMessageRow` renders text/glyph/
+  custom-emoji runs (`messageContent.ts`) + an attachment thumbnail strip. Typecheck + 1443 tests green;
+  NOT GUI-exercised (see Next). Plan `.sdd/plans/slack-rich-message-render-v1.md`.
+- [x] **Jira loading skeleton width** (`jira-skeleton-width-v1`, `/bugfix`) — after the generative-wrap
+  clamp (#79) made the rendered Jira surface full-width, the loading skeleton stayed narrower, so the
+  skeleton→content swap jumped the data region horizontally. Root cause: `KanbanBoardSkeleton`
+  (`src/renderer/JiraPanel.tsx`) used fixed `w-64 shrink-0` columns in an `overflow-x-auto` container,
+  vs the real board's width-clamped `Column` wrapper (`JIRA_LAYOUT_CLAMP_CLASS`). Fix: board-skeleton
+  container `flex gap-3 overflow-x-auto` → `flex w-full min-w-0 gap-3`, columns `w-64 shrink-0` →
+  `flex-1 min-w-0` (3 equal full-width columns); `DefaultViewSkeleton` + `SkeletonCard` roots gained
+  `w-full min-w-0` for parity. Renderer/CSS-only; typecheck + 1391 tests green; no node unit test
+  (Tailwind layout isn't node/no-jsdom-testable). Bug report `.sdd/bugs/jira-skeleton-width-v1.md`.
+  **GUI verification pending — see Next.** Not committed.
+- [x] **Terminal [Open] picker spinner hang** (`terminal-picker-spinner-hang-v1`, `/bugfix`) — a fresh
+  terminal tab's `[Open a folder]` left the "Opening…" spinner spinning forever and never spawned
+  `claude` after a folder pick. Root cause: `TerminalView`'s mount effect cleanup set
+  `isMountedRef.current = false` but the body never reset it to `true`; under React StrictMode (dev)
+  the mount→cleanup→mount double-invoke left the ref stuck `false`, so the post-pick guard
+  `if (res.path && isMountedRef.current)` and the `finally` `setPending(false)` both short-circuited.
+  Fix: set `isMountedRef.current = true` as the first line of the mount effect (keep `false` in
+  cleanup). Renderer-only (`src/renderer/TerminalPanel.tsx`); typecheck + 1391 tests green; no node
+  unit test (a StrictMode effect/ref lifecycle isn't node/no-jsdom-testable). `docs/DEVELOPMENT.md`
+  (React renderer) gotcha added. **GUI verification pending — see Next.** Not committed.
+- [x] **Jira generative-UI empty-state flash** (`jira-empty-flash-v1`, `/bugfix`) — `IssueList`
+  briefly flashed "No issues found." between the skeleton and first paint. Root cause: a `{path}`-bound
+  `issues` prop resolves through `useBound` to `undefined` until main seeds the surface dataModel, and
+  `Array.isArray(rows)?rows:[]` collapsed `undefined` to `[]` — indistinguishable from a genuinely
+  empty list — so `items.length===0` rendered the empty state during the seed gap. Fix: added pure
+  `shouldShowIssueEmptyState(rows, isLoading)` in `jiraCatalog/logic.ts` (true ONLY when rows is a
+  SEEDED array AND empty AND not loading); `IssueList` gates the empty block on it. +4 logic tests;
+  typecheck + 1391 tests green. Not committed.
+- [x] **Generative-UI line-break clamp — Slack + Jira + Confluence** (`slack-generative-wrap-v1` +
+  follow-up) — long unbroken message/text lines overflowed horizontally in agent-composed surfaces.
+  Root cause was UPSTREAM of the leaf `break-words`: the SDK standard-catalog `Column`/`Row` render a
+  flex `<div>` with NO `min-w-0`, so the container kept `min-width:auto` and grew to its content's
+  intrinsic width before the leaf wrap could bite. Fixed by registering CLAMPED wrappers
+  (`{slack,jira,confluence}Catalog/layout.tsx`: the SDK container inside a `w-full min-w-0 max-w-full`
+  block; `{SLACK,JIRA,CONFLUENCE}_LAYOUT_CLAMP_CLASS` in each `logic.ts`) in place of the raw
+  `standardCatalog.components.Column/Row` in each `index.ts`; node tests assert the raw SDK containers
+  are not registered. Slack done first (US-001), then mirrored to Jira/Confluence. typecheck + tests
+  green. `docs/DEVELOPMENT.md` (Styling) + `docs/ARCHITECTURE.md` §4.6. **GUI verification pending**
+  (OAuth-gated — see Next). Not committed.
+- [x] **Slack generated-UI message parity** (`slack-generative-message-parity-v1`, `/sdd`) — unified
+  the Slack message-row presentation across the native panel and the generated catalog into ONE
+  canonical `slackCatalog/SlackMessageRow.tsx` (avatar · name · timestamp · wrapped body · replies
+  affordance) so wrap/author/timestamp/reply rendering can never silently diverge; the native row is a
+  thin adapter, the catalog row supplies `onOpenThread` only when thread coords are present. Added a
+  loading skeleton (`MessageSkeleton.tsx`). +24 parity tests. Not committed.
+- [x] **IPC modular refactor** (`ipc-modular-refactor-v1`, `/sdd`, #78) — split the monolithic
+  `src/shared/ipc.ts` + `validate.ts` into per-domain modules in `src/shared/ipc/` (`common`/`pty`/
+  `ui`/`agent`/`shortcut`/`slack`/`jira`/`confluence`/`googleCalendar`/`session`/`settings`, each with
+  a sibling `*.validate.ts`), keeping `ipc.ts`/`validate.ts` as same-path RE-EXPORT barrels so all 48/13
+  consumers import unchanged (zero churn). Shared predicates promoted to `common.validate.ts`;
+  `SESSION_SCHEMA_VERSION` unchanged (6); `channelUniqueness.test.ts` guards duplicate channel strings.
+  typecheck + tests green. `docs/ARCHITECTURE.md` §4.6 + `docs/DEVELOPMENT.md`. Not committed.
+- [x] **Calendar month/year navigation** (`calendar-month-year-nav-v1`, `/sdd`, US-006) — the Google
+  Calendar default month view gained prev/next month (Dec↔Jan year carry), prev/next year (month
+  preserved), and a Today control. Per-tab displayed-month INTENT `Map` in `GoogleCalendarPanel.tsx`
+  (survives the `A2UIProvider key={tab.id}` remount); pure arithmetic in `calendarNavLogic.ts` (0-based
+  internally); 1-based `{year,month}` wire param with the single 0→1 conversion in `toWirePayload`; new
+  `validateGoogleCalendarRequestDefaultView` ({}-fallback for absent/invalid, null only for non-object);
+  a context seam (`navContext.ts`) reaches into the catalog and REPLACES the in-grid `<h2>` (gated to the
+  live default view only); `PanelRefreshButton` `onRefresh` override refreshes the un-bound view; a
+  latest-wins stale-read gate rejects out-of-order landed surfaces. +37 tests. Spec/plan/design at
+  `.sdd/{specs,plans,designs}/calendar-month-year-nav-v1.md`; `docs/ARCHITECTURE.md` §4i +
+  `docs/DEVELOPMENT.md`. **PRELOAD CHANGED → full restart.** **GUI verification pending** + the
+  **English-vs-Korean label decision is PENDING USER** (designer kept English "June 2026" over the
+  spec's Korean `YYYY년 M월` — see Next). Not committed.
+- [x] **Terminal [Open] directory picker** (`terminal-open-directory-picker-v1`, `/sdd`, #75) — a fresh
+  terminal tab now defers its spawn until a working directory is picked: it mounts in an `awaiting` phase
+  showing an `[Open]` empty state (no auto-`pty:start`), and spawns only after the new `pty:pickDirectory`
+  channel (main-only `dialog.showOpenDialog({ properties:['openDirectory'] })`; cancel/error → `{path:
+  null}`) returns a dir, passed as an optional boundary-validated `cwd` on `pty:start`. Fresh-vs-resume
+  cwd policy is the pure `resolvePaneSpawn` (`src/main/paneSpawn.ts`): resume ignores override cwd, fresh
+  uses `overrideCwd ?? sandboxDir`; restored tabs skip the picker and auto-resume. +14 tests.
+  Spec/plan at `.sdd/{specs,plans}/terminal-open-directory-picker-v1.md`; `docs/ARCHITECTURE.md` §4.1 +
+  `docs/DEVELOPMENT.md`. **PRELOAD CHANGED → full restart.** **GUI verification pending** (see Next).
+  Not committed.
+- [x] **Google Calendar legend → left sidebar + grid fill** (`calendar-legend-sidebar-v1`, `/sdd`,
+  requested 2026-06-18) — moved the per-calendar legend/toggle from a top strip to a self-suppressing
+  left-sidebar `<aside w-44>` rail (returns `null` at ≤1 calendar). Then per live user feedback the
+  month grid was made to fill ALL remaining width AND height: dropped the `max-w-[34rem]` cap, built an
+  `h-full` chain (EventList `items-stretch` → grid wrapper `flex-1 flex-col` → CalendarMonthGrid
+  `h-full min-h-0` → day-cells `flex-1 auto-rows-fr`), dropped the fixed cell height for a `min-h-[64px]`
+  floor (tabpanel `p-3` supplies right/bottom margin). className-only in
+  `src/renderer/googleCalendarCatalog/components.tsx`; typecheck green. GUI verify pending (folded into
+  the Google Calendar manual-verification item under **Next**). Gotcha: A2UIProvider/SurfaceErrorBoundary/
+  A2UIRenderer add no wrapper DOM, so an `h-full` chain reaches the surface root.
+- [x] **Slack message rendering — line breaks + emoji** (bug `slack-text-rendering-v1`, `/bugfix`,
+  requested 2026-06-18) — Slack message `text` rendered wrong: multi-line collapsed and `:emoji:`/
+  entities/`<…>` tokens shown verbatim. Root cause was a missing decode at the SINGLE Slack text
+  mapping point (`slackClient.ts` `toMessages` `:370` + `search` `:325` did `String(m.text ?? '')`).
+  Fixed with one shared pure decoder `decodeSlackText` (new `src/main/integrations/slackText.ts` +
+  curated no-dep `slackEmoji.ts`): decode `<…>` mention/channel/link/broadcast tokens FIRST, then
+  unescape Slack's `&amp;`/`&lt;`/`&gt;` (+`&quot;`/`&#39;`, NOT a broad HTML unescape), then map
+  `:shortcode:`→glyph (skin-tone dropped, unknown left verbatim); `\n` preserved (rows are already
+  `whitespace-pre-wrap`, so the line-break loss was the missing decode, not CSS). Covers history,
+  replies, search across the native panel AND the MCP render path (one mapping point). Mirrors the
+  `atlassianText.ts` / Confluence `decodeUnicodeEscapes` convention. 25-case regression test
+  (`slackText.test.ts`, fails without the fix); typecheck + **1229 tests** green. Bug report
+  `.sdd/bugs/slack-text-rendering-v1.md`; gotcha in `docs/DEVELOPMENT.md` (Styling). **GUI verification
+  pending** (no live Slack workspace in this env — eyeball a multi-line + emoji row in the panel). Not committed.
+- [x] **Google Calendar integration** (`google-calendar-v1`, `/sdd` + `/ralph`, requested 2026-06-15) —
+  a fourth concrete integration, first non-Atlassian/Slack provider. **Confidential-client** Google
+  OAuth 2.0 (auth-code, client id + secret like Atlassian, `access_type=offline` + `prompt=consent`
+  for a refresh token) over the §4.7 loopback foundation; **read-only** v1 (`calendar.readonly`, the
+  user's PRIMARY calendar only — no write scope/tool/dispatcher). New `GoogleCalendarManager` +
+  encrypted main-only token store, `googleCalendar:` IPC namespace + validators, a third logical
+  Settings client (`google`, `COSMOS_GOOGLE_CLIENT_ID`/`COSMOS_GOOGLE_CLIENT_SECRET`, write-only
+  secret, Settings-over-env, INDEPENDENT force-disconnect — not coupled to the one Atlassian client).
+  New rail surface + render target `'google-calendar'` (lucide `CalendarDays`, appended LAST so cycle
+  indices stay stable), scoped render MCP server + rollup input + `embeddedMcpConfig`, custom
+  `googleCalendarCatalog/`, and a deterministic main-composed **default month view** (bounded
+  `events.list` → `EventList` surface → `target:'google-calendar'` push, Jira default-view pattern).
+  Design (`.sdd/designs/google-calendar-v1.md`) resolved month-over-week; GCal 11 `colorId`s collapse
+  onto a 6-token `--event-*` family (no raw hex). `SESSION_SCHEMA_VERSION` bumped for the new panel.
+  Built as two tracks behind a design gate (Track A main/IPC/OAuth/MCP, Track B renderer). typecheck
+  clean, **1204/1204** tests green, production build green. Spec/plan/design at
+  `.sdd/{specs,plans,designs}/google-calendar-v1.md`; `docs/ARCHITECTURE.md` §7 4i. **GUI verification
+  pending** (full restart — preload changed; real OAuth needs a registered Google Cloud client). Not committed.
+- [x] **Settings gear polish** — pinned the Settings gear to the rail bottom (`h-full!` list +
+  `flex-1` spacer), centered/spaced it as a direct rail child (`h-10 w-10 flex-none`), matched its
+  hover to the other icons (`hover:bg-transparent` neutralizes the ghost `hover:bg-accent` box), and
+  sized its lucide glyph (`size-6`) to optically match the brand-fill rail icons. Renderer-only,
+  user-iterated live via HMR. Gotchas in `docs/DEVELOPMENT.md` (Styling).
 - [x] **Confluence content/attachment images fail to load** (`confluence-content-images-v1`, `/bugfix`→`/sdd`,
   requested 2026-06-15) — content/attachment images in the Confluence page-detail body 404'd (relative,
   auth-gated `/wiki/…` src; token main-only). Implemented the `cosmos-confluence-img://` privileged streaming

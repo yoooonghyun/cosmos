@@ -42,7 +42,9 @@ function res(body: unknown, status = 200, retryAfter?: string): ConfluenceHttpRe
   }
 }
 
-const auth = { token: 'at-test', cloudId: 'cloud-1' }
+// siteUrl is the persisted OAuth accessible-resources origin (bare, NO /wiki) — the source
+// getPage uses to assemble the user-facing page web URL (confluence-link-404-v1 #100).
+const auth = { token: 'at-test', cloudId: 'cloud-1', siteUrl: 'https://acme.atlassian.net' }
 
 describe('ConfluenceClient.searchContent (FR-C04)', () => {
   it('maps hits to plain-text results and exposes the next-link cursor', async () => {
@@ -236,6 +238,62 @@ describe('ConfluenceClient.getPage (FR-C04; confluence-detail-rich-render-v1 FR-
       expect(result.data.space).toBe('777')
       // FR-006: raw server-rendered HTML carried unchanged (sanitized later in renderer).
       expect(result.data.body).toBe(viewHtml)
+    }
+  })
+
+  it('enriches webUrl from auth.siteUrl + the REAL v2 _links.webui (NO base) — #87/#100', async () => {
+    const fetchImpl: FetchLike = async () =>
+      res({
+        id: '12345',
+        title: 'Runbook',
+        body: { view: { value: '<p>x</p>' } },
+        // REAL v2 GET /wiki/api/v2/pages/{id} `_links` = AbstractPageLinks: webui/editui/tinyui,
+        // NO `base` (that's a LIST-response field). The host comes from auth.siteUrl, not _links.
+        _links: {
+          webui: '/spaces/ENG/pages/12345/Runbook',
+          editui: '/pages/resumedraft.action?draftId=12345',
+          tinyui: '/x/AbCdEf'
+        }
+      })
+    const client = new ConfluenceClient({ fetchImpl })
+    const result = await client.getPage(auth, '12345')
+    expect(result.ok).toBe(true)
+    if (result.ok) {
+      // Corrected, resolvable URL: site origin + /wiki + webui (exactly one /wiki).
+      expect(result.data.webUrl).toBe('https://acme.atlassian.net/wiki/spaces/ENG/pages/12345/Runbook')
+      // #100 regression: NOT the old /wiki-less 404 URL, NOR a doubled /wiki.
+      expect(result.data.webUrl).not.toBe('https://acme.atlassian.net/spaces/ENG/pages/12345/Runbook')
+      expect(result.data.webUrl).not.toBe(
+        'https://acme.atlassian.net/wiki/wiki/spaces/ENG/pages/12345/Runbook'
+      )
+    }
+  })
+
+  it('OMITS the webUrl key when _links are absent (degrade-to-omit — #87 FR-004/FR-008)', async () => {
+    const fetchImpl: FetchLike = async () => res({ id: '1', title: 't', body: {} })
+    const client = new ConfluenceClient({ fetchImpl })
+    const result = await client.getPage(auth, '1')
+    expect(result.ok).toBe(true)
+    if (result.ok) {
+      // missing optional must not error and must not surface an undefined key.
+      expect('webUrl' in result.data).toBe(false)
+    }
+  })
+
+  it('OMITS webUrl when auth.siteUrl is absent (legacy token set — #100 degrade-to-omit)', async () => {
+    const fetchImpl: FetchLike = async () =>
+      res({
+        id: '1',
+        title: 't',
+        body: {},
+        _links: { webui: '/spaces/ENG/pages/1/T' }
+      })
+    const client = new ConfluenceClient({ fetchImpl })
+    // No siteUrl (a token set persisted before siteUrl was threaded) → no browsable host.
+    const result = await client.getPage({ token: 'at-test', cloudId: 'cloud-1' }, '1')
+    expect(result.ok).toBe(true)
+    if (result.ok) {
+      expect('webUrl' in result.data).toBe(false)
     }
   })
 

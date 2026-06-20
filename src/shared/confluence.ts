@@ -116,6 +116,15 @@ export interface ConfluencePageDetail {
    * `''` when the page has no readable body (FR-012).
    */
   body: string
+  /**
+   * Canonical Confluence web-UI page URL — the page as a human visits it in a browser
+   * (confluence-detail-weblink-v1 #87, FR-003). Assembled from the page read's OWN
+   * non-secret `_links.base` + `_links.webui` (NOT the cloudId API host). NON-SECRET.
+   * OMITTED (no `undefined` key) when a usable absolute `http(s)` URL cannot be
+   * assembled — degrade-to-omit so the "Open in Confluence" affordance simply does not
+   * render (FR-004/FR-008), mirroring the calendar `htmlLink` omit-when-absent discipline.
+   */
+  webUrl?: string
 }
 
 /* ------------------------------------------------------------------------- *

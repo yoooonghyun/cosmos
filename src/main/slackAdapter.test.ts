@@ -85,6 +85,35 @@ describe('row mappers (non-secret bound-row shape parity)', () => {
     })
   })
 
+  // slack-generative-message-parity-v1 (FR-005/FR-013): non-secret thread coordinates.
+  it('slackMessageRow injects channelId + threadTs (== message.ts) when a channelId is supplied', () => {
+    expect(slackMessageRow(MESSAGE, 'C1')).toEqual({
+      ts: MESSAGE.ts,
+      userId: 'U1',
+      text: 'hi',
+      channelId: 'C1',
+      threadTs: MESSAGE.ts
+    })
+  })
+
+  it('slackMessageRow omits both thread coordinates when no channelId is supplied (search rows)', () => {
+    const row = slackMessageRow(MESSAGE)
+    expect(row).not.toHaveProperty('channelId')
+    expect(row).not.toHaveProperty('threadTs')
+  })
+
+  it('slackMessageRow omits the coordinates for a blank channelId (never an empty channelId)', () => {
+    const row = slackMessageRow(MESSAGE, '')
+    expect(row).not.toHaveProperty('channelId')
+    expect(row).not.toHaveProperty('threadTs')
+  })
+
+  it('slackMessageRow carries no token/secret even with coordinates (FR-019)', () => {
+    expect(JSON.stringify(slackMessageRow(MESSAGE, 'C1'))).not.toMatch(
+      /Bearer|xoxb|xoxp|accessToken|refreshToken|token/i
+    )
+  })
+
   it('slackSearchRow omits absent userName/channelName (missing optional)', () => {
     expect(slackSearchRow(MATCH)).toEqual({
       ts: MATCH.ts,
@@ -183,11 +212,24 @@ describe('slackAdapterResolver — getHistory (FR-006/FR-008 name resolution)', 
     })
     expect(m.getHistory).toHaveBeenCalledWith({ channelId: 'C1', cursor: 'h1' })
     expect(m.getUser).toHaveBeenCalledWith({ userId: 'U1' })
+    // slack-generative-message-parity-v1 (FR-013): history rows carry the thread coords.
     expect(out).toEqual({
       ok: true,
-      items: [slackMessageRow({ ...MESSAGE, userName: 'Ada' })],
+      items: [slackMessageRow({ ...MESSAGE, userName: 'Ada' }, 'C1')],
       nextCursor: 'h2'
     })
+  })
+
+  // slack-generative-message-parity-v1 (FR-013): the getHistory branch threads the
+  // descriptor's (non-secret) channelId into every row so the reply drill-in works.
+  it('injects channelId + threadTs (== ts) into each history row (FR-013)', async () => {
+    const out = await slackAdapterResolver(manager())({
+      dataSource: SlackAdapterSource.GetHistory,
+      query: { channelId: 'C1' }
+    })
+    expect(out.ok).toBe(true)
+    const items = (out.ok ? out.items : []) ?? []
+    expect(items[0]).toMatchObject({ channelId: 'C1', threadTs: MESSAGE.ts })
   })
 
   it('falls back to the raw userId when getUser fails (FR-008, never blocks/throws)', async () => {
@@ -200,7 +242,7 @@ describe('slackAdapterResolver — getHistory (FR-006/FR-008 name resolution)', 
       dataSource: SlackAdapterSource.GetHistory,
       query: { channelId: 'C1' }
     })
-    expect(out).toEqual({ ok: true, items: [slackMessageRow({ ...MESSAGE, userName: 'U1' })] })
+    expect(out).toEqual({ ok: true, items: [slackMessageRow({ ...MESSAGE, userName: 'U1' }, 'C1')] })
   })
 
   it('keeps an already-present userName without a lookup (no getUser call)', async () => {
@@ -215,7 +257,7 @@ describe('slackAdapterResolver — getHistory (FR-006/FR-008 name resolution)', 
       query: { channelId: 'C1' }
     })
     expect(m.getUser).not.toHaveBeenCalled()
-    expect(out).toEqual({ ok: true, items: [slackMessageRow(named)] })
+    expect(out).toEqual({ ok: true, items: [slackMessageRow(named, 'C1')] })
   })
 
   it('surfaces a recoverable failure as ok:false (FR-007)', async () => {
@@ -259,6 +301,19 @@ describe('slackAdapterResolver — search (FR-006)', () => {
       items: [slackSearchRow({ ...MATCH, userName: 'Bo' })],
       nextCursor: '2'
     })
+  })
+
+  // slack-generative-message-parity-v1 (FR-013): search rows must NOT gain thread coords.
+  it('does NOT inject thread coordinates into search rows (no channelId/threadTs)', async () => {
+    const out = await slackAdapterResolver(manager())({
+      dataSource: SlackAdapterSource.Search,
+      query: { query: 'hello' }
+    })
+    expect(out.ok).toBe(true)
+    const items = (out.ok ? out.items : []) ?? []
+    expect(items[0]).not.toHaveProperty('threadTs')
+    // (SearchResultRow keeps its own channelId field — that is the hit's channel, not a
+    // thread coordinate the MessageRow drill-in reads.)
   })
 
   it('surfaces search_unavailable as a recoverable notice (FR-007)', async () => {

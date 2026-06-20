@@ -9,6 +9,7 @@
 import {
   app,
   BrowserWindow,
+  dialog,
   ipcMain,
   Menu,
   safeStorage,
@@ -18,38 +19,61 @@ import {
   type MenuItemConstructorOptions
 } from 'electron'
 import { fileURLToPath } from 'node:url'
-import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
+import {
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  readdirSync,
+  realpathSync,
+  renameSync,
+  rmSync,
+  watch as fsWatch,
+  writeFileSync
+} from 'node:fs'
 import { dirname, join } from 'node:path'
 import { randomUUID } from 'node:crypto'
 import {
   AgentChannel,
   ConfluenceChannelName,
+  FsChannel,
+  GoogleCalendarChannelName,
   JiraChannelName,
   PtyChannel,
   SessionChannel,
+  SettingsChannelName,
   ShortcutChannel,
   SlackChannelName,
   UiChannel,
   type AgentStatusPayload,
+  type ClientConfigSaveResult,
+  type PtyPickDirectoryResult,
   type SessionSnapshot,
   type UiDataModelPayload,
   type UiRenderPayload
 } from '../shared/ipc'
 import { matchShortcut } from './shortcutMatch'
+import { resolvePaneSpawn, type ResolvedPaneSpawn } from './paneSpawn'
 import type { SlackConnectionStatus } from '../shared/slack'
 import type { JiraConnectionStatus } from '../shared/jira'
 import { JiraAdapterSource } from '../shared/jira'
 import type { ConfluenceConnectionStatus } from '../shared/confluence'
+import type { GoogleCalendarConnectionStatus } from '../shared/googleCalendar'
 import {
   confluenceBridgeSocketPath,
+  googleCalendarBridgeSocketPath,
   jiraBridgeSocketPath,
   slackBridgeSocketPath
 } from '../shared/bridge'
 import {
   validateAgentPrompt,
+  validateAgentStatusPayload,
   validateConfluenceDefaultFeed,
   validateConfluenceGetPage,
   validateConfluenceSearch,
+  validateFsPath,
+  validateFsWatch,
+  validateGoogleCalendarListEvents,
+  validateGoogleCalendarRequestDefaultView,
   validateDispose,
   validateInput,
   validateJiraGetIssue,
@@ -64,8 +88,11 @@ import {
   validateSlackListChannels,
   validateSlackReplies,
   validateSlackSearch,
+  validateSlackSend,
   validateStart,
   validateAdapterAction,
+  validateClientConfigClear,
+  validateClientConfigSave,
   validateUiAction
 } from '../shared/validate'
 import { PtyManager } from './ptyManager'
@@ -74,9 +101,13 @@ import { validateSnapshot } from './sessionSnapshot'
 import { AgentRunner } from './agentRunner'
 import {
   CONFLUENCE_RENDER_UI_SERVER_NAME,
+  GOOGLE_CALENDAR_RENDER_UI_SERVER_NAME,
+  GOOGLE_CALENDAR_TOOLS_SERVER_NAME,
   JIRA_RENDER_UI_SERVER_NAME,
   SLACK_RENDER_UI_SERVER_NAME,
   confluenceRenderUiMcpServerEntry,
+  googleCalendarRenderUiMcpServerEntry,
+  googleCalendarToolsMcpServerEntry,
   jiraRenderUiMcpServerEntry,
   renderUiMcpServerEntry,
   slackRenderUiMcpServerEntry
@@ -86,6 +117,18 @@ import { SlackBridge } from './slackBridge'
 import { SlackManager } from './slackManager'
 import { SlackClient } from './integrations/slackClient'
 import { TokenStore } from './integrations/tokenStore'
+import {
+  ClientConfigStore,
+  ClientConfigEncryptionUnavailableError,
+  type ClientConfig
+} from './integrations/clientConfigStore'
+import {
+  resolveEffective,
+  toStatus,
+  diffEffective,
+  type ClientConfigEnv,
+  type EffectiveClientConfig
+} from './clientConfigResolver'
 import { runSlackOAuth } from './integrations/slackOAuth'
 import { JiraBridge } from './jiraBridge'
 import { JiraManager } from './jiraManager'
@@ -128,6 +171,28 @@ import {
   registerConfluenceImageScheme,
   installConfluenceImageProtocol
 } from './confluenceImageProtocol'
+import {
+  registerLocalFileScheme,
+  installLocalFileProtocol
+} from './localFileProtocol'
+import { createFsExplorer, type ExplorerFs, type FsExplorer } from './fsExplorer'
+import {
+  registerSlackImageScheme,
+  installSlackImageProtocol
+} from './slackImageProtocol'
+import { GoogleCalendarBridge } from './googleCalendarBridge'
+import { GoogleCalendarManager } from './googleCalendarManager'
+import { GoogleCalendarClient } from './integrations/googleCalendarClient'
+import { runGoogleOAuth, refreshGoogleToken } from './integrations/googleOAuth'
+import { GOOGLE_CALENDAR_OAUTH_SCOPES } from './integrations/googleConfig'
+import {
+  buildNoticeSurface as buildGoogleCalendarNoticeSurface,
+  buildSharedViewSurface as buildGoogleCalendarSharedViewSurface
+} from './googleCalendarSurfaceBuilder'
+import {
+  googleCalendarDefaultWindow,
+  type GoogleCalendarDefaultViewAnchor
+} from './googleCalendarWindow'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 
@@ -144,6 +209,15 @@ try {
 // scheme. MUST run BEFORE `app.whenReady` (Electron requires pre-ready scheme registration);
 // the matching `protocol.handle` is installed post-ready alongside createWindow().
 registerConfluenceImageScheme()
+
+// terminal-file-explorer-v1 (FR-027/FR-028): register the privileged `cosmos-file` streaming
+// scheme for the file viewer's local images. MUST run BEFORE `app.whenReady`; the matching
+// `protocol.handle` is installed post-ready with the per-pane root resolver.
+registerLocalFileScheme()
+
+// slack-rich-message-render-v1: register the privileged `cosmos-slack-img` streaming scheme
+// (same pre-ready requirement); the matching `protocol.handle` is installed post-ready below.
+registerSlackImageScheme()
 
 // The cosmos app icon (rasterized from assets/logo/cosmos-pastel.svg). Used for the
 // window (Windows/Linux taskbar) and the macOS dock. Resolved from the app root so it
@@ -166,7 +240,52 @@ let jiraActionDispatcher: JiraActionDispatcher | null = null
 let adapterDispatcher: AdapterDispatcher | null = null
 let confluenceManager: ConfluenceManager | null = null
 let confluenceBridge: ConfluenceBridge | null = null
+// google-calendar-v1 (Track A, main-only): one manager (token only in main, encrypted)
+// serves both the native panel (IPC) and the MCP tools (via GoogleCalendarBridge).
+// READ-ONLY — no write path, no scope-gate, no action dispatcher.
+let googleCalendarManager: GoogleCalendarManager | null = null
+let googleCalendarBridge: GoogleCalendarBridge | null = null
 let agentRunner: AgentRunner | null = null
+
+/* ------------------------------------------------------------------------- *
+ * settings-oauth-clients-v1 — main-owned, safeStorage-encrypted client-config
+ * store + the Settings-over-env resolver the manager closures read from.
+ * ------------------------------------------------------------------------- */
+
+let clientConfigStore: ClientConfigStore | null = null
+
+/**
+ * Read the env fallback for the resolver (FR-009). Captured fresh on each call so a
+ * test/runtime env change is reflected; the values are non-secret client ids plus the
+ * Atlassian secret which stays in main and is never logged/IPC'd.
+ */
+function clientConfigEnv(): ClientConfigEnv {
+  return {
+    ...(process.env.COSMOS_SLACK_CLIENT_ID ? { COSMOS_SLACK_CLIENT_ID: process.env.COSMOS_SLACK_CLIENT_ID } : {}),
+    ...(process.env.COSMOS_ATLASSIAN_CLIENT_ID
+      ? { COSMOS_ATLASSIAN_CLIENT_ID: process.env.COSMOS_ATLASSIAN_CLIENT_ID }
+      : {}),
+    ...(process.env.COSMOS_ATLASSIAN_CLIENT_SECRET
+      ? { COSMOS_ATLASSIAN_CLIENT_SECRET: process.env.COSMOS_ATLASSIAN_CLIENT_SECRET }
+      : {}),
+    ...(process.env.COSMOS_GOOGLE_CLIENT_ID
+      ? { COSMOS_GOOGLE_CLIENT_ID: process.env.COSMOS_GOOGLE_CLIENT_ID }
+      : {}),
+    ...(process.env.COSMOS_GOOGLE_CLIENT_SECRET
+      ? { COSMOS_GOOGLE_CLIENT_SECRET: process.env.COSMOS_GOOGLE_CLIENT_SECRET }
+      : {})
+  }
+}
+
+/**
+ * The EFFECTIVE client credentials at THIS moment (Settings-over-env). The managers'
+ * `runOAuth`/`refresh` closures call this so a save takes effect with no restart
+ * (FR-010/FR-011). Reads the encrypted store (in-process only) + the env fallback.
+ */
+function effectiveClientConfig(): EffectiveClientConfig {
+  const stored: ClientConfig = clientConfigStore?.load() ?? {}
+  return resolveEffective(stored, clientConfigEnv())
+}
 
 /* ------------------------------------------------------------------------- *
  * session-persistence-v1 — main-owned snapshot store + terminal session map
@@ -186,6 +305,67 @@ let sandboxDirCached = ''
 const terminalSessionMap = new Map<string, { sessionId: string; cwd: string }>()
 
 /**
+ * terminal-file-explorer-v1 (FR-022): resolve a pane's absolute root (its `claude` cwd) from
+ * the MAIN-owned session map, or `undefined` when the pane has no live session. The file
+ * explorer + the `cosmos-file://` protocol confine every access to this root; the renderer
+ * never supplies a root.
+ */
+function paneRoot(paneId: string): string | undefined {
+  return terminalSessionMap.get(paneId)?.cwd
+}
+
+/**
+ * terminal-file-explorer-v1: the real-disk `ExplorerFs` for the file explorer. Every probe is
+ * TOTAL — it returns a sentinel on error rather than throwing (the manager turns those into
+ * denied/not-found results). `readDir` reports per-entry dir/symlink flags; `readFileBytes`
+ * reads the whole file (no size cap, FR-012); `watch` is a recursive `fs.watch` whose handle
+ * the manager closes. `realpath` (from {@link ConfineFs}) canonicalizes for confinement.
+ */
+const diskExplorerFs: ExplorerFs = {
+  realpath(p) {
+    try {
+      return realpathSync(p)
+    } catch {
+      return null
+    }
+  },
+  readDir(absDir) {
+    try {
+      const dirents = readdirSync(absDir, { withFileTypes: true })
+      return dirents.map((d) => ({
+        name: d.name,
+        isDir: d.isDirectory(),
+        isSymlink: d.isSymbolicLink()
+      }))
+    } catch (err) {
+      return { error: (err as NodeJS.ErrnoException)?.code === 'EACCES' ? 'denied' : 'not-found' }
+    }
+  },
+  readFileBytes(absFile) {
+    try {
+      return readFileSync(absFile)
+    } catch (err) {
+      return { error: (err as NodeJS.ErrnoException)?.code === 'EACCES' ? 'denied' : 'not-found' }
+    }
+  },
+  watch(absRoot, onEvent) {
+    try {
+      const w = fsWatch(absRoot, { recursive: true }, () => onEvent())
+      // A watcher error (e.g. the root vanished) must not crash main — swallow it; the
+      // coarse re-list path tolerates a missed event.
+      w.on('error', () => {})
+      return { close: () => w.close() }
+    } catch {
+      return null
+    }
+  }
+}
+
+/** The file-explorer manager (terminal-file-explorer-v1). Built in `createWindow` once the
+ * window exists (its change sink targets that window's `webContents`); released on teardown. */
+let fsExplorer: FsExplorer | null = null
+
+/**
  * Terminal sessions to RESUME on the next `pty:start` for that paneId (FR-020),
  * seeded from the snapshot at `session:load`. A paneId present here means its
  * `pty:start` should spawn `claude --resume <sessionId>` (in the persisted cwd)
@@ -195,25 +375,27 @@ const terminalSessionMap = new Map<string, { sessionId: string; cwd: string }>()
 const terminalResumeMap = new Map<string, { sessionId: string; cwd: string }>()
 
 /**
- * Build the per-pane spawn options for a `pty:start` (D2/FR-019/FR-020/FR-022).
- * A pane queued for resume spawns `--resume <id>` (resume:true so an abnormal early
- * exit triggers the fallback); otherwise a fresh `--session-id <uuid>` is minted.
- * Either way `terminalSessionMap` records the pane's session id + cwd for save.
+ * Build the per-pane spawn options for a `pty:start` (D2/FR-019/FR-020/FR-022;
+ * terminal-open-directory-picker-v1 FR-004). A pane queued for resume spawns
+ * `--resume <id>` in its persisted cwd (resume:true so an abnormal early exit triggers
+ * the fallback) and IGNORES `overrideCwd` (OQ-2); a fresh pane mints a `--session-id
+ * <uuid>` and spawns in `overrideCwd ?? sandboxDir` — `overrideCwd` is the directory the
+ * user chose via the native picker. Either way `terminalSessionMap` records the pane's
+ * session id + (chosen) cwd for save. Resolution logic lives in the pure `resolvePaneSpawn`.
  */
-function paneSpawnFor(paneId: string, sandboxDir: string): {
-  args: string[]
-  resume: boolean
-  cwd: string
-} {
-  const resume = terminalResumeMap.get(paneId)
-  if (resume) {
-    terminalResumeMap.delete(paneId)
-    terminalSessionMap.set(paneId, { sessionId: resume.sessionId, cwd: resume.cwd })
-    return { args: ['--resume', resume.sessionId], resume: true, cwd: resume.cwd }
-  }
-  const sessionId = randomUUID()
-  terminalSessionMap.set(paneId, { sessionId, cwd: sandboxDir })
-  return { args: ['--session-id', sessionId], resume: false, cwd: sandboxDir }
+function paneSpawnFor(
+  paneId: string,
+  sandboxDir: string,
+  overrideCwd?: string
+): ResolvedPaneSpawn {
+  return resolvePaneSpawn(
+    paneId,
+    sandboxDir,
+    terminalResumeMap,
+    terminalSessionMap,
+    randomUUID,
+    overrideCwd
+  )
 }
 
 /**
@@ -289,6 +471,10 @@ function embeddedMcpConfig(sandboxDir: string): string {
       // drift. Read-only: no write tool, no dispatcher (FR-012).
       [SLACK_RENDER_UI_SERVER_NAME]: slackRenderUiMcpServerEntry(sandboxDir),
       [CONFLUENCE_RENDER_UI_SERVER_NAME]: confluenceRenderUiMcpServerEntry(sandboxDir),
+      // Google Calendar generative-UI v1 (Track A): the Google-Calendar-scoped render tool.
+      // Same UiBridge socket; the entry stamps `target: 'google-calendar'` so its surfaces
+      // land in the Google Calendar panel (Track B). Built from mcpConfig.ts so it can't drift.
+      [GOOGLE_CALENDAR_RENDER_UI_SERVER_NAME]: googleCalendarRenderUiMcpServerEntry(sandboxDir),
       // Slack read-only tools, registered the same main-managed way (FR-018);
       // its bridge socket threads through COSMOS_SLACK_BRIDGE_SOCKET (sibling).
       'cosmos-slack': {
@@ -310,7 +496,10 @@ function embeddedMcpConfig(sandboxDir: string): string {
         command: 'node',
         args: [confluencePath],
         env: { COSMOS_CONFLUENCE_BRIDGE_SOCKET: confluenceBridgeSocketPath(sandboxDir) }
-      }
+      },
+      // Google Calendar read-only tools (Track A); its OWN separate bridge socket.
+      // Built from mcpConfig.ts (googleCalendarToolsMcpServerEntry) so it can't drift.
+      [GOOGLE_CALENDAR_TOOLS_SERVER_NAME]: googleCalendarToolsMcpServerEntry(sandboxDir)
     }
   })
 }
@@ -335,12 +524,13 @@ function createSlackManager(window: BrowserWindow): SlackManager {
     client,
     tokenStore,
     runOAuth: () => {
-      // cosmos's registered public client id (read from .env / ambient env). Kept
-      // out of source so the build stays config-driven (SC: no hardcoded id).
-      const clientId = process.env.COSMOS_SLACK_CLIENT_ID
+      // settings-oauth-clients-v1 (FR-010): read the EFFECTIVE Slack client id from
+      // the resolver (Settings-over-env) at connect time, so a Settings save takes
+      // effect with no restart. Still fail-fast with a clear "not configured" message.
+      const clientId = effectiveClientConfig().slackClientId
       if (!clientId) {
         return Promise.reject(
-          new Error('COSMOS_SLACK_CLIENT_ID is not set — cannot start the Slack OAuth flow.')
+          new Error('No Slack client ID is configured (set it in Settings or COSMOS_SLACK_CLIENT_ID) — cannot start the Slack OAuth flow.')
         )
       }
       return runSlackOAuth({
@@ -379,31 +569,30 @@ function createJiraManager(window: BrowserWindow): JiraManager {
     client,
     tokenStore,
     runOAuth: () => {
-      const clientId = process.env.COSMOS_ATLASSIAN_CLIENT_ID
-      if (!clientId) {
+      // settings-oauth-clients-v1 (FR-010): the ONE Atlassian client (id + optional
+      // secret) is resolved Settings-over-env at connect time. The secret stays in main
+      // (FR-007) — read here, attached to the OAuth exchange, never logged/IPC'd.
+      const eff = effectiveClientConfig()
+      if (!eff.atlassianClientId) {
         // FR-A04: fail fast with a clear "not configured" message; no token stored.
         return Promise.reject(
-          new Error('COSMOS_ATLASSIAN_CLIENT_ID is not set — cannot start the Jira OAuth flow.')
+          new Error('No Atlassian client ID is configured (set it in Settings or COSMOS_ATLASSIAN_CLIENT_ID) — cannot start the Jira OAuth flow.')
         )
       }
       return runAtlassianOAuth({
         scopes: JIRA_OAUTH_SCOPES,
-        clientId,
-        ...(process.env.COSMOS_ATLASSIAN_CLIENT_SECRET
-          ? { clientSecret: process.env.COSMOS_ATLASSIAN_CLIENT_SECRET }
-          : {}),
+        clientId: eff.atlassianClientId,
+        ...(eff.atlassianClientSecret ? { clientSecret: eff.atlassianClientSecret } : {}),
         openExternal: (url: string) => {
           void shell.openExternal(url)
         }
       })
     },
     refresh: (refreshToken: string) => {
-      const clientId = process.env.COSMOS_ATLASSIAN_CLIENT_ID ?? ''
+      const eff = effectiveClientConfig()
       return refreshAtlassianToken({
-        clientId,
-        ...(process.env.COSMOS_ATLASSIAN_CLIENT_SECRET
-          ? { clientSecret: process.env.COSMOS_ATLASSIAN_CLIENT_SECRET }
-          : {}),
+        clientId: eff.atlassianClientId ?? '',
+        ...(eff.atlassianClientSecret ? { clientSecret: eff.atlassianClientSecret } : {}),
         refreshToken
       })
     },
@@ -433,38 +622,92 @@ function createConfluenceManager(window: BrowserWindow): ConfluenceManager {
     client,
     tokenStore,
     runOAuth: () => {
-      const clientId = process.env.COSMOS_ATLASSIAN_CLIENT_ID
-      if (!clientId) {
+      const eff = effectiveClientConfig()
+      if (!eff.atlassianClientId) {
         return Promise.reject(
           new Error(
-            'COSMOS_ATLASSIAN_CLIENT_ID is not set — cannot start the Confluence OAuth flow.'
+            'No Atlassian client ID is configured (set it in Settings or COSMOS_ATLASSIAN_CLIENT_ID) — cannot start the Confluence OAuth flow.'
           )
         )
       }
       return runAtlassianOAuth({
         scopes: CONFLUENCE_OAUTH_SCOPES,
-        clientId,
-        ...(process.env.COSMOS_ATLASSIAN_CLIENT_SECRET
-          ? { clientSecret: process.env.COSMOS_ATLASSIAN_CLIENT_SECRET }
-          : {}),
+        clientId: eff.atlassianClientId,
+        ...(eff.atlassianClientSecret ? { clientSecret: eff.atlassianClientSecret } : {}),
         openExternal: (url: string) => {
           void shell.openExternal(url)
         }
       })
     },
     refresh: (refreshToken: string) => {
-      const clientId = process.env.COSMOS_ATLASSIAN_CLIENT_ID ?? ''
+      const eff = effectiveClientConfig()
       return refreshAtlassianToken({
-        clientId,
-        ...(process.env.COSMOS_ATLASSIAN_CLIENT_SECRET
-          ? { clientSecret: process.env.COSMOS_ATLASSIAN_CLIENT_SECRET }
-          : {}),
+        clientId: eff.atlassianClientId ?? '',
+        ...(eff.atlassianClientSecret ? { clientSecret: eff.atlassianClientSecret } : {}),
         refreshToken
       })
     },
     onStatusChanged: (status: ConfluenceConnectionStatus) => {
       if (!window.isDestroyed()) {
         window.webContents.send(ConfluenceChannelName.StatusChanged, status)
+      }
+    }
+  })
+}
+
+/**
+ * Build the GoogleCalendarManager + its foundation (token store, client, OAuth runner,
+ * refresher). Google Calendar integration v1 (Track A) — READ-ONLY. Google is a
+ * CONFIDENTIAL client, so the client id + secret are resolved Settings-over-env at
+ * connect time and read here in main only; the secret is attached to the OAuth/refresh
+ * exchange and NEVER logged, IPC'd, bridged, or returned (SC-009). The token lives only
+ * here, encrypted via safeStorage. Status changes push to the renderer as
+ * `googleCalendar:statusChanged`. Fully separate connection (its own encrypted token).
+ */
+function createGoogleCalendarManager(window: BrowserWindow): GoogleCalendarManager {
+  const tokenStore = new TokenStore({
+    filePath: join(app.getPath('userData'), 'integrations', 'googleCalendar.token.enc'),
+    dirPath: join(app.getPath('userData'), 'integrations'),
+    safeStorage,
+    fs: { existsSync, readFileSync, writeFileSync, mkdirSync, rmSync }
+  })
+  const client = new GoogleCalendarClient()
+  return new GoogleCalendarManager({
+    client,
+    tokenStore,
+    runOAuth: () => {
+      // Resolve the EFFECTIVE Google client id + secret (Settings-over-env) at connect
+      // time, so a Settings save takes effect with no restart. Google is confidential —
+      // BOTH the id and the secret are required; fail fast with a clear message when
+      // either is missing (no token stored). The secret stays in main.
+      const eff = effectiveClientConfig()
+      if (!eff.googleClientId || !eff.googleClientSecret) {
+        return Promise.reject(
+          new Error(
+            'Google Calendar is not configured (set the client ID + secret in Settings or COSMOS_GOOGLE_CLIENT_ID / COSMOS_GOOGLE_CLIENT_SECRET) — cannot start the Google OAuth flow.'
+          )
+        )
+      }
+      return runGoogleOAuth({
+        scopes: GOOGLE_CALENDAR_OAUTH_SCOPES,
+        clientId: eff.googleClientId,
+        clientSecret: eff.googleClientSecret,
+        openExternal: (url: string) => {
+          void shell.openExternal(url)
+        }
+      })
+    },
+    refresh: (refreshTok: string) => {
+      const eff = effectiveClientConfig()
+      return refreshGoogleToken({
+        clientId: eff.googleClientId ?? '',
+        clientSecret: eff.googleClientSecret ?? '',
+        refreshToken: refreshTok
+      })
+    },
+    onStatusChanged: (status: GoogleCalendarConnectionStatus) => {
+      if (!window.isDestroyed()) {
+        window.webContents.send(GoogleCalendarChannelName.StatusChanged, status)
       }
     }
   })
@@ -484,6 +727,9 @@ function createPtyManager(window: BrowserWindow, sandboxDir: string): PtyManager
         // The pane is gone (or about to be re-minted) — drop its session mapping so a
         // stale id is never persisted (FR-018/FR-019).
         terminalSessionMap.delete(payload.paneId)
+        // terminal-file-explorer-v1 (FR-006/FR-016): the pane's root is no longer live; release
+        // its fs watcher so it never fires against a dead root.
+        fsExplorer?.stopWatch(payload.paneId)
         if (!window.isDestroyed()) {
           window.webContents.send(PtyChannel.Exit, payload)
         }
@@ -521,7 +767,31 @@ function registerIpcHandlers(): void {
     // session-persistence-v1 D2/FR-019/FR-020: main owns the pane's `claude` session
     // id. A pane queued for resume (seeded at session:load) spawns `--resume`; else a
     // fresh `--session-id` is minted. Either way the id+cwd are recorded for save.
-    ptyManager?.start(payload.paneId, paneSpawnFor(payload.paneId, sandboxDirCached))
+    // terminal-open-directory-picker-v1 FR-004: a freshly-picked tab carries the chosen
+    // `cwd`; for a fresh spawn it overrides the sandbox cwd (a resumed pane ignores it).
+    ptyManager?.start(payload.paneId, paneSpawnFor(payload.paneId, sandboxDirCached, payload.cwd))
+  })
+
+  // terminal-open-directory-picker-v1 (FR-002/FR-003/FR-006): open the native OS
+  // directory picker in MAIN and resolve with the chosen absolute path, or null on
+  // cancel. Request/response (`invoke`/`handle`); any inbound arg is ignored (the
+  // request carries no field). A dialog error resolves to `{ path: null }` (cancel-like)
+  // rather than rejecting, so the renderer never crashes (SC-005). The chosen path is a
+  // user-selected local filesystem path, NOT a secret — and it is not logged here.
+  ipcMain.handle(PtyChannel.PickDirectory, async (): Promise<PtyPickDirectoryResult> => {
+    try {
+      const result =
+        mainWindow && !mainWindow.isDestroyed()
+          ? await dialog.showOpenDialog(mainWindow, { properties: ['openDirectory'] })
+          : await dialog.showOpenDialog({ properties: ['openDirectory'] })
+      if (result.canceled || result.filePaths.length === 0) {
+        return { path: null }
+      }
+      return { path: result.filePaths[0] }
+    } catch {
+      // Treat any dialog failure as a cancel — no spawn, no error surfaced (FR-006).
+      return { path: null }
+    }
   })
 
   // FR-004 (panel-tabs v1 FR-021): forward keyboard input to the addressed pane
@@ -564,7 +834,52 @@ function registerIpcHandlers(): void {
     // is never persisted or resumed (FR-018).
     terminalSessionMap.delete(payload.paneId)
     terminalResumeMap.delete(payload.paneId)
+    // terminal-file-explorer-v1 (FR-016): release the pane's fs watcher on tab close so no
+    // watcher leaks. (The session map delete above also makes its root unresolvable.)
+    fsExplorer?.stopWatch(payload.paneId)
     ptyManager?.kill(payload.paneId)
+  })
+
+  // terminal-file-explorer-v1 (FR-004/FR-022/FR-023): list a root-relative directory for the
+  // tree. Validated at the boundary (invalid → warn + ignore → denied result, never a crash).
+  // Main resolves the root by paneId and CONFINES the path; an out-of-root/missing/denied
+  // target yields a typed failure, never an out-of-root read (SC-005).
+  ipcMain.handle(FsChannel.List, (_e: IpcMainInvokeEvent, raw: unknown) => {
+    const payload = validateFsPath(raw, FsChannel.List)
+    if (!payload) {
+      return { ok: false as const, reason: 'out-of-root' as const }
+    }
+    return fsExplorer?.list(payload.paneId, payload.relPath) ?? { ok: false, reason: 'out-of-root' }
+  })
+
+  // terminal-file-explorer-v1 (FR-008/FR-009/FR-010/FR-011): read a root-relative file for the
+  // viewer. Returns a text body, an image MARKER (bytes ride `cosmos-file://`, not IPC), or a
+  // not-previewable reason — never raw binary bytes, never a throw.
+  ipcMain.handle(FsChannel.Read, (_e: IpcMainInvokeEvent, raw: unknown) => {
+    const payload = validateFsPath(raw, FsChannel.Read)
+    if (!payload) {
+      return { ok: false as const, reason: 'out-of-root' as const }
+    }
+    return fsExplorer?.read(payload.paneId, payload.relPath) ?? { ok: false, reason: 'out-of-root' }
+  })
+
+  // terminal-file-explorer-v1 (FR-015/FR-016): begin watching this pane's root. A pane with no
+  // live root creates no watcher (FR-006). Fire-and-forget; validated.
+  ipcMain.on(FsChannel.WatchStart, (_event: IpcMainEvent, raw: unknown) => {
+    const payload = validateFsWatch(raw, FsChannel.WatchStart)
+    if (!payload) {
+      return // invalid -> warned + ignored (SC-005)
+    }
+    fsExplorer?.startWatch(payload.paneId)
+  })
+
+  // terminal-file-explorer-v1 (FR-016): release this pane's watcher (explorer unmount).
+  ipcMain.on(FsChannel.WatchStop, (_event: IpcMainEvent, raw: unknown) => {
+    const payload = validateFsWatch(raw, FsChannel.WatchStop)
+    if (!payload) {
+      return // invalid -> warned + ignored (SC-005)
+    }
+    fsExplorer?.stopWatch(payload.paneId)
   })
 
   // session-persistence-v1 (FR-001/FR-003/FR-005): read the persisted snapshot once
@@ -707,12 +1022,16 @@ function registerIpcHandlers(): void {
     console.log('[agent] submit utterance=', JSON.stringify(payload.utterance), 'target=', payload.target)
     // Jira generative-UI v2 (D2): thread the validated render target so the run is
     // granted ONLY that target's render tool (jira vs generated-ui).
-    agentRunner?.run(payload.utterance, payload.target)
+    // open-prompt-view-context-v1: thread the validated non-secret viewContext so deictic
+    // utterances resolve via grounding (FR-007); absent ⇒ exactly today's behaviour.
+    agentRunner?.run(payload.utterance, payload.target, payload.viewContext)
   })
 
   registerSlackIpcHandlers()
   registerJiraIpcHandlers()
   registerConfluenceIpcHandlers()
+  registerGoogleCalendarIpcHandlers()
+  registerSettingsIpcHandlers()
 }
 
 /**
@@ -763,6 +1082,16 @@ function registerSlackIpcHandlers(): void {
       return badParams
     }
     return slackManager.getUser(params)
+  })
+  // slack-send-message-v1 (FR-004/FR-005): the first write. Validate at the boundary
+  // (object + non-empty channelId + non-empty text + optional threadTs); main attaches
+  // the token inside SlackManager — it never crosses this channel (FR-006).
+  ipcMain.handle(SlackChannelName.Send, (_e: IpcMainInvokeEvent, raw: unknown) => {
+    const params = validateSlackSend(raw)
+    if (!params || !slackManager) {
+      return badParams
+    }
+    return slackManager.sendMessage(params)
   })
 }
 
@@ -970,6 +1299,121 @@ async function handleJiraIssueDetail(issueKey: string): Promise<void> {
 }
 
 /**
+ * Register the Google Calendar IPC handlers (Google Calendar integration v1, Track A).
+ * READ-ONLY — `getStatus`/`connect`/`disconnect`/`listEvents` + the per-switch default
+ * view. Same validate-at-the-boundary + token-stays-in-main discipline as Jira (SC-009).
+ * No write handler, no action dispatcher, no scope-gate.
+ */
+function registerGoogleCalendarIpcHandlers(): void {
+  const notReady: GoogleCalendarConnectionStatus = { state: 'not_connected' }
+  const badParams = { ok: false as const, kind: 'network' as const, message: 'Invalid request.' }
+
+  ipcMain.handle(GoogleCalendarChannelName.GetStatus, () => googleCalendarManager?.getStatus() ?? notReady)
+  ipcMain.handle(GoogleCalendarChannelName.Connect, () => googleCalendarManager?.connect() ?? notReady)
+  ipcMain.handle(GoogleCalendarChannelName.Disconnect, () => googleCalendarManager?.disconnect() ?? notReady)
+
+  ipcMain.handle(GoogleCalendarChannelName.ListEvents, (_e: IpcMainInvokeEvent, raw: unknown) => {
+    const params = validateGoogleCalendarListEvents(raw)
+    if (!params || !googleCalendarManager) {
+      return badParams
+    }
+    return googleCalendarManager.listEvents(params)
+  })
+
+  // The Google Calendar panel wants the default view. Run ONE bounded events read (single
+  // page, NO pagination loop) over the target month's window (current month when no target
+  // is supplied), compose the default view, and push it `target: 'google-calendar'`.
+  // Fire-and-forget: the rail switch never blocks here. Validate at the boundary with the
+  // CALENDAR-SPECIFIC validator (calendar-month-year-nav-v1): an absent OR invalid target
+  // returns `{}` → current-month fallback (the tab still repaints, never hangs); only a
+  // non-object is dropped (`null`).
+  ipcMain.on(GoogleCalendarChannelName.RequestDefaultView, (_event: IpcMainEvent, raw: unknown) => {
+    const payload = validateGoogleCalendarRequestDefaultView(raw)
+    if (!payload || !googleCalendarManager) {
+      return // non-object -> warned + dropped; or manager not ready
+    }
+    // calendar-week-day-views-v1 (FR-012): the validated payload carries the (optional) 1-based
+    // anchor + granularity. A complete { year, month } navigates; an empty {} (absent/invalid)
+    // ⇒ current month; `view`/`day` select the week/day window (the window builder owns the
+    // 1→0 conversion + the Sunday week / single-day spans). Pass the validated payload straight
+    // through as the anchor — it is structurally `{ year?, month?, day?, view? }`, no secret.
+    const anchor: GoogleCalendarDefaultViewAnchor | undefined =
+      payload.year !== undefined ||
+      payload.month !== undefined ||
+      payload.day !== undefined ||
+      payload.view !== undefined
+        ? payload
+        : undefined
+    void handleGoogleCalendarDefaultView(anchor)
+  })
+}
+
+/**
+ * Run a bounded Google Calendar events read over a forward window and push the composed
+ * surface `target: 'google-calendar'` (Track A). Mirrors `handleJiraView` structurally
+ * but with the simpler UN-BOUND default-view builder (the refreshable adapter binding is
+ * Track B / deferred):
+ *  - on `ok` → `buildDefaultViewSurface(page, window)` (EventList, incl. its empty state).
+ *  - on `reconnect_needed`/`not_connected` → push NOTHING; the manager drives
+ *    `statusChanged` so the panel routes to the native Connect/Reconnect.
+ *  - on any other failure (`rate_limited`/`network`, or a thrown error) → push a single
+ *    calm, recoverable `Notice` surface. Never throws; never blocks the rail switch.
+ * Read-only — NOT an AgentRunner run; the token stays in main.
+ */
+async function handleGoogleCalendarDefaultView(
+  anchor?: GoogleCalendarDefaultViewAnchor
+): Promise<void> {
+  if (!googleCalendarManager) {
+    return
+  }
+  const window = googleCalendarDefaultWindow(anchor)
+  // calendar-week-day-views-v1 (FR-001): the granularity rides onto the EventList root so the
+  // catalog routes month grid vs week/day schedule. Absent ⇒ 'month' (the catalog's default).
+  const view = anchor?.view ?? 'month'
+  let result
+  try {
+    // shared-calendars-v1 (FR-004): aggregate events from ALL accessible calendars over the
+    // SAME month window (bounded fan-out merge, partial failures degrade per FR-012).
+    result = await googleCalendarManager.listAggregatedEvents(window)
+  } catch (err) {
+    console.warn('[google-calendar] view read threw (handled):', err instanceof Error ? err.message : err)
+    pushRenderToRenderer({
+      requestId: randomUUID(),
+      spec: buildGoogleCalendarNoticeSurface({
+        kind: 'error',
+        message: 'Could not load your calendar. Try again shortly.'
+      }),
+      target: 'google-calendar'
+    })
+    return
+  }
+
+  if (result.ok) {
+    // The calendars[]-bearing EventList root feeds BOTH the native panel and the agent/MCP
+    // render path (FR-016); the per-calendar legend + color-by-calendar live in the catalog.
+    pushRenderToRenderer({
+      requestId: randomUUID(),
+      spec: buildGoogleCalendarSharedViewSurface(result.data, window, view),
+      target: 'google-calendar'
+    })
+    return
+  }
+
+  // reconnect_needed / not_connected route through the native Connect/Reconnect
+  // (statusChanged); don't push a surface for them.
+  if (result.kind === 'reconnect_needed' || result.kind === 'not_connected') {
+    return
+  }
+
+  // rate_limited / network -> a calm recoverable Notice.
+  pushRenderToRenderer({
+    requestId: randomUUID(),
+    spec: buildGoogleCalendarNoticeSurface({ kind: 'error', message: result.message }),
+    target: 'google-calendar'
+  })
+}
+
+/**
  * Register the Confluence IPC `invoke` handlers (FR-A12, FR-X04). Same validate-at-
  * the-boundary + token-stays-in-main discipline as Jira (FR-A11, SC-009).
  */
@@ -1005,10 +1449,152 @@ function registerConfluenceIpcHandlers(): void {
 }
 
 /**
+ * settings-oauth-clients-v1 — the `settings:` handlers (FR-004/FR-007/FR-008).
+ * GetConfig returns the renderer-safe status (never the secret value). Save and
+ * ClearField persist into the encrypted main-only store, then — if a client's
+ * EFFECTIVE id/secret changed (diffEffective) — force-disconnect the affected
+ * integration(s): Slack→Slack; Atlassian→Jira AND Confluence. The raw payload is
+ * never logged (a secret may ride in Save), so failures pass only descriptive text.
+ */
+function registerSettingsIpcHandlers(): void {
+  ipcMain.handle(SettingsChannelName.GetConfig, () =>
+    toStatus(clientConfigStore?.load() ?? {}, clientConfigEnv())
+  )
+
+  ipcMain.handle(SettingsChannelName.Save, (_e: IpcMainInvokeEvent, raw: unknown) => {
+    const payload = validateClientConfigSave(raw)
+    if (!payload) {
+      return invalidSaveResult()
+    }
+    return applyClientConfigMutation((current) => {
+      const next: ClientConfig = { ...current }
+      if (payload.slack) {
+        next.slack = { ...next.slack, ...payload.slack }
+      }
+      if (payload.atlassian) {
+        next.atlassian = { ...next.atlassian, ...payload.atlassian }
+      }
+      return next
+    })
+  })
+
+  ipcMain.handle(SettingsChannelName.ClearField, (_e: IpcMainInvokeEvent, raw: unknown) => {
+    const payload = validateClientConfigClear(raw)
+    if (!payload) {
+      return invalidSaveResult()
+    }
+    return applyClientConfigMutation((current) => clearClientConfigField(current, payload.field))
+  })
+}
+
+/** A renderer-safe failure result for a payload the boundary validator rejected. */
+function invalidSaveResult(): ClientConfigSaveResult {
+  return {
+    ok: false,
+    errorKind: 'invalid',
+    message: 'The settings payload was malformed and was ignored.',
+    status: toStatus(clientConfigStore?.load() ?? {}, clientConfigEnv()),
+    disconnected: { slack: false, jira: false, confluence: false, 'google-calendar': false }
+  }
+}
+
+/** Drop one stored field; empty sub-objects are pruned so the field reverts to env. */
+function clearClientConfigField(current: ClientConfig, field: string): ClientConfig {
+  const next: ClientConfig = {
+    ...(current.slack ? { slack: { ...current.slack } } : {}),
+    ...(current.atlassian ? { atlassian: { ...current.atlassian } } : {})
+  }
+  if (field === 'slack.clientId' && next.slack) {
+    delete next.slack.clientId
+    if (Object.keys(next.slack).length === 0) delete next.slack
+  } else if (field === 'atlassian.clientId' && next.atlassian) {
+    delete next.atlassian.clientId
+    if (Object.keys(next.atlassian).length === 0) delete next.atlassian
+  } else if (field === 'atlassian.clientSecret' && next.atlassian) {
+    delete next.atlassian.clientSecret
+    if (Object.keys(next.atlassian).length === 0) delete next.atlassian
+  }
+  return next
+}
+
+/**
+ * Persist a mutation, then force-disconnect any integration whose EFFECTIVE creds
+ * changed. Refuses to write plaintext when encryption is unavailable (the store
+ * throws); on that or any write failure nothing is persisted and the prior status
+ * is returned. Never logs the config (secret-bearing).
+ */
+function applyClientConfigMutation(
+  mutate: (current: ClientConfig) => ClientConfig
+): ClientConfigSaveResult {
+  const env = clientConfigEnv()
+  const before = effectiveClientConfig()
+  const current = clientConfigStore?.load() ?? {}
+  const next = mutate(current)
+
+  try {
+    clientConfigStore?.save(next)
+  } catch (err) {
+    const encryption = err instanceof ClientConfigEncryptionUnavailableError
+    return {
+      ok: false,
+      errorKind: encryption ? 'encryption_unavailable' : 'write_failed',
+      message: encryption
+        ? 'OS encryption is unavailable, so the credentials were not saved.'
+        : 'The credentials could not be written to disk.',
+      status: toStatus(current, env),
+      disconnected: { slack: false, jira: false, confluence: false, 'google-calendar': false }
+    }
+  }
+
+  const after = resolveEffective(next, env)
+  const changed = diffEffective(before, after)
+  const disconnected = { slack: false, jira: false, confluence: false, 'google-calendar': false }
+  if (changed.slack && slackManager?.getStatus().state === 'connected') {
+    slackManager.disconnect()
+    disconnected.slack = true
+  }
+  if (changed.atlassian) {
+    if (jiraManager?.getStatus().state === 'connected') {
+      jiraManager.disconnect()
+      disconnected.jira = true
+    }
+    if (confluenceManager?.getStatus().state === 'connected') {
+      confluenceManager.disconnect()
+      disconnected.confluence = true
+    }
+  }
+  // google-calendar-v1 (Track A): an effective Google client id/secret change
+  // force-disconnects the Google Calendar connection — INDEPENDENT of Slack/Atlassian.
+  if (changed.google && googleCalendarManager?.getStatus().state === 'connected') {
+    googleCalendarManager.disconnect()
+    disconnected['google-calendar'] = true
+  }
+
+  return { ok: true, status: toStatus(next, env), disconnected }
+}
+
+/**
+ * open-prompt-spinner-gating-v1 (FR-001/FR-002): whether the CURRENT headless run has
+ * pushed a `generated-ui` `ui:render` surface frame. Plain main-side state — `AgentRunner`
+ * is single-run (at most one child in flight), so a single boolean is sufficient. Set in
+ * `pushRenderToRenderer` (the one place main learns a generated-ui surface is produced),
+ * reset on a run's `started`, and read+reset when stamping the terminal `completed` status.
+ * It is the non-secret source of the `producedSurface` signal (no token/transcript).
+ */
+let renderPushedForRun = false
+
+/**
  * Push a surface to the renderer's Generated-UI panel (FR-004). Used by the
  * UiBridge; guards against a destroyed window.
  */
 function pushRenderToRenderer(payload: UiRenderPayload): void {
+  // open-prompt-spinner-gating-v1: a `generated-ui` surface frame for the in-flight run is
+  // the signal that this run is a UI-generation run (only that target keeps the blocking
+  // spinner; the others settle display-only). Record it so the terminal status can carry
+  // `producedSurface`. Other targets do not engage the Open Prompt spinner gate.
+  if (payload.target === 'generated-ui') {
+    renderPushedForRun = true
+  }
   if (mainWindow && !mainWindow.isDestroyed()) {
     mainWindow.webContents.send(UiChannel.Render, payload)
   }
@@ -1040,6 +1626,30 @@ function createWindow(): void {
       nodeIntegration: false,
       sandbox: false
     }
+  })
+
+  // calendar-event-detail-v1 (design §2.8): route any in-page `target="_blank"` anchor (the
+  // event-detail "Open in Google Calendar" link) to the SYSTEM browser via shell.openExternal
+  // and DENY the in-app child window — standard Electron window config, NOT a new IPC channel.
+  // Only http(s) is opened (a guard against a file:/javascript: URL ever being navigated to).
+  mainWindow.webContents.setWindowOpenHandler(({ url }) => {
+    if (/^https?:\/\//i.test(url)) {
+      void shell.openExternal(url)
+    }
+    return { action: 'deny' }
+  })
+
+  // terminal-file-explorer-v1 (FR-014/FR-022): build the file-explorer manager bound to THIS
+  // window. `getRoot` resolves a pane's root from `terminalSessionMap` (never a renderer root);
+  // `onChanged` sends the coarse, debounced `fs:changed` so the renderer re-lists seamlessly.
+  fsExplorer = createFsExplorer({
+    getRoot: paneRoot,
+    onChanged: (paneId) => {
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.send(FsChannel.Changed, { paneId })
+      }
+    },
+    fs: diskExplorerFs
   })
 
   // TEMP DIAGNOSTIC: surface renderer-side crashes/console errors into the main
@@ -1153,6 +1763,16 @@ function createWindow(): void {
   })
   uiBridge.start()
 
+  // settings-oauth-clients-v1 (FR-006): the encrypted, main-only client-config store.
+  // The effectiveClientConfig() resolver and the settings: handlers read/write it; the
+  // Atlassian secret it holds never leaves main.
+  clientConfigStore = new ClientConfigStore({
+    filePath: join(app.getPath('userData'), 'integrations', 'clientConfig.enc'),
+    dirPath: join(app.getPath('userData'), 'integrations'),
+    safeStorage,
+    fs: { existsSync, readFileSync, writeFileSync, mkdirSync, rmSync }
+  })
+
   // Slack: one manager (token only here, encrypted — FR-006/SC-008) serves both
   // the native panel (IPC handlers above) and the MCP tools (via SlackBridge).
   slackManager = createSlackManager(mainWindow)
@@ -1191,6 +1811,16 @@ function createWindow(): void {
   })
   confluenceBridge.start()
 
+  // Google Calendar (Track A): one manager (token only here, encrypted) serving both the
+  // native panel (IPC) and the MCP tools (via GoogleCalendarBridge). READ-ONLY — no write
+  // path, no action dispatcher. Fully separate from Slack/Atlassian (its own token + socket).
+  googleCalendarManager = createGoogleCalendarManager(mainWindow)
+  googleCalendarBridge = new GoogleCalendarBridge({
+    socketPath: googleCalendarBridgeSocketPath(sandboxDir),
+    manager: googleCalendarManager
+  })
+  googleCalendarBridge.start()
+
   // jira-generative-adapter-v1 (FR-009/FR-012): the SHARED adapter dispatcher, wired
   // with the JIRA resolver (maps a descriptor → jiraManager READ, token in main). It
   // pushes `updateDataModel` (keyed by surfaceId) on refresh + load-more/pagination and
@@ -1227,8 +1857,24 @@ function createWindow(): void {
     {
       onStatus: (payload: AgentStatusPayload) => {
         console.log('[agent] status=', payload.state, payload.state === 'error' ? payload.message ?? '' : '')
-        if (mainWindow && !mainWindow.isDestroyed()) {
-          mainWindow.webContents.send(AgentChannel.Status, payload)
+        // open-prompt-spinner-gating-v1 (FR-001/FR-002): track, per run, whether a
+        // `generated-ui` surface was pushed, and stamp it onto the terminal `completed`
+        // status as the non-secret `producedSurface` signal so the Open Prompt panel can
+        // release a plain-command tab deterministically (FR-004). `started` resets the
+        // flag for the new run; `completed` reads it then resets for the next run.
+        let outgoing: AgentStatusPayload = payload
+        if (payload.state === 'started') {
+          renderPushedForRun = false
+        } else if (payload.state === 'completed') {
+          outgoing = { ...payload, producedSurface: renderPushedForRun }
+          renderPushedForRun = false
+        }
+        // FR-008: validate warn-and-ignore at the main boundary — a non-boolean
+        // producedSurface (never expected here, since main sets it) would be dropped and
+        // the status still sent; a malformed status is dropped entirely (never crashes).
+        const validated = validateAgentStatusPayload(outgoing)
+        if (mainWindow && !mainWindow.isDestroyed() && validated) {
+          mainWindow.webContents.send(AgentChannel.Status, validated)
         }
       }
     },
@@ -1247,6 +1893,9 @@ function createWindow(): void {
       return
     }
     ptyManager?.killAll()
+    // terminal-file-explorer-v1 (FR-016/SC-006): a reload re-mounts every explorer; release
+    // ALL fs watchers so none leaks across the navigation (the renderer re-issues watchStart).
+    fsExplorer?.stopAll()
     // Edge case: a render_ui call pending across a renderer reload MUST NOT hang;
     // resolve it cancel so Claude is not blocked indefinitely (FR-009).
     uiBridge?.cancelActive()
@@ -1262,6 +1911,9 @@ function createWindow(): void {
   mainWindow.on('closed', () => {
     ptyManager?.killAll()
     ptyManager = null
+    // terminal-file-explorer-v1 (FR-016/SC-006): release every fs watcher on window teardown.
+    fsExplorer?.stopAll()
+    fsExplorer = null
     uiBridge?.stop()
     uiBridge = null
     slackBridge?.stop()
@@ -1275,6 +1927,10 @@ function createWindow(): void {
     confluenceBridge?.stop()
     confluenceBridge = null
     confluenceManager = null
+    googleCalendarBridge?.stop()
+    googleCalendarBridge = null
+    googleCalendarManager = null
+    clientConfigStore = null
     agentRunner?.dispose()
     agentRunner = null
     mainWindow = null
@@ -1353,6 +2009,17 @@ app.whenReady().then(() => {
   // graceful broken image (FR-010).
   installConfluenceImageProtocol(() => confluenceManager?.currentAuth() ?? null)
 
+  // slack-rich-message-render-v1: install the `cosmos-slack-img` handler. The resolver reads
+  // the LIVE Slack auth (token) from the manager on each image request; the token is attached
+  // only to the handler's outbound `net.fetch` and never crosses into the renderer (FR-014).
+  // Not connected → null → graceful broken image (FR-010).
+  installSlackImageProtocol(() => slackManager?.currentAuth() ?? null)
+
+  // terminal-file-explorer-v1 (FR-027/FR-028): install the `cosmos-file` handler. The resolver
+  // looks up the tab's root by paneId; the handler confines every read to that subtree (no
+  // token, local files only). A forged/out-of-root/missing ref degrades to a broken image.
+  installLocalFileProtocol(paneRoot)
+
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) {
       createWindow()
@@ -1376,6 +2043,10 @@ app.on('window-all-closed', () => {
   confluenceBridge?.stop()
   confluenceBridge = null
   confluenceManager = null
+  googleCalendarBridge?.stop()
+  googleCalendarBridge = null
+  googleCalendarManager = null
+  clientConfigStore = null
   agentRunner?.dispose()
   agentRunner = null
   if (process.platform !== 'darwin') {
@@ -1390,5 +2061,6 @@ app.on('before-quit', () => {
   slackBridge?.stop()
   jiraBridge?.stop()
   confluenceBridge?.stop()
+  googleCalendarBridge?.stop()
   agentRunner?.dispose()
 })

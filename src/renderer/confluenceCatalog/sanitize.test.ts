@@ -235,6 +235,29 @@ describe('sanitizeConfluenceHtml — content/attachment images (confluence-conte
     expect(out).not.toContain('/wiki/download/attachments/123/picture.png')
   })
 
+  it('rewrites an embedded ATTACHMENT <img> to an attachment-id ref, NOT the legacy blob path (confluence-attachment-scope-v1)', () => {
+    // The real failing-page markup: a LEGACY /wiki/download/attachments URL (which 401s under
+    // granular scopes) carrying data-linked-resource-id (the attachment id).
+    const out = sanitize(
+      '<p><img class="confluence-embedded-image"' +
+        ' src="https://cosmos-works.atlassian.net/wiki/download/attachments/65822/recently_updated.svg?version=1&amp;api=v2"' +
+        ' data-linked-resource-id="65846" data-linked-resource-type="attachment"></p>'
+    )
+    // Survives as an <img> with the opaque proxy scheme ...
+    expect(out).toMatch(/<img/i)
+    const m = out.match(/src="cosmos-confluence-img:\/\/confluence\/([A-Za-z0-9_-]+)"/)
+    expect(m).not.toBeNull()
+    // ... whose encoded ref carries the ATTACHMENT ID (attachment:65846), not the legacy path.
+    const decoded = Buffer.from(
+      m![1].replace(/-/g, '+').replace(/_/g, '/'),
+      'base64'
+    ).toString('utf8')
+    expect(decoded).toBe('attachment:65846')
+    // The legacy blob URL must NOT leak into the DOM or the ref.
+    expect(out).not.toContain('/wiki/download/attachments/65822')
+    expect(out).not.toContain('cosmos-works.atlassian.net')
+  })
+
   it('rewrites an absolute *.atlassian.net /wiki <img> to the opaque scheme', () => {
     const out = sanitize(
       '<img src="https://my-site.atlassian.net/wiki/download/attachments/9/a.png">'

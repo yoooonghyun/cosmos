@@ -129,7 +129,10 @@ export function buildBoundMessageListSurface(
   channelId: string,
   page: SlackPage<SlackMessage>
 ): SlackBoundSurface {
-  const rows = page.items.map(slackMessageRow)
+  // slack-generative-message-parity-v1 (FR-013): the first-paint SEED rows carry the same
+  // non-secret thread coords (channelId + threadTs) the refresh resolver injects, so the
+  // seeded "N replies" affordance is interactive before any refresh.
+  const rows = page.items.map((m) => slackMessageRow(m, channelId))
   return {
     spec: boundListSpec(SURFACE_SLACK_HISTORY, 'MessageList', 'messages', SLACK_MESSAGES_PATH),
     dataModel: listSeed(SURFACE_SLACK_HISTORY, SLACK_MESSAGES_PATH, rows, page.nextCursor),

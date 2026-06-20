@@ -22,15 +22,37 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { A2UIProvider, type A2UIAction } from '@a2ui-sdk/react/0.9'
-import { ChevronLeft, Hash, Loader2, MessageSquare, Search } from 'lucide-react'
+import {
+  AlertTriangle,
+  ChevronLeft,
+  ExternalLink,
+  Hash,
+  Loader2,
+  MessageSquare,
+  Search,
+  SendHorizontal,
+  X
+} from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
+import { Textarea } from '@/components/ui/textarea'
 import { Badge } from '@/components/ui/badge'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Avatar, AvatarFallback } from '@/components/ui/avatar'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { slackCatalog, SLACK_CATALOG_ID, SLACK_OPEN_CHANNEL_ACTION } from './slackCatalog'
+import { SlackMessageRow } from './slackCatalog/SlackMessageRow'
+import { parseMessageRuns } from './slackCatalog/messageContent'
+import { countLabel, SLACK_OPEN_THREAD_ACTION, type SlackOpenThreadContext } from './slackCatalog/logic'
+import {
+  type OpenThreadState,
+  openThread as openThreadTransition,
+  closeThread as closeThreadTransition,
+  dropThreadRoot,
+  isOpenableThreadPermalink,
+  messageListWrapClass
+} from './slackThreadPanelLogic'
 import { PanelTabStrip, type PanelTab } from './PanelTabStrip'
 import { PanelRefreshButton } from './PanelRefreshButton'
 import { panelRefreshInputsFor } from './panelRefreshLogic'
@@ -39,10 +61,12 @@ import { ActiveTabSurface } from './ActiveTabSurface'
 import { PromptComposer } from './PromptComposer'
 import { SurfaceSpinner } from './SurfaceSpinner'
 import { useGenerativePanelTabs } from './useGenerativePanelTabs'
+import { contextChipFor, slackViewContext } from './viewContextCapture'
 import { useRestoredGenerativePanel } from './SessionProvider'
 import { surfaceSpinnerVisible } from './promptComposerLogic'
 import { usePerTabNav } from './usePerTabNav'
 import { useTabShortcuts } from './useTabShortcuts'
+import { canSubmitSlackMessage } from './slackComposerLogic'
 import type {
   SlackChannel,
   SlackConnectionStatus,
@@ -51,6 +75,7 @@ import type {
   SlackPage,
   SlackResult,
   SlackSearchMatch,
+  SlackSendResult,
   SlackUser
 } from '../shared/slack'
 
@@ -187,7 +212,13 @@ function ReconnectState({ onReconnect }: { onReconnect: () => void }): React.JSX
   )
 }
 
-/** One message row (history + thread). */
+/**
+ * One message row (history + thread) — a THIN adapter over the shared `SlackMessageRow`
+ * (slack-generative-message-parity-v1, OQ-3 = full unification, FR-017). The native and
+ * generated Slack surfaces now share ONE presentation, so wrap/author/timestamp/reply
+ * behavior cannot diverge. The only native-specific piece is the `onOpenThread` wiring
+ * (it carries the `SlackMessage`, vs. the catalog row's dispatched action).
+ */
 function MessageRow({
   message,
   onOpenThread
@@ -195,33 +226,17 @@ function MessageRow({
   message: SlackMessage
   onOpenThread?: (message: SlackMessage) => void
 }): React.JSX.Element {
-  const name = authorName(message.userId, message.userName)
   return (
-    <div className="flex gap-2.5 border-b border-border/60 px-3 py-2 last:border-b-0">
-      <Avatar size="sm" className="mt-0.5">
-        <AvatarFallback>{initials(name)}</AvatarFallback>
-      </Avatar>
-      <div className="min-w-0 flex-1">
-        <div className="flex items-baseline gap-2">
-          <span className="truncate text-sm font-medium text-foreground">{name}</span>
-          <span className="shrink-0 text-xs text-muted-foreground">{formatTs(message.ts)}</span>
-        </div>
-        <p className="whitespace-pre-wrap break-words text-sm text-card-foreground">
-          {message.text}
-        </p>
-        {onOpenThread && message.replyCount && message.replyCount > 0 ? (
-          <Button
-            type="button"
-            variant="link"
-            size="xs"
-            className="px-0"
-            onClick={() => onOpenThread(message)}
-          >
-            {message.replyCount} {message.replyCount === 1 ? 'reply' : 'replies'}
-          </Button>
-        ) : null}
-      </div>
-    </div>
+    <SlackMessageRow
+      ts={message.ts}
+      userId={message.userId}
+      {...(message.userName !== undefined ? { userName: message.userName } : {})}
+      text={message.text}
+      {...(message.replyCount !== undefined ? { replyCount: message.replyCount } : {})}
+      {...(message.customEmoji ? { customEmoji: message.customEmoji } : {})}
+      {...(message.images ? { images: message.images } : {})}
+      {...(onOpenThread ? { onOpenThread: () => onOpenThread(message) } : {})}
+    />
   )
 }
 
@@ -232,21 +247,24 @@ function MessageRow({
 type View =
   | { kind: 'channels' }
   | { kind: 'history'; channel: SlackChannel }
-  | { kind: 'thread'; channel: SlackChannel; parent: SlackMessage }
   | { kind: 'search'; query: string }
 
 /**
  * The native-base browser nav held PER-TAB (bug panel-shared-tab-nav-state-v1): the
- * drill-in `view` plus the in-progress `searchText`. Each tab keeps its own so opening
- * #general in tab 1 leaves tab 2 on its own view.
+ * drill-in `view`, the in-progress `searchText`, and the right-docked thread panel's
+ * open-thread state (thread-sidepanel v1, FR-013). Each tab keeps its own so opening
+ * #general in tab 1 leaves tab 2 on its own view + thread. `openThread` is the SINGLE
+ * source of truth for the docked thread region — fed by BOTH the native `onOpenThread`
+ * and the generative `SLACK_OPEN_THREAD_ACTION` (FR-001/FR-013).
  */
 interface SlackNav {
   view: View
   searchText: string
+  openThread: OpenThreadState
 }
 
-/** The default native-base nav for an unset / fresh tab (channel list, empty search). */
-const SLACK_NAV_DEFAULT: SlackNav = { view: { kind: 'channels' }, searchText: '' }
+/** The default native-base nav for an unset / fresh tab (channel list, empty search, no thread). */
+const SLACK_NAV_DEFAULT: SlackNav = { view: { kind: 'channels' }, searchText: '', openThread: null }
 
 /* ------------------------------------------------------------------------- *
  * Connection bar (design §2.1)
@@ -462,13 +480,21 @@ function MessageList({
   emptyText,
   onOpenThread,
   onReconnect,
-  resolveNames
+  resolveNames,
+  scroll = true
 }: {
   load: (cursor?: string) => Promise<SlackResult<SlackPage<SlackMessage>>>
   emptyText: string
   onOpenThread?: (message: SlackMessage) => void
   onReconnect: () => void
   resolveNames: (messages: SlackMessage[]) => Promise<SlackMessage[]>
+  /**
+   * Whether this list owns its own vertical scroll (bug slack-thread-unified-scroll-v1).
+   * `true` (default) — history/search: wrap in a `ScrollArea h-full` that fills the column.
+   * `false` — thread dock replies: render bare so root + divider + replies scroll as ONE
+   * region inside the single shared ScrollArea the thread dock places around them.
+   */
+  scroll?: boolean
 }): React.JSX.Element {
   const [items, setItems] = useState<SlackMessage[]>([])
   const [cursor, setCursor] = useState<string | undefined>(undefined)
@@ -517,32 +543,362 @@ function MessageList({
   if (loaded && items.length === 0) {
     return <EmptyLine>{emptyText}</EmptyLine>
   }
-  return (
-    <ScrollArea className="h-full">
-      <div className="flex flex-col">
-        {items.map((m) => (
-          <MessageRow key={m.ts} message={m} onOpenThread={onOpenThread} />
-        ))}
-        {cursor && (
-          <Button
-            type="button"
-            variant="ghost"
-            size="sm"
-            className="m-2 justify-center gap-1.5 text-muted-foreground"
-            onClick={() => void run(cursor)}
-            disabled={loadingMore}
-          >
-            {loadingMore ? (
-              <>
-                <Loader2 className="size-3.5 animate-spin" /> Loading…
-              </>
-            ) : (
-              'Load more'
-            )}
-          </Button>
-        )}
+  const body = (
+    <div className="flex flex-col">
+      {items.map((m) => (
+        <MessageRow key={m.ts} message={m} onOpenThread={onOpenThread} />
+      ))}
+      {cursor && (
+        <Button
+          type="button"
+          variant="ghost"
+          size="sm"
+          className="m-2 justify-center gap-1.5 text-muted-foreground"
+          onClick={() => void run(cursor)}
+          disabled={loadingMore}
+        >
+          {loadingMore ? (
+            <>
+              <Loader2 className="size-3.5 animate-spin" /> Loading…
+            </>
+          ) : (
+            'Load more'
+          )}
+        </Button>
+      )}
+    </div>
+  )
+  // bug slack-thread-unified-scroll-v1: history/search own their scroll (ScrollArea h-full);
+  // the thread dock passes scroll={false} so the replies flow bare inside the dock's single
+  // shared ScrollArea (root 본문 + divider + replies scroll as one), not a second region.
+  // The wrapper class for each mode is resolved by the node-tested messageListWrapClass.
+  if (!scroll) {
+    return body
+  }
+  return <ScrollArea className={messageListWrapClass(scroll)}>{body}</ScrollArea>
+}
+
+/* ------------------------------------------------------------------------- *
+ * Message composer — slack-send-message-v1 (design §1)
+ *
+ * One shared native control mounted in two homes: the channel-history footer
+ * (no threadTs) and the thread dock footer (with threadTs ⇒ thread reply). It owns
+ * its own draft / in-flight / error state; the parent supplies the resolved target,
+ * the `canSend` flag, an `onReconnect` for the missing-scope branch, and `onSent`
+ * (confirmed re-read). Enter sends, Shift+Enter newlines, IME-safe via isComposing.
+ * NOT a catalog node / MCP op — native panel chrome only (FR-016).
+ * ------------------------------------------------------------------------- */
+
+/** Map a send failure to a calm, non-alarming one-line message (design §3). */
+function sendErrorMessage(error: SlackError): string {
+  switch (error.kind) {
+    case 'not_connected':
+      return 'Not connected to Slack.'
+    case 'rate_limited':
+      return 'Slack is busy — try again shortly.'
+    case 'reconnect_needed':
+      return 'Your Slack connection expired — reconnect to continue.'
+    default:
+      return "Couldn't send — try again."
+  }
+}
+
+function SlackComposer({
+  channelId,
+  threadTs,
+  canSend,
+  placeholder,
+  ariaLabel,
+  onReconnect,
+  onSent
+}: {
+  channelId: string
+  threadTs?: string
+  canSend: boolean
+  placeholder: string
+  ariaLabel: string
+  onReconnect: () => void
+  onSent: (result: SlackSendResult) => void
+}): React.JSX.Element {
+  const [text, setText] = useState('')
+  const [sending, setSending] = useState(false)
+  const [error, setError] = useState<SlackError | null>(null)
+  const textareaRef = useRef<HTMLTextAreaElement>(null)
+
+  // canSend === false → replace the form with the reconnect-to-send affordance
+  // (design §3 last row). Do NOT show an enabled-but-failing send.
+  if (!canSend) {
+    return (
+      <div className="shrink-0 border-t border-border bg-card px-3 py-2.5">
+        <Alert
+          variant="destructive"
+          className="border-destructive/40 bg-destructive/15"
+          role="alert"
+        >
+          <AlertTitle>Reconnect to send</AlertTitle>
+          <AlertDescription>
+            Sending a message needs a one-time reconnect to grant write access.
+          </AlertDescription>
+        </Alert>
+        <Button
+          type="button"
+          variant="default"
+          size="sm"
+          className="mt-2"
+          onClick={onReconnect}
+        >
+          Reconnect Slack
+        </Button>
       </div>
-    </ScrollArea>
+    )
+  }
+
+  const canSubmit = canSubmitSlackMessage({ text, canSend, sending })
+
+  const doSend = async (): Promise<void> => {
+    if (!canSubmit) {
+      return
+    }
+    setSending(true)
+    setError(null)
+    const result = await window.cosmos.slack.sendMessage({
+      channelId,
+      text: text.trim(),
+      ...(threadTs ? { threadTs } : {})
+    })
+    setSending(false)
+    if (result.ok) {
+      // Success: clear, refocus for a rapid back-and-forth, and let the parent
+      // re-read the view so the confirmed message renders (FR-013).
+      setText('')
+      setError(null)
+      textareaRef.current?.focus()
+      onSent(result.data)
+    } else {
+      // Failure: preserve the typed text, surface a calm inline error, stay
+      // retryable (FR-014). reconnect_needed additionally flips connection state
+      // upstream (handled by the parent via onReconnect-equivalent re-sync).
+      setError(result)
+    }
+  }
+
+  const onKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>): void => {
+    // Enter sends; Shift+Enter newlines. isComposing guard keeps IME/CJK safe (§4).
+    if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
+      e.preventDefault()
+      void doSend()
+    }
+  }
+
+  return (
+    <div className="shrink-0 border-t border-border bg-card px-2 py-2">
+      {error && (
+        <p
+          className="mb-1.5 flex items-center gap-1.5 rounded-md border border-destructive/40 bg-destructive/15 px-2 py-1 text-[12px] text-destructive"
+          role="alert"
+        >
+          <AlertTriangle className="size-3.5 shrink-0" aria-hidden="true" />
+          {sendErrorMessage(error)}
+        </p>
+      )}
+      <form
+        className="flex items-end gap-2"
+        onSubmit={(e) => {
+          e.preventDefault()
+          void doSend()
+        }}
+      >
+        <Textarea
+          ref={textareaRef}
+          className="max-h-32 min-h-[2.25rem] flex-1 resize-none px-2.5 py-1.5 text-sm leading-snug"
+          placeholder={placeholder}
+          aria-label={ariaLabel}
+          rows={1}
+          value={text}
+          disabled={sending}
+          onChange={(e) => {
+            setText(e.target.value)
+            if (error) {
+              setError(null)
+            }
+          }}
+          onKeyDown={onKeyDown}
+        />
+        <Button
+          type="submit"
+          variant="default"
+          size="icon-sm"
+          aria-label="Send message"
+          disabled={!canSubmit}
+        >
+          {sending ? (
+            <Loader2 className="size-4 animate-spin" />
+          ) : (
+            <SendHorizontal className="size-4" />
+          )}
+        </Button>
+      </form>
+    </div>
+  )
+}
+
+/* ------------------------------------------------------------------------- *
+ * Thread panel (right dock) — thread-sidepanel v1 (design §2)
+ *
+ * Replaces the old whole-view `view.kind==='thread'` base swap with a region docked to
+ * the RIGHT of the message list. The parent renders as the header (shared `SlackMessageRow`,
+ * NO `onOpenThread` — you are already in its thread); the replies reuse the same `MessageList`
+ * loader, dropping the duplicate root (FR-003). Same JSX in both layout modes; only the
+ * wrapper positioning differs (side-by-side ≥32rem vs. drawer overlay below — wired by the
+ * caller). Loading / empty / error states are inherited from `MessageList` (FR-006).
+ * ------------------------------------------------------------------------- */
+
+function SlackThreadPanel({
+  context,
+  canSend,
+  onClose,
+  onReconnect,
+  onConnectForSend,
+  resolveNames
+}: {
+  context: SlackOpenThreadContext
+  canSend: boolean
+  onClose: () => void
+  onReconnect: () => void
+  /** Re-run OAuth with the widened scope so the composer becomes send-capable (FR-011). */
+  onConnectForSend: () => void
+  resolveNames: (messages: SlackMessage[]) => Promise<SlackMessage[]>
+}): React.JSX.Element {
+  // Confirmed-render bump (slack-send-message-v1, FR-013): after a successful reply,
+  // remount the replies MessageList so the just-sent message is re-read.
+  const [replyReloadKey, setReplyReloadKey] = useState(0)
+  // slack-thread-open-in-slack-v1: the thread root's canonical "Open in Slack" web permalink,
+  // captured from the getReplies load result (main resolves it from chat.getPermalink). Held
+  // here so the header link survives reply-list remounts. Reset on a thread change so a stale
+  // link never shows for a different thread; absent until the first load resolves it (or when
+  // the resolve fails / is non-openable → the header stays a plain "Thread" label).
+  const [permalink, setPermalink] = useState<string | undefined>(undefined)
+  useEffect(() => {
+    setPermalink(undefined)
+  }, [context.channelId, context.threadTs])
+  // Reconstruct the parent SlackMessage from the non-secret carried fields (FR-013) for the
+  // header row. No token, no re-read needed for the header itself. replyCount is intentionally
+  // omitted: we are already inside this thread, so a "N replies" label on the root row is
+  // redundant (RepliesAffordance §3.3 → null).
+  const parent: SlackMessage = {
+    ts: context.ts,
+    userId: context.userId,
+    ...(context.userName !== undefined ? { userName: context.userName } : {}),
+    text: context.text
+  }
+  // The openable-link guard re-validates the carried value so a non-http(s)/malformed permalink
+  // can never become a live link (mirrors the Confluence PageDetailTitle treatment).
+  const canOpenInSlack = isOpenableThreadPermalink(permalink)
+  return (
+    <div className="flex h-full min-w-0 flex-col bg-card">
+      <div className="flex shrink-0 items-center gap-2 border-b border-border px-2 py-1.5">
+        <MessageSquare className="size-4 shrink-0 text-muted-foreground" aria-hidden="true" />
+        {canOpenInSlack ? (
+          // "Open in Slack" header affordance (slack-thread-open-in-slack-v1): the thread title
+          // becomes an external link to the real Slack web/app. Mirrors Confluence PageDetailTitle /
+          // the Jira ticket-key link: inline anchor + ExternalLink glyph, --ring focus treatment.
+          <a
+            href={permalink}
+            target="_blank"
+            rel="noreferrer"
+            title="Thread — open in Slack"
+            className="group flex min-w-0 flex-1 items-center gap-1.5 rounded-sm hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 focus-visible:ring-offset-card"
+          >
+            <span className="truncate text-sm font-medium text-foreground">Thread</span>
+            <ExternalLink className="size-3.5 shrink-0 text-muted-foreground" aria-hidden="true" />
+          </a>
+        ) : (
+          <span className="flex-1 truncate text-sm font-medium text-foreground">Thread</span>
+        )}
+        <Button
+          type="button"
+          variant="ghost"
+          size="icon-sm"
+          aria-label="Close thread"
+          onClick={onClose}
+        >
+          <X className="size-4" />
+        </Button>
+      </div>
+      {/* bug slack-thread-unified-scroll-v1: the root (본문) AND the replies (댓글) share ONE
+          scroll region. A single ScrollArea wraps the root block, the "N replies" divider, and
+          the replies list so they scroll together — no longer two independent scroll areas (the
+          old `max-h-[40%]` root ScrollArea + the replies' own `flex-1` scroll). Only the dock
+          header (above) and the composer (below) stay fixed outside this scroll. */}
+      <ScrollArea className="min-h-0 flex-1">
+        {/* Root (본문) — the thread anchor. Presented as a calm card block on a muted backdrop
+            (Slack/Linear thread-drawer pattern): it reads as the message the thread hangs off
+            of, not "reply zero". No per-row bottom border here (the count divider below does the
+            separating), so the avatar/body sit on a clean panel. It now grows with its content
+            and scrolls with the rest, instead of being capped in its own scroll region. */}
+        <div className="bg-muted/30">
+          <MessageRow message={parent} />
+        </div>
+        {/* "N replies" count divider (the canonical Slack thread separator): a thin hairline
+            rule with a small muted label marking exactly where replies (댓글) begin, distinct
+            from the root above. An inline section header within the shared scroll (it scrolls
+            with the content). Falls back to a plain "Replies" label when the count is unknown. */}
+        <div className="flex items-center gap-2 px-3 py-1.5">
+          <span className="shrink-0 text-xs font-medium text-muted-foreground" aria-hidden="true">
+            {typeof context.replyCount === 'number' && context.replyCount > 0
+              ? countLabel(context.replyCount, 'reply', 'replies')
+              : 'Replies'}
+          </span>
+          <span className="h-px flex-1 bg-border" aria-hidden="true" />
+        </div>
+        {/* Replies group — a subtle left rail indents the whole reply column so it reads as
+            subordinate to the root (Discord/Linear connector pattern). The rail lives on this
+            wrapper, NOT the shared row, so the canonical SlackMessageRow is untouched. The list
+            renders with scroll={false} so it flows inside this single shared ScrollArea. */}
+        <div className="border-l-2 border-border/70 pl-1">
+          <MessageList
+            key={`${context.channelId}-${context.threadTs}-${replyReloadKey}`}
+            emptyText="No replies."
+            scroll={false}
+            load={async (cursor) => {
+              // conversations.replies returns the parent as the first item; it is shown as the
+              // thread header above, so drop it here to avoid rendering the root twice (FR-003).
+              const r = await window.cosmos.slack.getReplies({
+                channelId: context.channelId,
+                threadTs: context.threadTs,
+                ...(cursor ? { cursor } : {})
+              })
+              if (!r.ok) {
+                return r
+              }
+              // slack-thread-open-in-slack-v1: lift the thread root's "Open in Slack" permalink
+              // (carried only on the first page) into the panel so the header link renders. The
+              // guard in the header re-validates it; absent → the header stays a plain label.
+              if (r.data.permalink) {
+                setPermalink(r.data.permalink)
+              }
+              return {
+                ...r,
+                data: { ...r.data, items: dropThreadRoot(r.data.items, context.threadTs) }
+              }
+            }}
+            onReconnect={onReconnect}
+            resolveNames={resolveNames}
+          />
+        </div>
+      </ScrollArea>
+      {/* Reply composer (slack-send-message-v1 §2.2): carries threadTs ⇒ a thread reply.
+          Pinned to the bottom of the dock; canSend gates it (Reconnect affordance when false). */}
+      <SlackComposer
+        channelId={context.channelId}
+        threadTs={context.threadTs}
+        canSend={canSend}
+        placeholder="Reply…"
+        ariaLabel="Reply to thread"
+        onReconnect={onConnectForSend}
+        onSent={() => setReplyReloadKey((k) => k + 1)}
+      />
+    </div>
   )
 }
 
@@ -620,7 +976,19 @@ function SearchResults({
                   </span>
                 </div>
                 <p className="whitespace-pre-wrap break-words text-sm text-card-foreground">
-                  {m.text}
+                  {parseMessageRuns(m.text, m.customEmoji).map((run, i) =>
+                    run.kind === 'custom-emoji' ? (
+                      <img
+                        key={i}
+                        src={run.ref}
+                        alt={`:${run.shortcode}:`}
+                        title={`:${run.shortcode}:`}
+                        className="inline-block h-[1.25em] w-auto translate-y-[0.15em] align-baseline"
+                      />
+                    ) : (
+                      run.text
+                    )
+                  )}
                 </p>
               </div>
             </div>
@@ -647,26 +1015,56 @@ function SearchResults({
 export function SlackPanel({ active }: { active: boolean }): React.JSX.Element {
   const [status, setStatus] = useState<SlackConnectionStatus>({ state: 'not_connected' })
   const [busy, setBusy] = useState(false)
+  // Confirmed-render bump (slack-send-message-v1, FR-013): after a successful channel
+  // send, remount the history MessageList so the just-sent message is re-read.
+  const [historyReloadKey, setHistoryReloadKey] = useState(0)
   // panel-tabs v1: the per-tab generative surfaces (read-only, target 'slack'). Zero
   // tabs => the native channel/search browser base (FR-017).
   const restoredPanel = useRestoredGenerativePanel('slack')
+  // open-prompt-view-context-v1 (FR-004): the LIVE view + open thread the composer grounds
+  // against, read at send time. Routed through refs because the nav is derived from
+  // `usePerTabNav` (which needs `activeTabId` from the hook below). Assigned after nav.
+  const viewRef = useRef<View>(SLACK_NAV_DEFAULT.view)
+  const openThreadRef = useRef<OpenThreadState>(SLACK_NAV_DEFAULT.openThread)
   const { tabs, activeTabId, activeTab, setActive, submit, newTab, closeTab, update } =
     useGenerativePanelTabs({
       target: 'slack',
       panelName: 'Slack',
+      // Ground a compose against the open channel (+ thread); channels/search ⇒ no context.
+      getViewContext: () => slackViewContext(viewRef.current, openThreadRef.current),
       ...(restoredPanel ? { initial: restoredPanel } : {})
     })
   // The native-base browser nav is held PER-TAB, keyed by the active tab id
   // (bug panel-shared-tab-nav-state-v1), so each tab keeps its own view + search text.
   const {
-    nav: { view, searchText },
+    nav: { view, searchText, openThread },
     setNav,
     drop: dropNav,
     clearAll: clearAllNav
   } = usePerTabNav<SlackNav>(activeTabId, SLACK_NAV_DEFAULT)
-  const setView = useCallback((view: View) => setNav((prev) => ({ ...prev, view })), [setNav])
+  // Keep the live view + thread in sync for the send-time view-context capture (above).
+  viewRef.current = view
+  openThreadRef.current = openThread
+  // Changing the base view (channel switch, back, search) closes any open thread so a stale
+  // thread never shows against a different channel's list (spec Edge Cases). The thread is a
+  // transient right-dock, not part of the back-stack.
+  const setView = useCallback(
+    (view: View) => setNav((prev) => ({ ...prev, view, openThread: null })),
+    [setNav]
+  )
   const setSearchText = useCallback(
     (searchText: string) => setNav((prev) => ({ ...prev, searchText })),
+    [setNav]
+  )
+  // Open / retarget / toggle-close the single right-docked thread state (FR-001/FR-004/FR-013).
+  // BOTH the native row's onOpenThread and the generative SLACK_OPEN_THREAD_ACTION feed this.
+  const openThreadFor = useCallback(
+    (ctx: SlackOpenThreadContext) =>
+      setNav((prev) => ({ ...prev, openThread: openThreadTransition(prev.openThread, ctx) })),
+    [setNav]
+  )
+  const closeThread = useCallback(
+    () => setNav((prev) => ({ ...prev, openThread: closeThreadTransition() })),
     [setNav]
   )
   // Closing a tab also drops its per-tab native-base nav entry so the map never leaks
@@ -716,26 +1114,47 @@ export function SlackPanel({ active }: { active: boolean }): React.JSX.Element {
   // tab — that no longer makes sense per-tab.) Read-only preserved (FR-020).
   const handleSurfaceAction = useCallback(
     (action: A2UIAction): boolean => {
-      if (action.name !== SLACK_OPEN_CHANNEL_ACTION) {
-        return false
-      }
       const ctx = (action.context ?? {}) as Record<string, unknown>
-      const id = typeof ctx.channelId === 'string' ? ctx.channelId : ''
-      if (id) {
-        const channel: SlackChannel = {
-          id,
-          name: typeof ctx.channelName === 'string' && ctx.channelName !== '' ? ctx.channelName : id,
-          isMember: ctx.isMember === true
+      if (action.name === SLACK_OPEN_CHANNEL_ACTION) {
+        const id = typeof ctx.channelId === 'string' ? ctx.channelId : ''
+        if (id) {
+          const channel: SlackChannel = {
+            id,
+            name: typeof ctx.channelName === 'string' && ctx.channelName !== '' ? ctx.channelName : id,
+            isMember: ctx.isMember === true
+          }
+          setView({ kind: 'history', channel })
+          // Clear this tab's surface so the native base (now on the channel view) shows.
+          if (activeTabId) {
+            update(activeTabId, { surface: null, error: undefined })
+          }
         }
-        setView({ kind: 'history', channel })
-        // Clear this tab's surface so the native base (now on the channel view) shows.
-        if (activeTabId) {
-          update(activeTabId, { surface: null, error: undefined })
-        }
+        return true
       }
-      return true
+      // thread-sidepanel v1 (FR-001/FR-013): a generated MessageRow's "N replies" affordance
+      // opens the RIGHT-DOCKED thread panel — the SAME single open-thread state the native row
+      // feeds — instead of swapping the whole view. The generative surface stays mounted
+      // underneath (the dock sits beside / overlays it). Reconstruct the non-secret context;
+      // read-only via getReplies; never forwarded to main.
+      if (action.name === SLACK_OPEN_THREAD_ACTION) {
+        const channelId = typeof ctx.channelId === 'string' ? ctx.channelId : ''
+        const threadTs = typeof ctx.threadTs === 'string' ? ctx.threadTs : ''
+        if (channelId && threadTs) {
+          openThreadFor({
+            channelId,
+            threadTs,
+            ts: typeof ctx.ts === 'string' ? ctx.ts : threadTs,
+            userId: typeof ctx.userId === 'string' ? ctx.userId : '',
+            ...(typeof ctx.userName === 'string' && ctx.userName !== '' ? { userName: ctx.userName } : {}),
+            text: typeof ctx.text === 'string' ? ctx.text : '',
+            ...(typeof ctx.replyCount === 'number' ? { replyCount: ctx.replyCount } : {})
+          })
+        }
+        return true
+      }
+      return false
     },
-    [activeTabId, setView, update]
+    [activeTabId, setView, update, openThreadFor]
   )
 
   // Initial status + live updates (FR-007).
@@ -900,85 +1319,97 @@ export function SlackPanel({ active }: { active: boolean }): React.JSX.Element {
                       variant="ghost"
                       size="icon-sm"
                       aria-label="Back"
-                      onClick={() =>
-                        setView(
-                          view.kind === 'thread'
-                            ? { kind: 'history', channel: view.channel }
-                            : { kind: 'channels' }
-                        )
-                      }
+                      onClick={() => setView({ kind: 'channels' })}
                     >
                       <ChevronLeft className="size-4" />
                     </Button>
                     <span className="truncate text-sm font-medium text-foreground">
                       {view.kind === 'history' && `#${view.channel.name}`}
-                      {view.kind === 'thread' && 'Thread'}
                       {view.kind === 'search' && 'Search'}
                     </span>
                   </div>
                 )}
 
-                <div className="min-h-0 flex-1">
-                  {view.kind === 'channels' && (
-                    <ChannelList
-                      onOpen={(channel) => setView({ kind: 'history', channel })}
-                      onReconnect={() => void refreshStatus()}
-                    />
-                  )}
-                  {view.kind === 'history' && (
-                    <MessageList
-                      key={view.channel.id}
-                      emptyText="No messages yet."
-                      load={(cursor) =>
-                        window.cosmos.slack.getHistory({
-                          channelId: view.channel.id,
-                          ...(cursor ? { cursor } : {})
-                        })
-                      }
-                      onOpenThread={(parent) =>
-                        setView({ kind: 'thread', channel: view.channel, parent })
-                      }
-                      onReconnect={() => void refreshStatus()}
-                      resolveNames={resolveNames}
-                    />
-                  )}
-                  {view.kind === 'thread' && (
-                    <div className="flex h-full flex-col">
-                      <div className="border-b border-border">
-                        <MessageRow message={view.parent} />
-                      </div>
-                      <div className="min-h-0 flex-1 border-l border-border pl-2">
-                        <MessageList
-                          key={`${view.channel.id}-${view.parent.ts}`}
-                          emptyText="No replies."
-                          load={async (cursor) => {
-                            // conversations.replies returns the parent as the first item;
-                            // it's already shown as the thread header above, so drop it
-                            // here to avoid rendering the thread root twice.
-                            const r = await window.cosmos.slack.getReplies({
-                              channelId: view.channel.id,
-                              threadTs: view.parent.ts,
-                              ...(cursor ? { cursor } : {})
-                            })
-                            if (!r.ok) {
-                              return r
+                {/* thread-sidepanel v1 (design §1.1): the history layout is a horizontal
+                    container-query pair — the message list on the left, the thread dock on the
+                    right (only when a thread is open). `@container/slackbody` gates side-by-side
+                    vs. drawer overlay on the PANEL's own width (not the viewport). */}
+                <div className="@container/slackbody relative flex min-h-0 flex-1">
+                  <div className="flex min-w-0 flex-1 flex-col">
+                    {view.kind === 'channels' && (
+                      <ChannelList
+                        onOpen={(channel) => setView({ kind: 'history', channel })}
+                        onReconnect={() => void refreshStatus()}
+                      />
+                    )}
+                    {view.kind === 'history' && (
+                      <>
+                        <div className="min-h-0 flex-1">
+                          <MessageList
+                            key={`${view.channel.id}-${historyReloadKey}`}
+                            emptyText="No messages yet."
+                            load={(cursor) =>
+                              window.cosmos.slack.getHistory({
+                                channelId: view.channel.id,
+                                ...(cursor ? { cursor } : {})
+                              })
                             }
-                            return {
-                              ...r,
-                              data: {
-                                ...r.data,
-                                items: r.data.items.filter((m) => m.ts !== view.parent.ts)
-                              }
+                            onOpenThread={(parent) =>
+                              openThreadFor({
+                                channelId: view.channel.id,
+                                threadTs: parent.ts,
+                                ts: parent.ts,
+                                userId: parent.userId,
+                                ...(parent.userName !== undefined ? { userName: parent.userName } : {}),
+                                text: parent.text,
+                                ...(parent.replyCount !== undefined ? { replyCount: parent.replyCount } : {})
+                              })
                             }
-                          }}
+                            onReconnect={() => void refreshStatus()}
+                            resolveNames={resolveNames}
+                          />
+                        </div>
+                        {/* Channel composer (slack-send-message-v1 §2.1): keyed by channel id so a
+                            half-typed draft never bleeds across channels; canSend gates it. */}
+                        <SlackComposer
+                          key={`composer-${view.channel.id}`}
+                          channelId={view.channel.id}
+                          canSend={status.canSend === true}
+                          placeholder={`Message #${view.channel.name}`}
+                          ariaLabel="Message channel"
+                          onReconnect={() => void connect()}
+                          onSent={() => setHistoryReloadKey((k) => k + 1)}
+                        />
+                      </>
+                    )}
+                    {view.kind === 'search' && (
+                      <SearchResults query={view.query} onReconnect={() => void refreshStatus()} />
+                    )}
+                  </div>
+
+                  {/* Right-docked thread region (design §1.3 side-by-side / §1.4 drawer overlay).
+                      Below 32rem it is an absolute right-drawer overlaying the list (does not
+                      squeeze it); at/above 32rem it docks side-by-side. Driven by the single
+                      open-thread state, so both native + generative surfaces feed it. */}
+                  {openThread && (
+                    <>
+                      {/* Narrow-mode scrim: closes the thread on click; hidden side-by-side. */}
+                      <div
+                        className="absolute inset-0 z-10 bg-black/40 transition-opacity duration-200 @[32rem]/slackbody:hidden"
+                        aria-hidden="true"
+                        onClick={closeThread}
+                      />
+                      <div className="absolute inset-y-0 right-0 z-20 w-full max-w-[22rem] translate-x-0 border-l border-border bg-card shadow-lg transition-transform duration-200 ease-out motion-reduce:transition-none @[32rem]/slackbody:relative @[32rem]/slackbody:w-[clamp(18rem,42%,28rem)] @[32rem]/slackbody:max-w-none @[32rem]/slackbody:shrink-0 @[32rem]/slackbody:shadow-none">
+                        <SlackThreadPanel
+                          context={openThread}
+                          canSend={status.canSend === true}
+                          onClose={closeThread}
                           onReconnect={() => void refreshStatus()}
+                          onConnectForSend={() => void connect()}
                           resolveNames={resolveNames}
                         />
                       </div>
-                    </div>
-                  )}
-                  {view.kind === 'search' && (
-                    <SearchResults query={view.query} onReconnect={() => void refreshStatus()} />
+                    </>
                   )}
                 </div>
               </>
@@ -999,23 +1430,47 @@ export function SlackPanel({ active }: { active: boolean }): React.JSX.Element {
               surface (FR-003). Display-only / read-only (FR-012/FR-020).
             */}
             {activeTab && (activeTab.surface || activeTab.error) && (
-              <div className="min-h-0 flex-1 overflow-auto p-3 text-card-foreground" role="tabpanel">
-                {activeTab.error && (
-                  <p
-                    className="rounded-md border border-destructive/40 bg-destructive/15 px-2.5 py-2 text-[13px] text-destructive"
-                    role="alert"
-                  >
-                    Couldn&apos;t do that: {activeTab.error}
-                  </p>
+              // thread-sidepanel v1 (FR-001/FR-013): the generative surface is also a
+              // `@container/slackbody` two-pane parent so the SAME open-thread state (fed by
+              // the generative SLACK_OPEN_THREAD_ACTION) docks the thread panel beside / over it.
+              <div className="@container/slackbody relative flex min-h-0 flex-1">
+                <div className="min-w-0 flex-1 overflow-auto p-3 text-card-foreground" role="tabpanel">
+                  {activeTab.error && (
+                    <p
+                      className="rounded-md border border-destructive/40 bg-destructive/15 px-2.5 py-2 text-[13px] text-destructive"
+                      role="alert"
+                    >
+                      Couldn&apos;t do that: {activeTab.error}
+                    </p>
+                  )}
+                  <A2UIProvider key={activeTab.id} catalog={slackCatalog}>
+                    <ActiveTabSurface
+                      surface={activeTab.surface}
+                      catalogId={SLACK_CATALOG_ID}
+                      panelName="SlackPanel"
+                      onAction={handleSurfaceAction}
+                    />
+                  </A2UIProvider>
+                </div>
+                {openThread && (
+                  <>
+                    <div
+                      className="absolute inset-0 z-10 bg-black/40 transition-opacity duration-200 @[32rem]/slackbody:hidden"
+                      aria-hidden="true"
+                      onClick={closeThread}
+                    />
+                    <div className="absolute inset-y-0 right-0 z-20 w-full max-w-[22rem] translate-x-0 border-l border-border bg-card shadow-lg transition-transform duration-200 ease-out motion-reduce:transition-none @[32rem]/slackbody:relative @[32rem]/slackbody:w-[clamp(18rem,42%,28rem)] @[32rem]/slackbody:max-w-none @[32rem]/slackbody:shrink-0 @[32rem]/slackbody:shadow-none">
+                      <SlackThreadPanel
+                        context={openThread}
+                        canSend={status.canSend === true}
+                        onClose={closeThread}
+                        onReconnect={() => void refreshStatus()}
+                        onConnectForSend={() => void connect()}
+                        resolveNames={resolveNames}
+                      />
+                    </div>
+                  </>
                 )}
-                <A2UIProvider key={activeTab.id} catalog={slackCatalog}>
-                  <ActiveTabSurface
-                    surface={activeTab.surface}
-                    catalogId={SLACK_CATALOG_ID}
-                    panelName="SlackPanel"
-                    onAction={handleSurfaceAction}
-                  />
-                </A2UIProvider>
               </div>
             )}
           </>
@@ -1028,6 +1483,7 @@ export function SlackPanel({ active }: { active: boolean }): React.JSX.Element {
           onSubmit={submit}
           placeholder="Ask about your Slack channels and messages…"
           ariaLabel="Ask about Slack"
+          contextChip={contextChipFor('slack', slackViewContext(view, openThread))}
           busy={showSpinner}
         />
       )}

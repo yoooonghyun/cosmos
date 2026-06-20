@@ -31,6 +31,15 @@ catalogue of conventions and hard-won gotchas. The file-by-file source map lives
   only sees the `pty` channels.
 - All cross-process IPC payloads are validated at the main-process boundary; invalid payloads
   log a warning and are safely ignored (never crash).
+- **The IPC contract is split per-domain behind same-path barrels (ipc-modular-refactor-v1).**
+  `src/shared/ipc.ts` and `src/shared/validate.ts` are now thin RE-EXPORT barrels over per-domain
+  modules in `src/shared/ipc/` (`common`/`pty`/`ui`/`agent`/`shortcut`/`slack`/`jira`/`confluence`/
+  `googleCalendar`/`session`/`settings`, each with a sibling `*.validate.ts`). The barrel paths are
+  unchanged, so every consumer keeps importing from `../shared/ipc` / `../shared/validate` (zero
+  import churn). Add a new channel/payload to its DOMAIN module (and its validator to the matching
+  `*.validate.ts`), NOT to the barrel; shared predicates reused across domains live in
+  `common.validate.ts`. `ipc.ts` assembles the `CosmosApi` type; `SESSION_SCHEMA_VERSION` stays in
+  the session module. A `channelUniqueness.test.ts` guards against duplicate channel strings.
 - **Provider OAuth differs per IdP.** Slack permits secret-less public-client PKCE; **Atlassian
   Cloud 3LO is a confidential client and requires a `client_secret`** at token+refresh exchange.
   Integrations attempt secret-less first, then fall back to an env-var secret (main-process only,
@@ -66,6 +75,26 @@ catalogue of conventions and hard-won gotchas. The file-by-file source map lives
   surface form or dispatcher. Two write patterns therefore coexist: Jira's deterministic action
   dispatch (UI control → main re-composes) and Confluence's model-mediated MCP write (agent calls a
   tool).
+- **A composer run also carries the active panel's view context (open-prompt-view-context-v1).**
+  When a `PromptComposer` utterance is sent, the panel's CURRENT non-secret selection (open Jira
+  ticket / Slack channel+thread / Confluence page / Calendar event) rides along as an optional
+  `viewContext` on `AgentSubmitPayload` so deictic utterances ("fix **this** ticket") resolve.
+  Rules: (1) capture is at SEND time — `useGenerativePanelTabs` calls a per-panel `getViewContext()`
+  provider (read through a ref so `submit` stays stable; each panel updates a live-selection ref
+  because its nav state comes from `usePerTabNav` defined AFTER the hook). (2) `viewContext` is
+  DATA-ONLY non-secret labels (pure mappers in `src/renderer/viewContextCapture.ts`); validated
+  warn-and-ignore at the main boundary (`validateViewContext`) — an invalid value is DROPPED while
+  the run still starts (never `null`s the payload). (3) it is delivered as GROUNDING, not by
+  mutating the utterance: `AgentRunner.run`'s 3rd arg feeds `viewContextGroundingClause(target, vc)`
+  (`src/main/viewContextGrounding.ts`), which `composeGroundingPrompt` joins with the per-target
+  grounding into ONE `--append-system-prompt`; the `-p` utterance stays byte-for-byte. (4) it NEVER
+  broadens tool grants — context-only. (5) the visible chip below the textarea is `ContextChip.tsx`
+  (Badge/Button/Tooltip composite, NOT a `components/ui/` primitive); dismissing it threads a
+  per-compose `contextDismiss` ('none'|'thread'|'all') through `onSubmit(value, { contextDismiss })`,
+  and the hook strips the dropped dimension before attaching. generated-ui carries no selection (no
+  chip, no `viewContext`). To extend to a new panel: add a mapper + chip case in
+  `viewContextCapture.ts`, a clause branch in `viewContextGrounding.ts`, and pass `getViewContext` +
+  `contextChip` from the panel — never put a secret on `ViewContext`.
 - **Display-only A2UI renders must be settled immediately by `UiBridge`.** A `render_*_ui` tool
   call blocks awaiting a user action; for a display-only surface the one-shot headless run would
   then hang forever and the panel spinner never stops. So `UiBridge.onMessage` settles any render
@@ -98,15 +127,66 @@ catalogue of conventions and hard-won gotchas. The file-by-file source map lives
   action via `useDispatchAction`; the SDK pipes it `A2UIRenderer onAction → ActiveTabSurface →` the
   panel's `onAction` handler. There are TWO kinds of action and the boundary is the return value:
   (1) a **renderer-local NAV action** (e.g. Slack `SLACK_OPEN_CHANNEL_ACTION`, Jira
-  `jiraNav.openDetail`) drives panel `view`/navigation state in the renderer and returns `true` so it
+  `jiraNav.openDetail`) drives panel navigation state in the renderer and returns `true` so it
   is NEVER sent to main as a `ui:action` and never reaches the agent; (2) a **main-dispatched WRITE
   action** (the reserved `jira.*` namespace — transition/comment/create/update) returns `false`, flows
   to main, and is executed deterministically by `JiraActionDispatcher`. Give nav actions a
   NON-`jira.`-prefixed name so they can never be mistaken for the reserved write namespace (a leak to
   main is a safe no-op anyway — `validateJiraBoundAction` returns `null` for an unknown `jira.*` name).
-  Panel `view` chrome (e.g. a back row) lives OUTSIDE the `A2UIProvider` and resets on `activeTabId`
-  change so it doesn't bleed across tabs; the action carries its target id in `action.context` (e.g.
-  `{ issueKey }`) since catalog components have no panel callback prop.
+  Per-tab navigation chrome lives OUTSIDE the `A2UIProvider` and is keyed on `activeTabId` (via
+  `usePerTabNav`) so it doesn't bleed across tabs; the action carries its target id in `action.context`
+  (e.g. `{ issueKey }`) since catalog components have no panel callback prop.
+- **Side-dock detail idiom (Jira `JiraDetailDock`, Slack thread, calendar event-detail):** a drill-in
+  detail opens in a transient RIGHT-side dock BESIDE the still-visible list, NOT a whole-panel view
+  swap. Mechanism (no new IPC channel / fetch / scope): the `jiraNav.openDetail` nav action sets a
+  per-tab dock slot (`usePerTabNav` — clicking another card RETARGETS the single dock) and fires the
+  existing deterministic detail read; the resulting UNSOLICITED `ui:render` frame is routed to the dock
+  slot — not the list — by `useGenerativePanelTabs`'s `onUnsolicitedFrame` hook, discriminating on the
+  spec's `surfaceId` (`isDetailSurfaceSpec`, `surfaceId === 'jira-issue-detail'`). The dock body hosts a
+  SECOND `A2UIProvider key={`${tab.id}:detail`}` through the SAME catalog, so the detail's write controls
+  still flow to main and a write re-pushes a fresh detail into the SAME slot (the dock stays open). Fire
+  the read via the hook's `fireOrDefer` (not `requestDefaultInActiveTab`) so it keeps the FR-009
+  fire-or-defer discipline WITHOUT marking the list tab `loadingDefault` (which would skeleton the still-
+  visible list). The dock is transient — closes on X, scrim click, tab switch (`usePerTabNav` auto-reset),
+  and disconnect (`clearAll`). Layout: `@container/jirabody` two-pane, list `min-w-0 flex-1`, dock an
+  overlay drawer below `32rem` flipping to side-by-side at `@[32rem]/jirabody`.
+- **A renderer-local nav action MAY carry a whole structured object in `action.context` (e.g. Google
+  Calendar `calendarNav.openDetail` carries `{ event }`), but the `dispatch` context type is flat
+  `Record<string, DynamicValue>` — cast it `as unknown`.** This is safe ONLY because the action is
+  renderer-local: the panel's `onAction` intercepts it and returns `true`, so it NEVER crosses IPC or
+  is serialized. The SDK's `resolveContext`/`resolveValue` passes a value that is neither a `{ path }`
+  binding nor a `FunctionCall` through UNCHANGED, so the structured object reaches the handler intact.
+  Do NOT do this for a `false`-return (main-forwarded) action — that one IS serialized to a `ui:action`
+  and must stay flat/secret-free.
+- **To open an external URL in the system browser from a catalog/panel, render a plain
+  `<a target="_blank" rel="noreferrer">` and let `webContents.setWindowOpenHandler` (in `createWindow`)
+  route it to `shell.openExternal` + `return { action: 'deny' }` — do NOT add a new `openExternal` IPC
+  channel.** The handler guards to `http(s)` (no `file:`/`javascript:`). The per-integration
+  `openExternal` you'll see in `index.ts` is the OAuth-flow callback, NOT a renderer-facing channel;
+  the window-open handler is standard Electron window config, not IPC, so it honors the one-IPC-contract
+  rule while still leaving the app for the link (Google Calendar event-detail "Open in Google
+  Calendar"). The URL must be non-secret (the calendar's public `htmlLink`, never a token-bearing URL).
+- **To push PANEL-owned state/handlers DOWN into a catalog component, use a React Context, NOT
+  surface props.** Catalog components are rendered by `A2UIRenderer` from the surface JSON, so their
+  props come from the surface node — the panel cannot hand them a callback or live React state via the
+  node. When a catalog component needs panel-owned wiring (e.g. the Google Calendar month/year nav
+  cluster needs the panel's per-tab displayed-month intent + nav handlers, which must survive the
+  `A2UIProvider key={tab.id}` remount and so cannot live inside the catalog component), define a small
+  context (`googleCalendarCatalog/navContext.ts`: `CalendarNavContext` + `useCalendarNav()`), have the
+  panel wrap its `<A2UIProvider>` in the `Context.Provider`, and have the catalog component read it with
+  the hook. Gate the value to NULL for surfaces that should not get the behavior (the calendar passes a
+  non-null value only for the LIVE default view — `isConnected && surface != null && composed === false`
+  — so composed snapshots + disconnected states render the plain label with no controls). This keeps the
+  surface builder + the agent/MCP render path untouched (no panel-only field bleeds into the surface
+  JSON). Distinct from the OUTSIDE-the-provider chrome above: use that when the chrome is NOT part of the
+  catalog component; use the context when the panel state must reach INTO a catalog component.
+- **The un-bound default view's refresh is panel-driven, not `adapter.refresh`.** `PanelRefreshButton`
+  is descriptor-gated — `derivePanelRefreshState` returns `enabled:false` for a surface with no
+  `descriptor`/`bindings` (the Google Calendar live default view is un-bound). To make that button
+  refresh such a surface, pass the OPTIONAL `onRefresh` override prop (calendar-month-year-nav-v1): when
+  supplied it ENABLES the button and the click calls `onRefresh()` (the panel re-issues its own request,
+  e.g. `requestDefaultView(toWirePayload(intent))`) instead of dispatching `adapter.refresh`. Composed/
+  bound surfaces omit the override and keep the unchanged descriptor path. No second visual control.
 - **When a catalog field becomes a click target, its MCP tool description MUST teach the agent that
   field's real semantics.** A generative catalog's rows are AGENT-COMPOSED JSON — the model fills each
   field from the `render_*_ui` tool description, not from the integration's read result directly. So the
@@ -236,6 +316,17 @@ detail.
   own `pty:start`. The Terminal panel mounts one xterm `Terminal` per tab (all kept mounted so live
   sessions + scrollback survive tab/rail switches) and always keeps ≥1 terminal (closing the last
   opens a fresh one).
+- **A FRESH terminal tab defers its spawn until a directory is picked (terminal-open-directory-
+  picker-v1).** A new tab mounts in an `awaiting` phase showing an `[Open]` empty state and does
+  NOT auto-`pty:start`; clicking `[Open]` calls `window.cosmos.pty.pickDirectory()` →
+  `ipcMain.handle(PtyChannel.PickDirectory)` → main-only `dialog.showOpenDialog({ properties:
+  ['openDirectory'] })` (cancel/error → `{ path: null }`, which keeps the `[Open]` state). The
+  picked dir is passed as an OPTIONAL `cwd` on `pty.start(paneId, { cwd })`, boundary-validated in
+  main. A RESTORED tab skips the picker and auto-resumes. The fresh-vs-resume cwd rule is the pure
+  `resolvePaneSpawn` (`src/main/paneSpawn.ts`): a resume IGNORES any override cwd (the snapshot's
+  own cwd wins), a fresh spawn uses `overrideCwd ?? sandboxDir`. `TerminalView` carries the
+  `autoStart`/`phase`/`pending` state for this; restored tabs set `autoStart` so they resume
+  without a pick.
 
 ## Session persistence (session-persistence-v1)
 
@@ -306,8 +397,26 @@ single new `window.cosmos.session` namespace in `src/shared/ipc.ts` (`session:lo
   the seed index; advance the monotonic counter ONLY from event handlers / effects, which StrictMode
   does not double-invoke for this purpose. (Note: this is dev-only, but the impurity is a real defect.)
 
+- **An `isMounted` ref must be RESET to `true` at the start of the mount effect, not only set
+  `false` in cleanup.** StrictMode double-invokes effects mount → cleanup → mount; a ref that is
+  flipped `false` in cleanup but never re-asserted on the second mount stays `false` for the
+  component's whole life, so any later "ignore if unmounted" guard fires permanently. The Terminal
+  `[Open]` picker hit this: `TerminalView`'s mount effect cleanup set `isMountedRef.current = false`
+  but the body never reset it, so after the dev double-invoke the post-pick guard
+  `if (res.path && isMountedRef.current)` short-circuited — `claude` never spawned and the "Opening…"
+  spinner never cleared (terminal-picker-spinner-hang-v1). Fix: `isMountedRef.current = true` as the
+  first line of the effect body; keep the `false` in cleanup. Same dev-only-symptom / real-defect
+  caveat as above.
+
 ## Styling (Tailwind v4 + shadcn)
 
+- **`npx shadcn add` writes to a LITERAL `@/` directory — move the files.** This repo's
+  `components.json` aliases are `@/...` but the Vite `@` alias points at `src/renderer`, which the
+  shadcn CLI does not resolve; it creates `./@/components/ui/<name>.tsx` at the repo root. After an
+  add, `mv` the file(s) into `src/renderer/components/ui/` and `rm -rf '@'`. The CLI already emits
+  the repo's `import { X as XPrimitive } from "radix-ui"` unified convention (verified for
+  `dialog`/`label`) — no `@radix-ui/*` rewrite needed. Run with `--overwrite` to avoid the
+  interactive prompt.
 - **Tailwind v4 utilities lose to unlayered plain CSS.** Tailwind v4 emits utilities into
   `@layer utilities`; any *unlayered* rule (e.g. plain CSS in `App.css`) beats a layered utility
   **regardless of specificity**. So a Tailwind class like `data-[state=inactive]:hidden` cannot
@@ -327,11 +436,29 @@ single new `window.cosmos.session` namespace in `src/shared/ipc.ts` (`session:lo
   Drive such state from React instead (e.g. `surface === id`) and apply the active classes
   conditionally; don't rely on `data-[state=active]` on a tooltip-wrapped tab. Symptom: hover
   styling works (real `:hover`) but the selected/active styling does nothing.
+- **lucide stroke icons render optically smaller than brand-fill icons at the same `size-N`.** The
+  rail mixes `react-icons/si` brand logos (filled glyphs that fill their viewBox) with lucide
+  (thin-stroke, internal padding). At a shared `size-5` the lucide marks (Settings gear, CalendarDays)
+  look noticeably smaller — bump lucide rail icons one step (`size-6`) to match. Pure optics, not a box
+  size: the `h-10 w-10` button stays identical.
+- **A rail `Button` (e.g. the Settings gear) is a shadcn `ghost`, which adds `hover:bg-accent`.** The
+  rail tab triggers only brighten the icon on hover (`hover:text-foreground`, no box). To match, the
+  gear needs `hover:bg-transparent` so the ghost variant's hover box is neutralized; show the filled
+  box (`bg-accent`) only on the active/open state. Symptom when missing: hovering the gear lights a
+  square box the other rail icons don't.
 - **Tailwind v4 `scale-*`/`translate-*`/`rotate-*` are NOT `transform`.** v4 compiles them to the
   standalone CSS `scale:` / `translate:` / `rotate:` properties, so `transition-[opacity,transform]`
   will NOT animate a scale or translate — only opacity moves and the size/position jumps. List the
   real properties: `transition-[opacity,scale,filter]` (add `filter` for `blur-*`). Symptom when
   wrong: an element fades but its size snaps instantly.
+- **Resizable panel columns gate layout on their OWN width via a named container query, NOT a
+  viewport `md:` breakpoint.** A panel is one resizable column in a multi-panel workspace, so its
+  width is independent of the window. Mark the wrapper `@container/<name>` (e.g.
+  `@container/slackbody`) and gate the wide layout on `@[32rem]/<name>:*` — Tailwind v4 emits the
+  named container utilities (`container: <name> / inline-size`, `@container <name> (min-width: …)`)
+  natively, no plugin/config. The Slack thread dock uses this: `@[32rem]/slackbody` side-by-side
+  (thread `clamp(18rem,42%,28rem)`, `border-l`) above the breakpoint, right-drawer overlay below.
+  Symptom if you reach for `md:` instead: the thread layout flips on window size, not panel size.
 - **CSS enter/exit transitions need a persistent element.** Conditionally mounting/unmounting a node
   skips its transition (there is no "before" frame to animate from). To animate open/close, keep
   BOTH states always mounted in one slot and toggle classes via a flag; make the hidden one
@@ -346,6 +473,14 @@ single new `window.cosmos.session` namespace in `src/shared/ipc.ts` (`session:lo
   utilities or `var(--brand-…)` (the `cosmos` Button variant, `CosmosMark`). Colors, type sizes, and
   z-order are design-system foundations — define them in the theme, never as one-off hex/arbitrary
   values in a component.
+- **xterm theme can't take CSS vars — read the token at construct.** xterm's `Terminal({ theme })`
+  needs concrete color *strings*, so it can't consume `var(--card)` directly. To keep the terminal
+  screen on the same surface as every other panel (`bg-card`), read the computed token once at
+  Terminal construction — `terminalThemeFromTokens` (`terminalTheme.ts`, pure + node-tested) maps
+  `--card`→background / `--card-foreground`→foreground from a `getComputedStyle(documentElement)`
+  reader. Never hardcode the screen hex (it silently desyncs from the token + can't follow a theme).
+  cosmos forces `.dark` once at startup (`main.tsx`) with no runtime toggle, so a one-shot read is
+  correct; a future toggle would re-read + re-set `term.options.theme`.
 - **Rich Confluence HTML renders via `prose-cosmos` + a single sanitized `dangerouslySetInnerHTML`.**
   Confluence page detail carries server-rendered `body-format=view` HTML; the shared `PageDetailBody`
   (`confluenceCatalog/components.tsx`, reused by the native `ConfluencePanel` detail AND the gen-UI
@@ -382,6 +517,59 @@ single new `window.cosmos.session` namespace in `src/shared/ipc.ts` (`session:lo
     header, and gen-UI catalog all show real glyphs. `decodeUnicodeEscapes` lives in `src/shared/confluence.ts`
     so main + renderer share one transform; decode HTML body at the text-node level (renderer), never on the
     serialized string (would corrupt attributes).
+  - **Provider message text is wire-format, not plain text — decode it at the single client mapping
+    point in main, never in the renderer.** Slack message `text` is "mrkdwn": HTML-escaped
+    `&amp;`/`&lt;`/`&gt;`, `:shortcode:` emoji, and `<@U|name>`/`<#C|name>`/`<url|label>`/`<!here>`
+    angle-bracket tokens — forwarding it verbatim shows literal `:tada:`, escaped entities, and raw
+    `<…>` markup. `decodeSlackText` (`src/main/integrations/slackText.ts`, with the curated no-dep
+    `slackEmoji.ts` map) is applied at the SOLE mapping point (`slackClient.ts` `toMessages` +
+    `search`), so history, replies, search, the native panel AND the MCP render path all decode once.
+    Order matters: decode `<…>` tokens on the raw string FIRST (before entity-unescape) so a literal
+    `&lt;` in a label can't be mistaken for a token delimiter; preserve `\n` verbatim (the rows are
+    `whitespace-pre-wrap`, so real newlines render — the line-break bug was the missing decode, not
+    CSS). Mirrors the `atlassianText.ts` flattener / Confluence `decodeUnicodeEscapes` convention:
+    pure `.ts`, node-tested, returns `''` for absent input, never throws. No emoji-data npm dep —
+    curated map, same no-dep choice as `confluenceCatalog/sanitize.ts`.
+- **Radix `ScrollArea` shrink-wraps its content to intrinsic width — long lines overflow instead
+  of wrapping.** `@radix-ui/react-scroll-area` wraps the viewport's children in an inner content
+  `div` with an INLINE `style={{ minWidth: "100%", display: "table" }}`. A `display: table` box
+  fits its content's intrinsic width (and `min-width: 100%` is only a floor), so any
+  `whitespace-pre-wrap` text with a long unbroken line expands the table past the panel and
+  overflows horizontally — even though the text element already has `whitespace-pre-wrap
+  break-words` and its column is `min-w-0 flex-1`. The wrap CSS is fine; its containing block is
+  just wider than the panel. The shared `ScrollArea` (`components/ui/scroll-area.tsx`) fixes this
+  ONCE for every consumer via `[&>div]:!block [&>div]:!min-w-full` on the viewport: `!block`
+  defeats the inline `display: table` (a block box fills available width and lets text wrap),
+  `!min-w-full` keeps Radix's `min-width:100%` floor. `!important` is mandatory — Radix sets
+  `display: table` as an inline style, which a plain utility can't beat. The class lives in a pure
+  `scroll-area.classes.ts` so a node test (`*.classes.test.ts`) can assert the override survives a
+  shadcn `--overwrite` re-add (the `.tsx` can't be mounted in node/no-jsdom to observe wrapping).
+  Bug `slack-message-overflow-wrap-v1`. NOTE: the agent-composed A2UI catalog surfaces render
+  inside a plain `overflow-auto` div (no Radix ScrollArea), so they are NOT affected by the Radix
+  `display: table` issue — only native panel read surfaces that wrap content in `<ScrollArea>` are.
+- **A2UI standard-catalog `Column`/`Row` shrink-wrap to intrinsic width too — a SECOND, distinct
+  overflow source in the GENERATIVE path.** The SDK `standardCatalog.components.Column`/`Row`
+  render a `<div>` with a fixed `flex flex-col gap-4` / `flex flex-row gap-3` className and NO
+  `min-w-0`. With flex `min-width: auto` that container grows to its content's intrinsic width, so
+  when the agent groups a list (e.g. a `Text` header + `MessageList`) inside a `Column`/`Row`, a
+  long unbroken message line expands the group past the panel and overflows horizontally — even
+  though the leaf `<p>` has `whitespace-pre-wrap break-words` and the list root is `w-full
+  max-w-full min-w-0`. The cap fails because the SDK container (the containing block) is already
+  wider than the panel. You CANNOT edit the third-party SDK div's className, so register CLAMPED
+  wrappers in the catalog (`slackCatalog/layout.tsx`: render the SDK `Column`/`Row` inside a
+  `w-full min-w-0 max-w-full` block) INSTEAD of `standardCatalog.components.Column/Row`. The clamp
+  class lives in `slackCatalog/logic.ts` (`SLACK_LAYOUT_CLAMP_CLASS`) so a node test asserts it.
+  Bug `slack-generative-wrap-v1`. The SAME clamp is applied across ALL THREE generative catalogs
+  (`{slack,jira,confluence}Catalog/layout.tsx` + `{SLACK,JIRA,CONFLUENCE}_LAYOUT_CLAMP_CLASS =
+  'w-full min-w-0 max-w-full'` in each `logic.ts`; each `index.ts` registers the wrapped
+  `./layout` Column/Row instead of the raw `standardCatalog.components.Column/Row`, with a node
+  test asserting the raw SDK containers are not registered). Mirror the same wrapper into any new
+  catalog that groups data-bearing containers.
+- **Loading skeletons must match the width-fill of the surface they replace.** When the rendered
+  surface fills the panel (e.g. via the `*_LAYOUT_CLAMP_CLASS` wrapper above), a fixed-width
+  skeleton placeholder becomes a visible horizontal jump on the skeleton→content swap. Bug
+  `jira-skeleton-width-v1`: `KanbanBoardSkeleton`'s `w-64 shrink-0` columns were swapped for
+  `flex-1 min-w-0` (equal full-width columns) to match the full-width board.
 
 ## Testing
 
@@ -390,3 +578,107 @@ single new `window.cosmos.session` namespace in `src/shared/ipc.ts` (`session:lo
   plain `logic.ts` beside `components.tsx` and test that (`logic.test.ts`). Each catalog dir is
   `components.tsx` + `logic.ts` + `logic.test.ts` + `index.ts`. The same split is why pure tab
   logic lives in `panelTabs.ts` (node-testable) separate from `PanelTabStrip.tsx`.
+
+## Terminal file explorer (terminal-file-explorer-v1)
+
+Per-tab 3-column layout inside each `TerminalView` (`TerminalPanel.tsx`): **terminal LEFT** (kept
+mounted/live) | **file viewer MIDDLE** (Monaco text / `cosmos-file://` image, or a calm "Select a file"
+placeholder) | **file tree dock RIGHT** (ALWAYS visible — never replaced by the viewer). Two bespoke
+resizable dividers (terminal|viewer, viewer|tree). Clicking a tree row opens/retargets the middle
+viewer; there is NO "back to tree" affordance and NO tree↔viewer toggle. **Welcome-view gate:** BEFORE
+a folder is opened the tab renders ONLY a single centered VS-Code-style welcome view (the [Open a folder]
+CTA, reusing the #75 directory-picker IPC) — no split, no dividers, no dock; the 3-pane split renders
+ONLY once a folder is open (`isFolderOpen(phase)`, a PURE node-tested predicate in `panelTabs.ts`). The
+xterm container stays mounted (hidden) behind the welcome view so the live PTY attaches to the same
+element on go-live. Main owns a per-`paneId` filesystem sandbox rooted at the tab's cwd
+(`terminalSessionMap`); the renderer addresses everything by `paneId` + root-relative path — NO absolute
+path, NO token ever crosses to the renderer.
+
+- **`fs:*` IPC (`src/shared/ipc/fs.ts`).** `fs:list`/`fs:read` (invoke), `fs:watchStart`/
+  `fs:watchStop` (send), `fs:changed` (M→R event). Every inbound payload is validated at the main
+  boundary (`fs.validate.ts`, re-exported through `src/shared/validate.ts`) — invalid → warn +
+  return a denied result / issue no watcher, NEVER crash. `validateFs*` come from the `validate`
+  barrel; `FsChannel` comes from the `ipc` barrel (they are different barrels — importing
+  `FsChannel` from `./validate` is `undefined` at runtime). The shape validators only check
+  `paneId`/`relPath` shape; the security CONFINEMENT (`pathConfine`, real-path canonicalization,
+  `..`/absolute/symlink-escape refusal) is a SEPARATE gate applied after the root lookup.
+- **`window.cosmos.fs.*` is a NEW preload surface → a full `npm run dev` restart is required**
+  (HMR alone leaves the methods `not a function`), like every other new bridge method.
+- **`cosmos-file://` privileged image scheme** (mirrors `cosmos-confluence-img://` /
+  `cosmos-slack-img://`). Pure codec/validator `src/main/localFileRef.ts` (base64url
+  `cosmos-file://file/<paneId>/<base64url(relPath)>`, node-testable, no Electron) + thin wiring
+  `src/main/localFileProtocol.ts`. Gotchas: (1) `registerLocalFileScheme()` must run at module load
+  BEFORE `app.whenReady` (next to the confluence/slack registrations) or the scheme is silently not
+  privileged; `installLocalFileProtocol(getRoot)` runs `protocol.handle` AFTER ready. (2) The handler
+  reuses `pathConfine` (confine to the tab's cwd subtree) and NEVER throws — a forged/out-of-root/
+  missing ref returns a non-2xx broken-image Response → the viewer's `onError`→`ImageOff` fallback.
+  (3) The renderer CSP `img-src` MUST include `cosmos-file:` (in `src/renderer/index.html`) or images
+  silently never load. The renderer builds the `<img src>` with the PURE
+  `src/renderer/fileExplorer/localFileSrc.ts` (duplicates the scheme/authority constants — a renderer
+  module must not import a `src/main` module across the process boundary).
+- **Monaco worker wiring — `?worker`, no plugin.** `src/renderer/fileExplorer/monacoSetup.ts` imports
+  `monaco-editor/esm/vs/editor/editor.worker?worker` and sets `self.MonacoEnvironment.getWorker`
+  directly. Vite (electron-vite renderer) bundles a `?worker` import as a real worker chunk for BOTH
+  dev and packaged builds, so NO `electron.vite.config.ts` change and NO `vite-plugin-monaco-editor`
+  is needed (unlike the "MCP server needs a rollup input" gotcha — workers are auto-bundled). The
+  `?worker` import needs `src/renderer/vite-env.d.ts` (`/// <reference types="vite/client" />`) to
+  typecheck under tsconfig.web. The viewer is READ-ONLY, so only the BASE editor worker is wired (no
+  ts/json/css/html LANGUAGE workers — syntax highlighting runs on the main-thread monarch tokenizers).
+  The `cosmos-dark` Monaco theme is built from the live CSS tokens (`monacoTheme.ts`, pure +
+  node-testable) exactly like `terminalTheme.ts` does for xterm. KNOWN COST: the bare `monaco-editor`
+  barrel pulls every language tokenizer + the ts/json/css/html modes/workers into the bundle (~9MB
+  main + ~15MB unused language workers); acceptable for a desktop app. The slim `editor.api` subpath
+  fights tsc's Bundler moduleResolution (no `exports`-mapped types) — trim later only if size matters.
+- **Two dividers + re-fit.** `ResizeDivider.tsx` reports a signed px delta and takes an `ariaLabel`;
+  `TerminalPanel` owns the clamp + which COLUMN the delta drives. Divider A (terminal|viewer) drives
+  `termWidth`; divider B (viewer|tree) drives `treeWidth` (a rightward drag SUBTRACTS from the dock).
+  Mins: terminal 320px, tree dock 256px, middle viewer 240px; the middle viewer is `flex 1 1 0` (the
+  remainder). ANY divider drag re-fits the xterm via the existing `safeFit()`+`pty.resize` path
+  (exposed through a `pushResizeRef` set inside the mount effect) — divider A changes the terminal
+  width; divider B re-fits too (cheap + idempotent). Both column widths are renderer-local (defaults
+  ~50% terminal / ~25% dock), NOT persisted. The dividers render ONLY when a folder is open (the
+  welcome-view gate above); before that there is no divider to drag.
+- **`.ts`/`.test.ts` split holds.** Pure tree state (`tree.ts`), glyph/language map (`fileGlyph.ts`),
+  theme (`monacoTheme.ts`), src builder (`localFileSrc.ts`), the viewer-state transitions
+  (`viewerState.ts` — `selectFile`/`resolveRead`/`invalidateOpen`), and the folder-open predicate
+  (`isFolderOpen` in `panelTabs.ts`) are node-tested; the React/Monaco components
+  (`FileExplorer.tsx`/`FileTree.tsx`/`FileViewer.tsx`/`ResizeDivider.tsx`) and the impure
+  `monacoSetup.ts` are NOT imported by any `.test.ts` (they need a DOM/worker). `FileExplorer.tsx`
+  exports `useExplorerPanes` (one shared `useFileExplorer` instance backing both the viewer + dock).
+
+### Multi-file viewer tabs (terminal-file-tabs-v1)
+
+The MIDDLE viewer column is a VS Code-style **multi-file editor**: a row of file tabs above the
+viewer body, one tab per opened file. **Renderer-only** — it changes NO `fs:*` channel, the
+`cosmos-file://` scheme, the confinement, or the watcher, so there is **NO preload restart** and no
+main edit. (`TerminalPanel.tsx` needs no change either — the strip lives INSIDE `FileViewer`, which
+`TerminalView` already places.)
+
+- **`openFiles.ts` — the open-files collection MIRRORS `panelTabs.ts`** (`OpenFilesState` =
+  ordered `files: OpenFile[]` + `activeRelPath`), pure + node-tested (`openFiles.test.ts`). The ONE
+  delta from `panelTabs.openTab`: `openOrFocus` **FOCUSES** an already-open relPath instead of
+  rejecting the duplicate — the strip never holds two tabs for one path. `closeFile` **REUSES**
+  `panelTabs.adjacentActiveId` (exported) for the active-close neighbour pick, single-sourced so
+  file tabs and terminal tabs close identically. `updateOpenFile` patches one file's `ViewerState`
+  in isolation (no cross-wire); the per-file state is still produced by `viewerState.ts`
+  (`selectFile`/`resolveRead`/`invalidateOpen`). `activeViewer(state)` is what the body renders.
+- **`useFileExplorer` holds the collection** (was a single `viewer`). `openFile` is open-or-focus:
+  a fresh open kicks one `fs:read` → `updateOpenFile`; a re-click only activates (reuses the
+  resolved viewer — no re-read). The `fs:changed` handler re-reads EVERY open file (the
+  `openRelsRef` tracks all open relPaths now, not one) and invalidates only a vanished tab.
+- **`FileTabStrip.tsx` is a LIGHT bespoke strip, NOT `PanelTabStrip`.** It replicates
+  `PanelTabStrip`'s tokens, focus ring (`ring-[3px] ring-ring/50`), close-`X` reveal idiom,
+  truncation+`Tooltip`, and roving-tabindex keymap VERBATIM (copy the few class strings + the
+  ~20-line `handleTabKeyDown` — do NOT import the whole component), but drops the `+`/rename/F2/
+  status-glyph/terminal-glyph/trailing chrome. Band rests on `bg-card/60` (one notch quieter than
+  the panel band's `bg-popover`); active tab = `bg-card` + `font-medium` + 2px `--primary`
+  top-accent. The strip **replaces** the #84 single-file header (folds into the active tab — ONE
+  `h-8` band; full relPath on the tab tooltip). NO new token, NO new shadcn primitive
+  (`components/ui/` + `index.css` untouched). It is NOT a `components/ui/` file (one consumer).
+- **Tree highlight follows the active tab** — `useExplorerPanes` passes `selectedRelPath =
+  activeRelPath` (was the single open file's relPath); `null` (empty strip) → no open-file selection.
+- **Ephemeral, per-`paneId`.** The collection lives in the per-pane `useFileExplorer` instance —
+  independent across terminal tabs, **NOT in the session snapshot**, reset to empty on go-live /
+  restart (matching the ephemeral split-ratio + viewer state). Failed-read tabs stay NEUTRAL in the
+  strip (binary/denied/not-found are calm per #84 — no red glyph); only the body shows the calm
+  block. Dirty/modified indicator is OUT (read-only viewer).

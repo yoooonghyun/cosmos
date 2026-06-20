@@ -40,6 +40,31 @@ export function isOpenDetailEmittable(issueKey: string | undefined): boolean {
 }
 
 /**
+ * The stable `surfaceId` main stamps on the issue-DETAIL surface
+ * (`SURFACE_ISSUE_DETAIL` in `jiraSurfaceBuilder.ts`). Mirrored renderer-side (main does
+ * not export it to the renderer) so the JiraPanel can tell a detail frame apart from a
+ * list/default/search frame (`jira-issue-list` / `jira-default-view`) when routing the
+ * unsolicited `target:'jira'` frame — a detail frame is diverted into the per-tab dock
+ * slot instead of clobbering the tab's list surface (#86, approach R-A).
+ */
+export const JIRA_DETAIL_SURFACE_ID = 'jira-issue-detail'
+
+/**
+ * Whether an unsolicited `target:'jira'` render frame's spec is the issue-DETAIL surface
+ * (#86, R-A). True only when the spec carries `surfaceId === JIRA_DETAIL_SURFACE_ID`.
+ * A list/default/search/create frame, a Notice (no `surfaceId`), or a malformed spec
+ * returns false (safe fallback — it falls through to the normal active-tab filing). Pure/
+ * node-testable; the panel leans on this in its unsolicited-frame interceptor.
+ */
+export function isDetailSurfaceSpec(spec: unknown): boolean {
+  return (
+    typeof spec === 'object' &&
+    spec !== null &&
+    (spec as { surfaceId?: unknown }).surfaceId === JIRA_DETAIL_SURFACE_ID
+  )
+}
+
+/**
  * The shadcn `Badge` variant + token classes for a normalized status category,
  * REUSED VERBATIM from the native `JiraPanel.StatusBadge` (design §3, the v2 color
  * win). `unknown` (or any unrecognized category) → an outline badge with no tint,
@@ -107,12 +132,42 @@ export function isCommentSubmittable(body: string | undefined): boolean {
 }
 
 /**
- * Whether the TransitionPicker's Apply button is enabled — a transition must be
- * selected (a non-empty `transitionId` from the surface data model). Mirror of
- * main's guard (design §6, FR-008).
+ * Whether selecting `transitionId` should dispatch a transition (design §6, FR-006/FR-008).
+ * True only when it is a non-empty/non-whitespace id. The TransitionPicker now applies
+ * ON SELECT (no Apply button — jira-dock-autoapply-weblink-v1), so `currentId` (the
+ * in-flight / last-dispatched id) makes a RE-SELECTION of that same value a no-op (FR-006) —
+ * never dispatching a second transition for the value already being applied. An empty/absent
+ * `currentId` means "nothing in flight", so any valid id is submittable. Mirror of main's guard.
  */
-export function isTransitionSubmittable(transitionId: string | undefined): boolean {
-  return typeof transitionId === 'string' && transitionId.trim().length > 0
+export function isTransitionSubmittable(
+  transitionId: string | undefined,
+  currentId?: string | undefined
+): boolean {
+  if (typeof transitionId !== 'string' || transitionId.trim().length === 0) {
+    return false
+  }
+  if (typeof currentId === 'string' && currentId.trim().length > 0 && transitionId.trim() === currentId.trim()) {
+    return false
+  }
+  return true
+}
+
+/**
+ * Whether a bound issue `webUrl` is a live, openable external link
+ * (jira-dock-autoapply-weblink-v1, FR-014). The main-side assembler already enforces
+ * `http(s)`, but the bound/native value re-validates here so a malformed value can NEVER
+ * become a live link. Pure; never throws. Mirrors Confluence's `isOpenableWebUrl`.
+ */
+export function isOpenableJiraWebUrl(webUrl: string | undefined): webUrl is string {
+  if (typeof webUrl !== 'string' || webUrl.trim() === '') {
+    return false
+  }
+  try {
+    const u = new URL(webUrl)
+    return u.protocol === 'http:' || u.protocol === 'https:'
+  } catch {
+    return false
+  }
 }
 
 /* ------------------------------------------------------------------------- *
@@ -178,4 +233,54 @@ export function diffUpdateFields(seed: EditSeed, current: EditSeed): JiraUpdateF
  */
 export function isUpdateSubmittable(fields: JiraUpdateFields): boolean {
   return Object.keys(fields).length > 0
+}
+
+/* ------------------------------------------------------------------------- *
+ * Generative layout width-clamp (bug slack-generative-wrap-v1, Jira latent instance)
+ *
+ * The agent groups Jira lists/detail with the SDK standard-catalog `Column`/`Row`
+ * (registered in `index.ts`). Those SDK containers render a `<div>` whose className is a
+ * fixed `flex flex-col gap-4` / `flex flex-row gap-3` with NO `min-w-0` — so the flex box
+ * keeps its default `min-width: auto` and grows to its content's INTRINSIC width. A long
+ * unbroken line therefore expands that container past the panel and overflows horizontally;
+ * the leaf's `break-words` and the list root's `min-w-0` never take effect because their
+ * containing block is already wider than the panel.
+ *
+ * We cannot edit the third-party SDK div's className, so the Jira catalog registers clamped
+ * wrappers (see `layout.tsx`) that render the SDK `Column`/`Row` inside a block box carrying
+ * this class. `min-w-0` defeats the flex `min-width: auto` floor the wrapper inherits from
+ * the panel's flex host; `max-w-full` caps it at the panel width; `w-full` keeps short
+ * content filling the column. The class lives here (not the `.tsx`) so the fix is assertable
+ * in a node (no-jsdom) unit test — mirroring `slackCatalog/logic.ts`.
+ * ------------------------------------------------------------------------- */
+
+/** Width-clamp applied around an agent-emitted SDK Column/Row so its subtree wraps. */
+export const JIRA_LAYOUT_CLAMP_CLASS = 'w-full min-w-0 max-w-full'
+
+/* ------------------------------------------------------------------------- *
+ * IssueList empty-state gate (bug jira-empty-flash-v1)
+ *
+ * A `{path}`-bound `issues` prop resolves through `useBound` to `undefined` UNTIL main
+ * seeds the surface dataModel (jira-generative-adapter-v1): ActiveTabSurface paints the
+ * createSurface/updateComponents spec FIRST, then applies the dataModel seed a tick later.
+ * In that gap `rows === undefined` — which `Array.isArray(rows) ? rows : []` collapses to
+ * an empty array, indistinguishable from a genuinely empty seeded list. The result was the
+ * "No issues found." empty state flashing between skeleton and first paint.
+ *
+ * Gate: show the empty state ONLY for a SEEDED, genuinely empty, settled list — `rows` is
+ * an array, it is empty, and it is not mid-load. `undefined` (not yet seeded) or
+ * `isLoading` both suppress it, so the quiet container/skeleton shows during the gap.
+ * ------------------------------------------------------------------------- */
+
+/**
+ * Whether IssueList should render its "No issues found." empty state. True ONLY when the
+ * bound rows have been SEEDED to an array, that array is empty, and the surface is not
+ * loading — so the unseeded (`undefined`) window and the loading window both suppress it.
+ * Pure/node-testable; the component leans on this instead of a raw `length === 0` check.
+ */
+export function shouldShowIssueEmptyState(
+  rows: readonly unknown[] | undefined,
+  isLoading: boolean
+): boolean {
+  return Array.isArray(rows) && rows.length === 0 && !isLoading
 }

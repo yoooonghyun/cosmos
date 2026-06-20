@@ -17,7 +17,7 @@
  *   (+ Column/Row passthroughs)
  */
 
-import { standardCatalog, type Catalog } from '@a2ui-sdk/react/0.9'
+import { type Catalog } from '@a2ui-sdk/react/0.9'
 import {
   Notice,
   PageDetail,
@@ -25,6 +25,10 @@ import {
   SearchResultRow,
   Text
 } from './components'
+// bug slack-generative-wrap-v1 (Confluence latent instance): register width-clamped
+// Column/Row wrappers in place of the raw SDK layout containers so an agent-grouped
+// list/detail wraps instead of overflowing horizontally.
+import { Column, Row } from './layout'
 // confluence-generative-adapter-v1 (design §6.1): the bound list's tail load-more reuses
 // the SHARED adapter control verbatim. Confluence is append-only, so it registers
 // LoadMoreButton ONLY — never PaginationBar. Refresh moved to the panel chrome
@@ -49,8 +53,8 @@ export const confluenceCatalog: Catalog = {
     Notice,
     Text,
     LoadMoreButton,
-    Column: standardCatalog.components.Column,
-    Row: standardCatalog.components.Row
+    Column,
+    Row
   },
   functions: {}
 }

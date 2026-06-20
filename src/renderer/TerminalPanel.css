@@ -4,7 +4,9 @@
   min-height: 0;
   display: flex;
   flex-direction: column;
-  background: #1e1e1e;
+  /* Match every other panel surface + the xterm screen (themed from --card):
+     bug terminal-panel-tone-mismatch-v1. Was hardcoded #1e1e1e (= --background). */
+  background: var(--card);
 }
 
 .terminal-panel__xterm {

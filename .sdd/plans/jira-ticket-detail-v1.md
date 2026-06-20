@@ -1,13 +1,73 @@
 # Plan: Jira Ticket Detail (click-to-open) — v1
 
-**Status**: Implemented (619/619 tests pass; GUI verification pending)
+**Status**: v1 (view-swap) Implemented 2026-06-07. **REVISED 2026-06-20 (#86): presentation changed to a right-side detail dock — see "Revision (#86)" below. Revision implementation pending (design step first).**
 **Created**: 2026-06-07
-**Last updated**: 2026-06-07
+**Last updated**: 2026-06-20
 **Spec**: .sdd/specs/jira-ticket-detail-v1.md
 
 ---
 
-## Summary
+## Revision (#86) — view-swap → right-side detail dock
+
+> 2026-06-20. The original v1 (below) shipped the detail as a **whole-panel view-swap** with a native
+> `ChevronLeft` "Back to list" row. #86 changes the **presentation only** to a **right-side detail
+> dock alongside the still-visible issue list**, matching the shipped Slack thread dock and the
+> calendar event-detail dock. Revised in place (not a v2) — presentation-only on a shipped feature,
+> same call the calendar event-detail revision made. The original v1 sections are retained below as
+> the historical record; this Revision section is the authoritative plan for the dock. **Implementation
+> checklist for the revision is "Revision Phase R1–R4" near the end of this doc.**
+
+### Grounding (architect, this revision)
+
+- **codegraph_explore** `JiraPanel jiraCatalog ticket detail nav ActiveTabSurface onAction detail
+  component` → the verbatim `JiraPanel`. The click intercept (`handleSurfaceAction` on
+  `JIRA_OPEN_DETAIL_ACTION`, returns `true`) and the `jira:requestIssueDetail` read are KEPT. What is
+  RETIRED: the `view: {kind:'list'|'detail'}` whole-region swap, the native `ChevronLeft` back row
+  (JiraPanel lines ~490-503), the `originListRef`/`backNavTarget`/`JiraBackOrigin` snapshot-restore
+  machinery, and `goBackToList`'s re-read. The `navLoading` floor is also no longer needed for a
+  list⇄detail swap (no swap happens), though it MAY stay for the in-dock detail read.
+- The Slack/calendar dock shell (from the calendar design grounding): `@container/slackbody` two-pane,
+  side-by-side `w-[clamp(18rem,42%,28rem)] shrink-0 border-l` at `≥32rem`, absolute right-drawer
+  `max-w-[22rem] shadow-lg` over a `bg-black/40 @[32rem]:hidden` scrim below it, X-close + scrim
+  dismiss, transient per-tab. The calendar `EventDetail` dock (`.sdd/designs/calendar-event-detail-v1.md`)
+  is the closest precedent (also an overlay→dock conversion).
+- **memory** `Jira ticket detail nav overlay side-dock presentation` → empty; persisting the dock
+  decision.
+
+### Key mechanism change
+
+The detail no longer arrives as an unsolicited `target:'jira'` frame that **overwrites the tab's list
+surface**. Instead the detail is rendered in a **native dock component beside the list**, fed by the
+`getIssue` read result — so the tab's list surface is **never clobbered**, which is exactly why the
+whole `composed`-surface snapshot/restore back-origin machinery can be **deleted**. Two clean options
+for HOW the dock gets the detail content (the interface/design step picks one; the spec FRs are
+agnostic):
+
+- **(R-A) Render the detail surface IN the dock.** Keep `jira:requestIssueDetail` returning the
+  `buildIssueDetailSurface` A2UI surface, but route that unsolicited frame's surface into a **per-tab
+  `detailSurface` slot** (NOT the tab's main `surface`) and host it in a second `A2UIProvider` inside
+  the dock. The list `A2UIProvider` keeps the tab's main `surface` untouched and visible. Reuses the
+  existing main composer + catalog verbatim; the only new renderer state is the per-tab dock slot.
+  **Recommended** — preserves the existing main read path and the full detail catalog (transition/
+  comment controls) with the least new surface plumbing.
+- **(R-B) Native `JiraTicketDetail` dock component** (parallel to calendar's native `EventDetail`),
+  fed a plain `JiraIssueDetail` DTO over IPC, no A2UI in the dock. Cleaner separation but it would
+  rebuild the detail's transition/comment **write controls** outside the catalog — more work and a
+  divergence from the deterministic `jira.*` write path. Prefer R-A unless the design wants a native
+  dock; either keeps the read-only/no-new-scope posture.
+
+Renderer state for the revision: replace `view`/`originListRef` with a single per-tab
+`detailIssueKey: string | null` (+ the R-A `detailSurface` slot), set by the same
+`JIRA_OPEN_DETAIL_ACTION` intercept, cleared by the dock's X / narrow-mode scrim, and reset to `null`
+on `activeTabId` change and on disconnect (FR-014). The dock shell is the verbatim Slack/calendar
+`@container` two-pane (OQ defaults: `32rem` breakpoint, `clamp(18rem,42%,28rem)`, `max-w-[22rem]`
+drawer, X + scrim). **UI-bearing → a `design` step (designer agent) produces
+`.sdd/designs/jira-ticket-detail-v1.md` (or refreshes it for the dock) BEFORE interface work**, reusing
+the calendar dock design as the direct template.
+
+---
+
+## Summary (original v1 — view-swap; superseded by the Revision above)
 
 Make a `TicketCard` in the Jira panel's `IssueList` clickable so it opens that ticket's full detail
 **in place in the active tab**, with a native "back to list" affordance that returns the tab to the
@@ -239,3 +299,73 @@ finalizes the exact string; the spec FRs are agnostic to it.
 - **2026-06-07 — Phase 6 docs were already written.** `docs/ARCHITECTURE.md` §4.9 already contained an
   accurate description of this feature (added by the architect during planning); it matches the
   implementation verbatim, so no doc edit was made.
+
+---
+
+## Revision (#86) Implementation Checklist — view-swap → right-side dock
+
+> Pending. **A `design` step (designer agent) MUST run first** to produce/refresh
+> `.sdd/designs/jira-ticket-detail-v1.md` for the Jira detail dock, reusing the calendar
+> `EventDetail` dock design (`.sdd/designs/calendar-event-detail-v1.md`) as the direct template
+> (`@container` two-pane, `32rem` breakpoint, `clamp(18rem,42%,28rem)` side-by-side, `max-w-[22rem]`
+> drawer + `bg-black/40` scrim, header X). The mechanism is fixed in the Revision section above;
+> recommended approach is **R-A** (route the detail surface into a per-tab dock slot, host it in a
+> second `A2UIProvider` inside the dock; list surface untouched). Confirm R-A vs R-B at the
+> interface step. No new IPC channel, no new fetch, no new scope — `jira:requestIssueDetail` is reused.
+
+### Revision Phase R1 — Design (designer)  ·  FR-002, FR-004
+
+- [ ] Designer produces/refreshes `.sdd/designs/jira-ticket-detail-v1.md`: the dock shell copied from
+      the calendar `EventDetail` dock (verbatim Slack tokens), the detail content layout (key/status,
+      description, comments, transition + add-comment controls — the existing detail surface, now
+      framed by the dock), the now-interactive ticket card's selected/retarget marking, and the
+      narrow-drawer scrim. Dark-only, existing tokens + `components/ui/` primitives only.
+
+### Revision Phase R2 — Renderer dock shell + per-tab dock state  ·  FR-002, FR-004, FR-005, FR-006, FR-014
+
+- [ ] `src/renderer/JiraPanel.tsx`: REMOVE the `view: {kind:'list'|'detail'}` state, the native
+      `ChevronLeft` "Back to list" row (~lines 490-503), `goBackToList`, and the `originListRef`
+      usage. Replace with per-tab `detailIssueKey: string | null` (and, for R-A, the `detailSurface`
+      slot — see R3) set by `handleSurfaceAction` and reset to `null` on `activeTabId` change and on
+      disconnect (FR-014). The `JqlSearchBox`/`PromptComposer`/default-view effect stay; the search-box
+      no longer needs to clear a detail `view`.
+- [ ] `src/renderer/JiraPanel.tsx`: wrap the connected content region in the `@container/<jirabody>`
+      two-pane (copy the calendar `@container/calbody` shell verbatim): the existing `A2UIProvider`
+      list pane as `min-w-0 flex-1` (stays mounted/visible), and the dock (mounted only when
+      `detailIssueKey != null`) as the Slack/calendar dock div (`absolute inset-y-0 right-0 z-20
+      w-full max-w-[22rem] shadow-lg … @[32rem]:relative @[32rem]:w-[clamp(18rem,42%,28rem)]
+      @[32rem]:shrink-0 @[32rem]:border-l …`) over a `bg-black/40 @[32rem]:hidden` scrim. Dock header
+      carries the X (`Button variant="ghost" size="icon-sm"`, `onClick` clears `detailIssueKey`);
+      scrim `onClick` also clears it. Clicking another card retargets (sets a new `detailIssueKey`),
+      never stacks. (FR-002/FR-004/FR-005)
+
+### Revision Phase R3 — Detail content into the dock  ·  FR-003 (kept), FR-007, FR-012
+
+- [ ] **R-A (recommended):** route the `jira:requestIssueDetail` unsolicited frame's surface into the
+      active tab's NEW `detailSurface` slot instead of overwriting `tab.surface`. This needs a small
+      `useGenerativePanelTabs` seam (or a JiraPanel-local subscription) so the detail frame lands in
+      the dock slot, leaving the list `surface` untouched. Host `detailSurface` in a SECOND
+      `A2UIProvider key={tab.id+':detail'} catalog={jiraCatalog}` inside the dock body, so the
+      transition/add-comment `jira.*` write controls keep working unchanged (a write re-pushes a fresh
+      detail into the dock slot; the dock stays open — FR-012). The in-flight detail read shows the
+      existing per-tab loading indication scoped to the dock (FR-006).
+      **R-B (alternative):** a native `JiraTicketDetail` dock component fed a `JiraIssueDetail` DTO —
+      only if the design chooses native; rebuild the write controls accordingly. Decide at interface.
+- [ ] Keep `handleSurfaceAction` intercepting `JIRA_OPEN_DETAIL_ACTION` (returns `true`, sets
+      `detailIssueKey` + fires `requestIssueDetail`); any other action returns `false` so `jira.*`
+      writes still reach main (FR-012). The `composed`/`backNavTarget` snapshot logic is DELETED — the
+      list surface is never clobbered now, so there is nothing to snapshot/restore.
+
+### Revision Phase R4 — Tests + docs  ·  FR-014, architecture coherence
+
+- [ ] Add/adjust pure-logic tests for the per-tab dock open/retarget/close + reset-on-tab-switch
+      (the dock-state reducer or helper, node-testable split). Remove/replace the obsolete
+      `backNavTarget`/`JiraBackOrigin` tests (`src/renderer/jiraBackNav.test.ts`) — that module is
+      retired by the dock.
+- [ ] `docs/ARCHITECTURE.md` §4.9: rewrite the "Clicking a ticket opens its detail in place" passage
+      (lines ~520-536) to the **right-side detail dock** idiom (list stays mounted beside the detail;
+      no surface clobber; no `backNavTarget` snapshot/restore; dock is transient per-tab, X + scrim
+      dismiss; reuses the Slack/calendar side-dock shell). Remove the now-incorrect "unsolicited frame
+      OVERWRITES the active tab's surface / `backNavTarget` / `JiraBackOrigin` / `jiraBackNav.ts`"
+      lesson, replacing it with the dock lesson (keeping the list mounted dissolves the clobber).
+- [ ] Manual/dev verification (human + full `npm run dev` restart) — same GUI caveat as v1.

@@ -9,9 +9,12 @@ import { contextBridge, ipcRenderer, type IpcRendererEvent } from 'electron'
 import {
   AgentChannel,
   ConfluenceChannelName,
+  FsChannel,
+  GoogleCalendarChannelName,
   JiraChannelName,
   PtyChannel,
   SessionChannel,
+  SettingsChannelName,
   ShortcutChannel,
   SlackChannelName,
   UiChannel,
@@ -20,6 +23,12 @@ import {
   type AgentSubmitPayload,
   type ConfluenceApi,
   type CosmosApi,
+  type FsApi,
+  type FsChangedPayload,
+  type FsListResult,
+  type FsReadResult,
+  type GoogleCalendarApi,
+  type GoogleCalendarRequestDefaultViewPayload,
   type JiraApi,
   type JiraRequestIssueDetailPayload,
   type JiraRequestSearchViewPayload,
@@ -27,9 +36,15 @@ import {
   type PtyDataPayload,
   type PtyExitPayload,
   type PtyInputPayload,
+  type PtyPickDirectoryResult,
   type PtyResizePayload,
+  type ClientConfigClearPayload,
+  type ClientConfigSavePayload,
+  type ClientConfigSaveResult,
+  type ClientConfigStatus,
   type SessionApi,
   type SessionSnapshot,
+  type SettingsApi,
   type ShortcutApi,
   type ShortcutTriggerPayload,
   type SlackApi,
@@ -44,7 +59,8 @@ import type {
   SlackHistoryParams,
   SlackListChannelsParams,
   SlackRepliesParams,
-  SlackSearchParams
+  SlackSearchParams,
+  SlackSendParams
 } from '../shared/slack'
 import type {
   JiraConnectionStatus,
@@ -57,12 +73,24 @@ import type {
   ConfluenceGetPageParams,
   ConfluenceSearchParams
 } from '../shared/confluence'
+import type {
+  GoogleCalendarConnectionStatus,
+  GoogleCalendarListEventsParams
+} from '../shared/googleCalendar'
 
 const ptyApi: PtyApi = {
   // panel-tabs v1 FR-021/FR-022: spawn a new pane's PTY session (renderer mints
   // the per-tab paneId). The single PTY is no longer auto-started in main.
-  start(paneId: string): void {
-    ipcRenderer.send(PtyChannel.Start, { paneId })
+  // terminal-open-directory-picker-v1 FR-004: forward an OPTIONAL chosen `cwd` for a
+  // freshly-picked tab; omitted entirely on the restore/normal path.
+  start(paneId: string, opts?: { cwd?: string }): void {
+    ipcRenderer.send(PtyChannel.Start, opts?.cwd ? { paneId, cwd: opts.cwd } : { paneId })
+  },
+  // terminal-open-directory-picker-v1 FR-002/FR-003: open the native OS directory
+  // picker in MAIN and resolve with the chosen path (or null on cancel). NEW preload
+  // method — requires a full `npm run dev` restart; HMR won't expose it live.
+  pickDirectory(): Promise<PtyPickDirectoryResult> {
+    return ipcRenderer.invoke(PtyChannel.PickDirectory)
   },
   sendInput(payload: PtyInputPayload): void {
     ipcRenderer.send(PtyChannel.Input, payload)
@@ -115,6 +143,33 @@ const uiApi: UiApi = {
   }
 }
 
+// terminal-file-explorer-v1 (FR-025/FR-026): the file explorer reaches the renderer
+// ONLY through this dedicated `window.cosmos.fs` channel set. `list`/`read` are
+// request/response (`invoke`); `watchStart`/`watchStop` are fire-and-forget; `onChanged`
+// is an M->R subscription returning an unsubscribe fn. NO token/secret crosses this
+// surface (FR-024) — only the user's own local file contents inside the chosen root.
+// NEW preload methods — a full `npm run dev` restart is required; HMR won't expose them.
+const fsApi: FsApi = {
+  list(paneId: string, relPath: string): Promise<FsListResult> {
+    return ipcRenderer.invoke(FsChannel.List, { paneId, relPath })
+  },
+  read(paneId: string, relPath: string): Promise<FsReadResult> {
+    return ipcRenderer.invoke(FsChannel.Read, { paneId, relPath })
+  },
+  watchStart(paneId: string): void {
+    ipcRenderer.send(FsChannel.WatchStart, { paneId })
+  },
+  watchStop(paneId: string): void {
+    ipcRenderer.send(FsChannel.WatchStop, { paneId })
+  },
+  onChanged(listener: (payload: FsChangedPayload) => void): () => void {
+    const handler = (_event: IpcRendererEvent, payload: FsChangedPayload): void =>
+      listener(payload)
+    ipcRenderer.on(FsChannel.Changed, handler)
+    return () => ipcRenderer.removeListener(FsChannel.Changed, handler)
+  }
+}
+
 // FR-007/FR-024: the Slack capability reaches the renderer ONLY through this
 // dedicated `window.cosmos.slack` channel set. The reads are request/response via
 // `invoke`; `onStatusChanged` is a fire-and-forget M->R subscription. NO method
@@ -143,6 +198,9 @@ const slackApi: SlackApi = {
   },
   getUser(params: SlackGetUserParams) {
     return ipcRenderer.invoke(SlackChannelName.GetUser, params)
+  },
+  sendMessage(params: SlackSendParams) {
+    return ipcRenderer.invoke(SlackChannelName.Send, params)
   },
   onStatusChanged(listener: (status: SlackConnectionStatus) => void): () => void {
     const handler = (_event: IpcRendererEvent, status: SlackConnectionStatus): void =>
@@ -230,6 +288,40 @@ const confluenceApi: ConfluenceApi = {
   }
 }
 
+// google-calendar-v1 (Track A): the Google Calendar capability reaches the renderer
+// ONLY through this dedicated `window.cosmos.googleCalendar` channel set — an
+// independent connection from Slack/Atlassian. Reads are request/response via `invoke`;
+// `onStatusChanged` is a fire-and-forget M->R subscription. READ-ONLY — no write method;
+// NO method takes or returns a token (SC-009).
+const googleCalendarApi: GoogleCalendarApi = {
+  getStatus(): Promise<GoogleCalendarConnectionStatus> {
+    return ipcRenderer.invoke(GoogleCalendarChannelName.GetStatus)
+  },
+  connect(): Promise<GoogleCalendarConnectionStatus> {
+    return ipcRenderer.invoke(GoogleCalendarChannelName.Connect)
+  },
+  disconnect(): Promise<GoogleCalendarConnectionStatus> {
+    return ipcRenderer.invoke(GoogleCalendarChannelName.Disconnect)
+  },
+  listEvents(params: GoogleCalendarListEventsParams) {
+    return ipcRenderer.invoke(GoogleCalendarChannelName.ListEvents, params)
+  },
+  // Fire-and-forget R->M signal that the Google Calendar panel wants the default-view
+  // surface (`target: 'google-calendar'`). With no arg main reads the CURRENT month; with
+  // an optional `{ year, month }` (1-based) the panel navigates to that month
+  // (calendar-month-year-nav-v1). Always send an OBJECT (the supplied params, else `{}`)
+  // so main's boundary validator (which requires an object) accepts the trigger.
+  requestDefaultView(params?: GoogleCalendarRequestDefaultViewPayload): void {
+    ipcRenderer.send(GoogleCalendarChannelName.RequestDefaultView, params ?? {})
+  },
+  onStatusChanged(listener: (status: GoogleCalendarConnectionStatus) => void): () => void {
+    const handler = (_event: IpcRendererEvent, status: GoogleCalendarConnectionStatus): void =>
+      listener(status)
+    ipcRenderer.on(GoogleCalendarChannelName.StatusChanged, handler)
+    return () => ipcRenderer.removeListener(GoogleCalendarChannelName.StatusChanged, handler)
+  }
+}
+
 // FR-009: the headless agent runner reaches the renderer ONLY through this
 // dedicated `window.cosmos.agent` channel set, alongside (not merged into) the
 // pty/ui/slack/jira/confluence surfaces. The renderer sends only the utterance
@@ -270,15 +362,36 @@ const shortcutApi: ShortcutApi = {
   }
 }
 
+// settings-oauth-clients-v1 (FR-004/FR-007/FR-008): the OAuth client-config surface
+// reaches the renderer ONLY through this dedicated `window.cosmos.settings` channel
+// set. All three calls are request/response (`invoke`). The renderer learns only the
+// renderer-safe status (secretConfigured boolean, never the secret value) — no token
+// or secret crosses this surface (FR-006). NEW preload methods: a full `npm run dev`
+// restart is required; HMR won't expose them live.
+const settingsApi: SettingsApi = {
+  getConfig(): Promise<ClientConfigStatus> {
+    return ipcRenderer.invoke(SettingsChannelName.GetConfig)
+  },
+  save(payload: ClientConfigSavePayload): Promise<ClientConfigSaveResult> {
+    return ipcRenderer.invoke(SettingsChannelName.Save, payload)
+  },
+  clearField(payload: ClientConfigClearPayload): Promise<ClientConfigSaveResult> {
+    return ipcRenderer.invoke(SettingsChannelName.ClearField, payload)
+  }
+}
+
 const api: CosmosApi = {
   pty: ptyApi,
+  fs: fsApi,
   ui: uiApi,
   slack: slackApi,
   jira: jiraApi,
   confluence: confluenceApi,
+  googleCalendar: googleCalendarApi,
   agent: agentApi,
   shortcuts: shortcutApi,
-  session: sessionApi
+  session: sessionApi,
+  settings: settingsApi
 }
 
 contextBridge.exposeInMainWorld('cosmos', api)

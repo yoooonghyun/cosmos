@@ -47,6 +47,13 @@ export interface SlackConnectionStatus {
    */
   canSearch?: boolean
   /**
+   * Whether the granted scopes/token permit sending a message (slack-send-message-v1,
+   * FR-009). Mirrors {@link canSearch}: a non-secret per-scope capability flag derived
+   * from `chat:write`. When false the composer surfaces a Reconnect affordance up front
+   * instead of an enabled-but-failing send (FR-010). Never a secret.
+   */
+  canSend?: boolean
+  /**
    * Human-readable reason the last connect attempt failed (e.g. cancelled,
    * timed out, or not configured). Set when a connect ends back at
    * not_connected so the panel can explain *why* instead of appearing inert.
@@ -70,6 +77,24 @@ export interface SlackChannel {
 }
 
 /**
+ * An opaque attachment-image reference carried on a {@link SlackMessage}
+ * (slack-rich-message-render-v1, FR-009/FR-010). `ref` is a `cosmos-slack-img://`
+ * scheme URL the renderer hands straight to an `<img src>`; main resolves it to the
+ * auth-gated `files.slack.com` bytes with the token attached only to the outbound
+ * fetch. NEVER a token, NEVER a token-bearing `files.slack.com` URL (FR-014).
+ */
+export interface SlackImageRef {
+  /** The opaque `cosmos-slack-img://slack/<base64url>` reference. NEVER a token/URL. */
+  ref: string
+  /** Accessible alt / filename when Slack provides one (the broken-image fallback). */
+  alt?: string
+  /** Natural pixel width when known (lets the row reserve layout space). */
+  w?: number
+  /** Natural pixel height when known. */
+  h?: number
+}
+
+/**
  * A message in a channel or a thread reply (FR-013, FR-014).
  * `userId` is always present; `userName` is the resolved display name when the
  * granted scopes allow, else absent and the panel falls back to `userId` (FR-014).
@@ -81,10 +106,26 @@ export interface SlackMessage {
   userId: string
   /** Resolved author display name when scopes allow (users:read), else absent. */
   userName?: string
-  /** Message text. */
+  /**
+   * Message text. Mentions are resolved to `@DisplayName`, standard emoji are
+   * substituted to their Unicode glyph; CUSTOM-emoji shortcodes are left as `:name:`
+   * markers (the renderer swaps them via {@link customEmoji}). Plain string.
+   */
   text: string
   /** Number of replies in this message's thread, when it has one (FR-013). */
   replyCount?: number
+  /**
+   * Inline image attachments (image `files[]` / image `blocks[]`) as OPAQUE refs
+   * (slack-rich-message-render-v1, FR-009/FR-010). Absent / empty → no thumbnails.
+   */
+  images?: SlackImageRef[]
+  /**
+   * Per-message custom-emoji shortcode → opaque image ref map (FR-006/FR-007). Only
+   * the shortcodes actually used in this message that resolved to a workspace custom
+   * (image-backed) emoji appear here; the renderer swaps the `:name:` markers in
+   * `text` for an inline `<img>`. Absent → no custom emoji (standard/literal only).
+   */
+  customEmoji?: Record<string, string>
 }
 
 /** A user/display-name lookup result (FR-014, FR-017, Scopes: users:read). */
@@ -103,12 +144,18 @@ export interface SlackSearchMatch {
   userId: string
   /** Resolved author display name when available (FR-014), else absent. */
   userName?: string
-  /** Matching message text. */
+  /** Matching message text (mentions resolved, standard emoji glyph-substituted). */
   text: string
   /** Channel id the hit is in. */
   channelId: string
   /** Channel name the hit is in (for the `#channel` context chip, design §2.2). */
   channelName?: string
+  /**
+   * Per-match custom-emoji shortcode → opaque image ref map (slack-rich-message-
+   * render-v1, FR-006/FR-012). Carried so a search row's body renders custom emoji
+   * identically to a history row. Search rows do NOT carry image attachments in v1.
+   */
+  customEmoji?: Record<string, string>
 }
 
 /* ------------------------------------------------------------------------- *
@@ -125,6 +172,15 @@ export interface SlackPage<T> {
   items: T[]
   /** Opaque cursor for the next page, or absent when no more pages exist. */
   nextCursor?: string
+  /**
+   * The thread root's canonical "Open in Slack" web permalink, carried ONLY by the
+   * `getReplies` (thread) read (slack-thread-open-in-slack-v1). Resolved from Slack's own
+   * `chat.getPermalink` API (never hand-built) and re-validated to an openable `http(s)` URL
+   * before it is attached; absent when the resolve fails or the value is non-openable
+   * (degrade-to-omit → the thread dock shows a plain header with no link). NON-SECRET: the
+   * canonical web URL only — NEVER a token or a token-bearing URL (SC-008).
+   */
+  permalink?: string
 }
 
 /* ------------------------------------------------------------------------- *
@@ -139,6 +195,9 @@ export interface SlackPage<T> {
  *   search_unavailable — search scope/token absent; mark search unavailable (FR-015).
  *   rate_limited       — Slack 429; honor Retry-After, "busy, retry shortly" (FR-026).
  *   network            — transient network/HTTP error; recoverable Retry (FR-026).
+ *   write_not_authorized — the token lacks `chat:write`; the manager short-circuits a
+ *                        send WITHOUT a Slack API call, prompting a one-time Reconnect
+ *                        (slack-send-message-v1, FR-008/FR-010; mirrors the Jira kind).
  */
 export type SlackErrorKind =
   | 'not_connected'
@@ -146,6 +205,7 @@ export type SlackErrorKind =
   | 'search_unavailable'
   | 'rate_limited'
   | 'network'
+  | 'write_not_authorized'
 
 /** A failed Slack read (FR-020, FR-026). Carries NO secret (FR-021, SC-008). */
 export interface SlackError {
@@ -214,6 +274,42 @@ export interface SlackGetUserParams {
   /** The user id to look up. */
   userId: string
 }
+
+/* ------------------------------------------------------------------------- *
+ * Write operation: send a plain-text message (slack-send-message-v1)
+ *
+ * The FIRST write on the Slack integration. A NATIVE panel control only — NOT a
+ * tool/op on the read-only MCP or generative A2UI surfaces (FR-016, SC-007). The
+ * token NEVER appears here (FR-006, SC-006): the renderer requests the send; main
+ * attaches the token.
+ * ------------------------------------------------------------------------- */
+
+/**
+ * Params for sending a plain-text message (FR-004). A present `threadTs` makes the
+ * send a thread reply (`thread_ts`); absent makes it a top-level channel message.
+ * Text-only in v1 (FR-017): no attachments/blocks. Carries NO token (FR-006).
+ */
+export interface SlackSendParams {
+  /** The channel id to post to (non-secret). */
+  channelId: string
+  /** The plain-text message body (non-empty, non-whitespace — FR-003). */
+  text: string
+  /** Present ⇒ thread reply (`thread_ts`); absent ⇒ channel message (FR-002/FR-004). */
+  threadTs?: string
+}
+
+/** The data a successful send resolves: the posted message `ts` (FR-004). */
+export interface SlackSendResult {
+  /** The posted message's Slack timestamp/id (`ts`). */
+  ts: string
+}
+
+/** The OAuth user scope a send requires; absent on read-only-era tokens (FR-007/FR-008). */
+export const SLACK_WRITE_SCOPE = 'chat:write'
+
+/** The structured-result message returned for a send without `chat:write` (FR-008/FR-010). */
+export const SLACK_WRITE_NOT_AUTHORIZED_MESSAGE =
+  'Reconnect Slack to send messages. Open the Slack panel and choose Reconnect.'
 
 /* ------------------------------------------------------------------------- *
  * Read-only MCP tool contract (FR-017, FR-019, FR-022)

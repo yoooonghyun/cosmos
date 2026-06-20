@@ -364,6 +364,26 @@ describe('buildBoundIssueDetailSurface (FR-009/FR-013/FR-014/FR-020)', () => {
     expect(JSON.stringify(bound)).not.toMatch(/Bearer|accessToken|refreshToken/)
   })
 
+  // jira-dock-autoapply-weblink-v1 (FR-022): the non-secret browse `webUrl` rides the whole
+  // bound issue value seeded at JIRA_DETAIL_PATH, so the header TicketCard (bound to the whole
+  // issue) reads it and the link survives the post-write re-push (a fresh detail frame carries
+  // the re-read DTO, including its `webUrl`).
+  it('carries webUrl on the seeded bound issue value when present (FR-022)', () => {
+    const withUrl: JiraIssueDetail = {
+      ...detailBase,
+      webUrl: 'https://acme.atlassian.net/browse/PROJ-1'
+    }
+    const { dataModel } = buildBoundIssueDetailSurface('jira-issue-detail', withUrl)
+    const seed = dataModel.find((d) => d.path === JIRA_DETAIL_PATH)!
+    expect((seed.value as JiraIssueDetail).webUrl).toBe('https://acme.atlassian.net/browse/PROJ-1')
+  })
+
+  it('omits webUrl from the seeded value when absent (degrade-to-omit — FR-011)', () => {
+    const { dataModel } = buildBoundIssueDetailSurface('jira-issue-detail', detailBase)
+    const seed = dataModel.find((d) => d.path === JIRA_DETAIL_PATH)!
+    expect('webUrl' in (seed.value as object)).toBe(false)
+  })
+
   it('uses only jira-catalog component types (incl. Column/Text passthroughs)', () => {
     const comps = buildBoundIssueDetailSurface('jira-issue-detail', detailBase).spec.components as Component[]
     for (const c of comps) {

@@ -18,6 +18,7 @@
 
 import {
   SESSION_SCHEMA_VERSION,
+  type EnabledIntegrations,
   type GenerativePanelKey,
   type GenerativePanelSnapshot,
   type SessionSnapshot,
@@ -38,12 +39,17 @@ function emptyTerminal(): TerminalPanelSnapshot {
   return { tabs: [], activeTabId: null, everOpened: 0 }
 }
 
+/** First-run `enabled` contribution — every gateable integration disabled (FR-008). */
+export function emptyEnabled(): EnabledIntegrations {
+  return { slack: false, jira: false, confluence: false, 'google-calendar': false }
+}
+
 /**
- * Assemble the five panel contributions into a schema-versioned snapshot. A panel
- * that has not reported yet contributes its empty default, so a partial set still
- * yields a valid snapshot. The terminal draft's tabs are written as-is (their
- * sessionId/cwd are filled by main at save — D2); the renderer-built type is widened
- * to the wire type here.
+ * Assemble the panel contributions + the `enabled` map into a schema-versioned
+ * snapshot. A panel that has not reported yet contributes its empty default; an
+ * unreported `enabled` map defaults to all-disabled (FR-008). The terminal draft's
+ * tabs are written as-is (their sessionId/cwd are filled by main at save — D2); the
+ * renderer-built type is widened to the wire type here.
  */
 export function assembleSnapshot(contributions: {
   terminal?: TerminalPanelDraft
@@ -51,6 +57,8 @@ export function assembleSnapshot(contributions: {
   jira?: GenerativePanelSnapshot
   slack?: GenerativePanelSnapshot
   confluence?: GenerativePanelSnapshot
+  'google-calendar'?: GenerativePanelSnapshot
+  enabled?: EnabledIntegrations
 }): SessionSnapshot {
   const terminalDraft = contributions.terminal
   const terminal = (terminalDraft
@@ -63,8 +71,10 @@ export function assembleSnapshot(contributions: {
       'generated-ui': contributions['generated-ui'] ?? emptyGenerative(),
       jira: contributions.jira ?? emptyGenerative(),
       slack: contributions.slack ?? emptyGenerative(),
-      confluence: contributions.confluence ?? emptyGenerative()
-    }
+      confluence: contributions.confluence ?? emptyGenerative(),
+      'google-calendar': contributions['google-calendar'] ?? emptyGenerative()
+    },
+    enabled: contributions.enabled ?? emptyEnabled()
   }
 }
 
@@ -109,6 +119,16 @@ export class SessionRegistry {
     contribution: K extends 'terminal' ? TerminalPanelDraft : GenerativePanelSnapshot
   ): void {
     ;(this.contributions as Record<string, unknown>)[key] = contribution
+    this.schedule()
+  }
+
+  /**
+   * Record the latest per-integration `enabled` map (settings-redesign-v1, D2). The
+   * Enable toggle reports through this non-panel contribution path; the map merges
+   * into the assembled snapshot and trailing-debounces a save like any other change.
+   */
+  setEnabled(enabled: EnabledIntegrations): void {
+    this.contributions.enabled = enabled
     this.schedule()
   }
 

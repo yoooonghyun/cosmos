@@ -19,7 +19,12 @@
 
 import DOMPurify, { type WindowLike } from 'dompurify'
 import { decodeUnicodeEscapes } from '../../shared/confluence'
-import { confluenceRelativePath, toOpaqueSrc } from './contentImageSrc'
+import {
+  attachmentIdOf,
+  confluenceRelativePath,
+  toAttachmentOpaqueSrc,
+  toOpaqueSrc
+} from './contentImageSrc'
 
 export { decodeUnicodeEscapes }
 
@@ -96,7 +101,13 @@ const SANITIZE_CONFIG = {
     // task-list <input>: render the checkbox + its checked/inert state (forced inert below)
     'type', 'checked', 'disabled',
     // Confluence emoji metadata (benign data-* the emoji <img> carries)
-    'data-emoji-id', 'data-emoji-shortname', 'data-emoji-fallback', 'data-emoji-short-name'
+    'data-emoji-id', 'data-emoji-shortname', 'data-emoji-fallback', 'data-emoji-short-name',
+    // Confluence attachment metadata (confluence-attachment-scope-v1): the embedded
+    // attachment <img> carries `data-linked-resource-id` (the attachment id) +
+    // `data-linked-resource-type="attachment"`. The hook reads these to encode the
+    // granular-scope attachment-id opaque ref, so they MUST survive DOMPurify's attribute
+    // allow-list (the hook runs AFTER attribute filtering). Benign ids/strings; no URL/script.
+    'data-linked-resource-id', 'data-linked-resource-type'
   ],
   // Block any URL scheme that is not http/https/mailto/relative/cosmos-confluence-img —
   // defeats javascript:. The `cosmos-confluence-img:` scheme is allowed DELIBERATELY (and
@@ -198,17 +209,28 @@ function registerSanitizeHook(instance: ReturnType<typeof DOMPurify>): void {
     }
     // Content/attachment <img> → opaque main-process proxy scheme
     // (confluence-content-images-v1). A real page picture's `src` is a relative, auth-gated
-    // Confluence `/wiki/...` URL (or its absolute *.atlassian.net form) that 404s in the
-    // renderer because the access token is main-only. Rewrite it to
-    // `cosmos-confluence-img://...` (carrying ONLY the opaque base64url `/wiki/...` ref — no
+    // Confluence URL that 404s/401s in the renderer because the access token is main-only.
+    // Rewrite it to `cosmos-confluence-img://...` (carrying ONLY an opaque base64url ref — no
     // token, no host), which the main-process protocol handler fetches with the bearer token
     // and streams back. Runs AFTER DOMPurify + AFTER the `data:`-strip, so `data:`/emoticon
-    // images never reach here; an absolute non-Confluence `src` returns null → left untouched
-    // (FR-008). The opaque scheme is allow-listed in ALLOWED_URI_REGEXP above.
+    // images never reach here. The opaque scheme is allow-listed in ALLOWED_URI_REGEXP above.
+    //
+    // PREFER the attachment-id ref (confluence-attachment-scope-v1): Confluence embeds an
+    // attachment with a LEGACY `/wiki/download/attachments/...` blob URL that 401s under
+    // granular OAuth scopes ("scope does not match" — classic content endpoint). The `<img>`
+    // also carries `data-linked-resource-id`, so when present we encode `attachment:<id>` and
+    // let main resolve the bytes via the granular-authorized v2 attachments API. Fall back to
+    // the relative-path ref for any non-attachment `/wiki/...` content image. An absolute
+    // non-Confluence `src` returns null on both → left untouched (FR-008).
     if (el.tagName === 'IMG') {
-      const relativePath = confluenceRelativePath(el.getAttribute('src'))
-      if (relativePath !== null) {
-        el.setAttribute('src', toOpaqueSrc(relativePath))
+      const attachmentId = attachmentIdOf(el)
+      if (attachmentId !== null) {
+        el.setAttribute('src', toAttachmentOpaqueSrc(attachmentId))
+      } else {
+        const relativePath = confluenceRelativePath(el.getAttribute('src'))
+        if (relativePath !== null) {
+          el.setAttribute('src', toOpaqueSrc(relativePath))
+        }
       }
     }
   })

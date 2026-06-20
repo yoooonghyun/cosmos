@@ -190,3 +190,73 @@ export function surfaceSpinnerVisible(
     input.loadingDefault !== true
   )
 }
+
+/**
+ * The inputs to the terminal-`completed` in-flight release decision
+ * (open-prompt-spinner-gating-v1 FR-001/FR-002/FR-004/FR-008). All from state the
+ * `agent:status` handler already holds:
+ *   - `inFlight`        — whether the originating tab is still awaiting a frame.
+ *   - `hasSurface`      — whether that tab already has a landed surface (`surface != null`).
+ *   - `producedSurface` — the non-secret signal off the `completed` status: `true` ⇒ this
+ *                         run pushed a `generated-ui` surface (it has/will land via
+ *                         `ui:render`, which clears `inFlight`); otherwise (false OR
+ *                         ABSENT) the run produced no surface.
+ */
+export interface TerminalReleaseInput {
+  inFlight: boolean
+  hasSurface: boolean
+  /** Present only on `completed`; absent ⇒ unknown (fall back to surface-presence). */
+  producedSurface?: boolean
+}
+
+/**
+ * Whether a terminal `completed` status MUST clear the originating tab's `inFlight`
+ * (open-prompt-spinner-gating-v1, FR-004 — the root-cause fix). A plain command's run
+ * completes WITHOUT pushing a surface, so it must release the tab (stopping the permanent
+ * "Generating…"); a true UI-generation run's surface already cleared `inFlight` when it
+ * landed, so this is a no-op for it.
+ *
+ * Release iff the tab is still in-flight, has NO surface, AND the run did not produce a
+ * surface. `producedSurface === true` ⇒ a surface was/will be pushed ⇒ do NOT release
+ * (let the `ui:render` path own it). When `producedSurface` is ABSENT (an old/partial
+ * payload), fall back to surface-presence: release only when there is no surface — so a
+ * real UI run (which has a surface by `completed`) is never wrongly released (FR-008).
+ *
+ * Invalid/missing input never throws: a missing object (or a non-boolean `inFlight`)
+ * warns and returns the SAFE fallback `false` — never releasing on bad input (SDD Step 4).
+ */
+export function shouldReleaseInFlightOnCompleted(
+  input: TerminalReleaseInput,
+  warn: (msg: string) => void = console.warn
+): boolean {
+  if (!input || typeof input.inFlight !== 'boolean') {
+    warn('[promptComposer] shouldReleaseInFlightOnCompleted: invalid tab state; not releasing')
+    return false
+  }
+  return input.inFlight === true && input.hasSurface !== true && input.producedSurface !== true
+}
+
+/**
+ * The "Sent" hint state (open-prompt-spinner-gating-v1, OQ-3). A transient, non-blocking
+ * acknowledgement for a PLAIN (non-spinner) submit now that the "Generating…" blocking
+ * spinner is suppressed for a no-surface run. It NEVER sets `busy` (the composer stays
+ * visible) and NEVER blocks the panel — it is display-only feedback that auto-dismisses.
+ */
+export interface SentHintState {
+  /** Whether the transient "Sent" hint is currently shown. */
+  visible: boolean
+}
+
+/** How long the transient "Sent" hint stays visible before auto-dismissing (ms). */
+export const SENT_HINT_DURATION_MS = 1500
+
+/**
+ * The "Sent" hint shown after an accepted submit (OQ-3). Returns `{ visible: true }` only
+ * when a submit was actually accepted (so a rejected/no-op submit shows nothing). Pure:
+ * the DOM/timer auto-dismiss binding lives in `PromptComposer.tsx`; this only decides the
+ * on/off state from the submit outcome, so it is node-testable. Never sets any busy/block
+ * state — the hint cannot hide the composer.
+ */
+export function sentHintAfterSubmit(accepted: boolean): SentHintState {
+  return { visible: accepted === true }
+}

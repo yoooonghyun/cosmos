@@ -39,6 +39,7 @@ import type {
 } from '../../shared/jira'
 import { jiraApiBase } from './atlassianConfig'
 import { adfToPlainText, plainTextToAdf } from './atlassianText'
+import { jiraWebUrl } from './jiraWebUrl'
 
 /** Minimal `fetch` shape (injectable; defaults to global fetch). */
 export type FetchLike = (
@@ -104,6 +105,12 @@ export interface JiraCallAuth {
   token: string
   /** The resolved site cloudId targeting every read (FR-A07). */
   cloudId: string
+  /**
+   * NON-SECRET site origin (e.g. `https://acme.atlassian.net`) for assembling an issue's
+   * browse `webUrl` (jira-dock-autoapply-weblink-v1, FR-010). Read from the already-persisted
+   * `extra.siteUrl`; NEVER a token/secret. Absent → `getIssue` omits `webUrl` (FR-011).
+   */
+  siteUrl?: string
 }
 
 export interface JiraClientDeps {
@@ -311,15 +318,21 @@ export class JiraClient {
     // surface builder can offer a concrete `transitionId`. A failed/empty
     // transitions read MUST NOT fail the whole issue read (FR-020) — degrade to [].
     const availableTransitions = await this.readTransitions(auth, issueKey)
+    const key = typeof r.body.key === 'string' ? r.body.key : issueKey
+    // jira-dock-autoapply-weblink-v1 (FR-010): assemble the NON-SECRET browse URL from the
+    // connected site origin (spread-when-present, mirroring assignee/reporter). Absent siteUrl
+    // or a non-http(s) value → undefined, so `webUrl` is omitted (FR-011). NEVER a token.
+    const webUrl = jiraWebUrl(auth.siteUrl, key)
     return {
       ok: true,
       data: {
-        key: typeof r.body.key === 'string' ? r.body.key : issueKey,
+        key,
         summary: typeof fields.summary === 'string' ? fields.summary : '',
         statusName,
         statusCategory,
         ...(assignee ? { assignee } : {}),
         ...(reporter ? { reporter } : {}),
+        ...(webUrl ? { webUrl } : {}),
         description: adfToPlainText(fields.description),
         comments,
         availableTransitions

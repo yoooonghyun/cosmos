@@ -18,6 +18,7 @@ import { fileURLToPath } from 'node:url'
 import {
   bridgeSocketPath,
   confluenceBridgeSocketPath,
+  googleCalendarBridgeSocketPath,
   jiraBridgeSocketPath,
   slackBridgeSocketPath
 } from '../shared/bridge'
@@ -25,6 +26,7 @@ import { DEFAULT_UI_RENDER_TARGET, type UiRenderTarget } from '../shared/ipc'
 import { JiraTool } from '../shared/jira'
 import { SlackTool } from '../shared/slack'
 import { ConfluenceTool } from '../shared/confluence'
+import { GoogleCalendarTool } from '../shared/googleCalendar'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 
@@ -240,6 +242,62 @@ export function confluenceRenderUiMcpServerEntry(sandboxDir: string): McpStdioSe
   }
 }
 
+/* ------------------------------------------------------------------------- *
+ * Google Calendar render-UI server (Google Calendar integration v1) — read-only
+ * ------------------------------------------------------------------------- */
+
+/** The MCP server name for the Google-Calendar-scoped render tool (used in --allowedTools). */
+export const GOOGLE_CALENDAR_RENDER_UI_SERVER_NAME = 'cosmos-google-calendar-render-ui'
+
+/** The fully-qualified Google Calendar render tool grant for `--allowedTools`. */
+export const GOOGLE_CALENDAR_RENDER_UI_TOOL =
+  'mcp__cosmos-google-calendar-render-ui__render_google_calendar_ui'
+
+/** The MCP server name for the read-only Google Calendar tools (used in --allowedTools). */
+export const GOOGLE_CALENDAR_TOOLS_SERVER_NAME = 'cosmos-google-calendar'
+
+/**
+ * The fully-qualified read-only Google Calendar tool grants for `--allowedTools`. A
+ * google-calendar-target generative run needs the single READ tool to fetch real events
+ * to compose a surface. NO write tool (read-only, v1). Tokens never reach the agent: the
+ * tool relays over the Google Calendar bridge to main, which attaches the credential.
+ */
+export const GOOGLE_CALENDAR_TOOL_GRANTS: readonly string[] = [
+  `mcp__${GOOGLE_CALENDAR_TOOLS_SERVER_NAME}__${GoogleCalendarTool.ListEvents}`
+]
+
+/**
+ * The read-only Google Calendar stdio server entry — `node
+ * out/main/mcp/googleCalendarMcpServer.js` with its OWN bridge socket
+ * (`COSMOS_GOOGLE_CALENDAR_BRIDGE_SOCKET`). Identical to the interactive PTY's
+ * `cosmos-google-calendar` registration so a google-calendar-target generative run
+ * reaches the same GoogleCalendarManager read method. Carries NO token/secret.
+ */
+export function googleCalendarToolsMcpServerEntry(sandboxDir: string): McpStdioServerEntry {
+  return {
+    type: 'stdio',
+    command: 'node',
+    args: [join(__dirname, 'mcp/googleCalendarMcpServer.js')],
+    env: { COSMOS_GOOGLE_CALENDAR_BRIDGE_SOCKET: googleCalendarBridgeSocketPath(sandboxDir) }
+  }
+}
+
+/**
+ * The render_google_calendar_ui stdio server entry —
+ * `node out/main/mcp/googleCalendarRenderUiServer.js` with `COSMOS_BRIDGE_SOCKET` pointing
+ * at the SAME `UiBridge` socket as render_ui (the Calendar render tool stamps its bridge
+ * frame `target: 'google-calendar'` and relays to the same bridge — no second bridge).
+ * Carries NO token/secret.
+ */
+export function googleCalendarRenderUiMcpServerEntry(sandboxDir: string): McpStdioServerEntry {
+  return {
+    type: 'stdio',
+    command: 'node',
+    args: [join(__dirname, 'mcp/googleCalendarRenderUiServer.js')],
+    env: { COSMOS_BRIDGE_SOCKET: bridgeSocketPath(sandboxDir) }
+  }
+}
+
 /**
  * The headless runner's `--mcp-config` JSON for a given render `target` (D2): for
  * `'jira'`, the jira render server + read/write tools; for `'slack'`/`'confluence'`,
@@ -280,6 +338,16 @@ export function renderMcpConfigJsonForTarget(
       mcpServers: {
         [CONFLUENCE_RENDER_UI_SERVER_NAME]: confluenceRenderUiMcpServerEntry(sandboxDir),
         [CONFLUENCE_TOOLS_SERVER_NAME]: confluenceToolsMcpServerEntry(sandboxDir)
+      }
+    })
+  }
+  if (target === 'google-calendar') {
+    // A google-calendar-target run gets the Calendar render tool PLUS the read-only Calendar
+    // tool (no writes, v1). Least-privilege: no jira/slack/confluence/generic-render.
+    return JSON.stringify({
+      mcpServers: {
+        [GOOGLE_CALENDAR_RENDER_UI_SERVER_NAME]: googleCalendarRenderUiMcpServerEntry(sandboxDir),
+        [GOOGLE_CALENDAR_TOOLS_SERVER_NAME]: googleCalendarToolsMcpServerEntry(sandboxDir)
       }
     })
   }
@@ -371,6 +439,22 @@ export function groundingPromptForTarget(
       BINDINGS_FIRST_STEERING
     ].join(' ')
   }
+  if (target === 'google-calendar') {
+    // Read-only anti-fabrication grounding, mirroring the others (v1).
+    return [
+      'You render Google Calendar UI surfaces for the cosmos Google Calendar panel from REAL',
+      'calendar data ONLY. Before calling render_google_calendar_ui you MUST fetch the actual',
+      'events with the Google Calendar read tool (google_calendar_list_events). Every event id,',
+      'summary, start, end, and location you render MUST come verbatim from a tool result in THIS',
+      'conversation. NEVER invent, guess, paraphrase, or use placeholder/example data — the values',
+      'shown in the render_google_calendar_ui description are format illustration only; do NOT copy',
+      'them. If Google Calendar is not connected or a tool returns an error, render a single Notice',
+      'component explaining that (and to connect/reconnect Google Calendar in cosmos) INSTEAD of',
+      'fabricating any events. If a read returns no events, convey "nothing scheduled" rather than',
+      'inventing rows.',
+      BINDINGS_FIRST_STEERING
+    ].join(' ')
+  }
   return undefined
 }
 
@@ -393,6 +477,10 @@ export function allowedToolForTarget(
   if (target === 'confluence') {
     // Confluence render tool + the two read-only Confluence tools; NO writes.
     return [CONFLUENCE_RENDER_UI_TOOL, ...CONFLUENCE_TOOL_GRANTS].join(',')
+  }
+  if (target === 'google-calendar') {
+    // Google Calendar render tool + the single read-only Calendar tool; NO writes.
+    return [GOOGLE_CALENDAR_RENDER_UI_TOOL, ...GOOGLE_CALENDAR_TOOL_GRANTS].join(',')
   }
   return RENDER_UI_TOOL
 }

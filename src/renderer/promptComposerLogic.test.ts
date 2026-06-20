@@ -7,6 +7,9 @@ import {
   shouldCollapseOnOutsideClick,
   escDecision,
   surfaceSpinnerVisible,
+  shouldReleaseInFlightOnCompleted,
+  sentHintAfterSubmit,
+  SENT_HINT_DURATION_MS,
   type ComposerState
 } from './promptComposerLogic'
 
@@ -199,6 +202,83 @@ describe('surfaceSpinnerVisible (composer-send-animation-v1 FR-005/FR-006/FR-007
       )
     ).toBe(false)
     expect(warn).toHaveBeenCalledOnce()
+  })
+})
+
+describe('shouldReleaseInFlightOnCompleted (open-prompt-spinner-gating-v1 FR-001/FR-002/FR-004/FR-008)', () => {
+  it('releases an in-flight no-surface tab whose run produced NO surface (plain command — FR-004)', () => {
+    // The root-cause fix: a plain command completes without a surface, so the in-flight
+    // tab must be released — otherwise the "Generating…" spinner hangs forever.
+    expect(
+      shouldReleaseInFlightOnCompleted({ inFlight: true, hasSurface: false, producedSurface: false })
+    ).toBe(true)
+  })
+
+  it('does NOT release when the run produced a surface (UI generation — FR-001/FR-005)', () => {
+    // producedSurface === true ⇒ the ui:render path owns clearing inFlight; never release here.
+    expect(
+      shouldReleaseInFlightOnCompleted({ inFlight: true, hasSurface: false, producedSurface: true })
+    ).toBe(false)
+  })
+
+  it('does NOT release a tab that already has a landed surface (surface path won)', () => {
+    expect(
+      shouldReleaseInFlightOnCompleted({ inFlight: true, hasSurface: true, producedSurface: true })
+    ).toBe(false)
+  })
+
+  it('does NOT release a tab that is no longer in-flight (already settled)', () => {
+    expect(
+      shouldReleaseInFlightOnCompleted({ inFlight: false, hasSurface: false, producedSurface: false })
+    ).toBe(false)
+  })
+
+  it('falls back to surface-presence when producedSurface is ABSENT — releases a no-surface tab (FR-008)', () => {
+    // Old/partial payload: with no signal, release only when there is no surface.
+    expect(shouldReleaseInFlightOnCompleted({ inFlight: true, hasSurface: false })).toBe(true)
+  })
+
+  it('falls back to surface-presence when producedSurface is ABSENT — keeps a tab with a surface (FR-008)', () => {
+    // A real UI run has its surface by `completed`, so an absent signal must NOT wrongly release it.
+    expect(shouldReleaseInFlightOnCompleted({ inFlight: true, hasSurface: true })).toBe(false)
+  })
+
+  it('warns and returns false (safe fallback) for a missing input object — never releases on bad input', () => {
+    const warn = vi.fn()
+    expect(shouldReleaseInFlightOnCompleted(undefined as unknown as never, warn)).toBe(false)
+    expect(warn).toHaveBeenCalledOnce()
+  })
+
+  it('warns and returns false for a non-boolean inFlight (invalid required field)', () => {
+    const warn = vi.fn()
+    expect(
+      shouldReleaseInFlightOnCompleted(
+        { inFlight: undefined as unknown as boolean, hasSurface: false },
+        warn
+      )
+    ).toBe(false)
+    expect(warn).toHaveBeenCalledOnce()
+  })
+})
+
+describe('sentHintAfterSubmit (open-prompt-spinner-gating-v1, OQ-3 — transient non-blocking "Sent" hint)', () => {
+  it('shows the hint after an ACCEPTED submit (plain command acknowledgement)', () => {
+    expect(sentHintAfterSubmit(true)).toEqual({ visible: true })
+  })
+
+  it('shows nothing for a rejected/no-op submit (empty / running)', () => {
+    expect(sentHintAfterSubmit(false)).toEqual({ visible: false })
+  })
+
+  it('never carries a busy/block field — it cannot hide the composer', () => {
+    const hint = sentHintAfterSubmit(true)
+    expect(hint).not.toHaveProperty('busy')
+    expect(Object.keys(hint)).toEqual(['visible'])
+  })
+
+  it('exposes a finite auto-dismiss duration (the timer binding lives in the .tsx)', () => {
+    expect(typeof SENT_HINT_DURATION_MS).toBe('number')
+    expect(SENT_HINT_DURATION_MS).toBeGreaterThan(0)
   })
 })
 

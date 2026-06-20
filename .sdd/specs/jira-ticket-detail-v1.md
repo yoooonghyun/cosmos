@@ -1,21 +1,72 @@
 # Spec: Jira Ticket Detail (click-to-open) — v1
 
-**Status**: Draft
+**Status**: Draft (revised 2026-06-20 — presentation changed from in-place view-swap to a right-side dock, #86)
 **Created**: 2026-06-07
 **Supersedes**: —
 **Related plan**: .sdd/plans/jira-ticket-detail-v1.md
+
+> Issue #86 (2026-06-20): change the ticket detail from a **whole-panel view-swap with a back row**
+> to a **right-side detail dock that opens alongside the still-visible ticket list**, matching the
+> shipped Slack thread side-dock and the calendar event-detail dock. This is a **presentation-only**
+> revision: every detail-CONTENT requirement, the read-only deterministic read path, the no-new-scope
+> /no-new-IPC posture, and per-tab scoping are unchanged. Only the mechanism FRs that described
+> "replace the active tab's surface" + the "back to list" row are rewritten to the dock + dismiss
+> idiom. Revised in place (not a v2) because the change is presentation-only on an already-shipped
+> feature — the same call the calendar event-detail revision made.
+
+---
+
+## Grounding
+
+> Direct investigation run by the architect for this revision (mandatory).
+
+**codegraph_explore / codegraph_search:**
+
+- `JiraPanel jiraCatalog ticket detail nav ActiveTabSurface onAction detail component` — returned the
+  verbatim `JiraPanel`. **Takeaway:** today a clicked `TicketCard`/`IssueList` emits
+  `JIRA_OPEN_DETAIL_ACTION`, intercepted in `handleSurfaceAction` (returns `true`, never forwarded);
+  the panel flips a renderer-local `view: {kind:'list'} | {kind:'detail';issueKey}` state that swaps
+  the WHOLE content region to a native `ChevronLeft` "Back to list" row over the A2UI host, and fires
+  `jira:requestIssueDetail` whose unsolicited `target:'jira'` frame OVERWRITES the active tab's
+  surface. `originListRef`/`backNavTarget` exist purely because that overwrite destroys the list (a
+  `composed` surface is snapshotted to be restored on back). Reset on `activeTabId` change.
+- `SlackPanel openThread SlackThreadPanel slackbody scrim onClose dock` (via the calendar spec/design
+  grounding) — the canonical side-dock shell: a `@container/slackbody` two-pane body, dock side-by-side
+  at `≥32rem` (`w-[clamp(18rem,42%,28rem)] shrink-0 border-l`), an absolute right-drawer
+  (`max-w-[22rem] shadow-lg`) over a `bg-black/40` scrim below it, X-close + scrim dismiss, transient
+  per-tab.
+
+**memory_recall / memory_smart_search:**
+
+- `Jira ticket detail nav overlay side-dock presentation`, `Jira generative UI detail nav overlay
+  action binding` — empty store (no prior Jira detail decision persisted). Persisting this revision's
+  dock decision via `memory_save`.
+
+**Takeaways shaping this revision:**
+
+1. The detail data is ALREADY the same surface a post-write re-push renders — no new fetch, no new
+   field, no new scope is needed; only the presentation moves.
+2. Moving to a dock that keeps the list **mounted beside** the detail **dissolves** the
+   `composed`-surface-clobber problem the current overlay had: the detail no longer overwrites the
+   tab's list surface, so the `backNavTarget`/snapshot-restore machinery (and the brief re-read on
+   "back") is no longer needed — the dismiss just unmounts the dock and the untouched list is revealed.
+   The detail is shown in a **native dock component fed by the read result**, not by overwriting the
+   tab surface (a plan/how concern; flagged for the plan).
 
 ---
 
 ## Overview
 
 In the connected Jira panel, clicking a ticket (a `TicketCard` in an `IssueList`) opens that
-ticket's full detail **in place in the active tab** — the list surface is replaced by the ticket's
-detail (the same detail surface a post-write re-push already shows: key, status, description,
-comments, transition control, add-comment control). A **"back to list" affordance** returns the tab
-to the list it came from. This mirrors the Confluence panel's search-result → page-detail drill-in
-with a back arrow, and reuses the existing deterministic Jira read/compose/push path — clicking a
-ticket runs a native `jira:getIssue` read (NOT the AI agent) and never requires a new OAuth scope.
+ticket's full detail in a **right-side detail dock that appears alongside the ticket list** within
+the same panel tab — the list **stays visible** (NOT replaced) — showing the same detail content a
+post-write re-push already renders: key, status, description, comments, transition control,
+add-comment control. A **dismiss affordance** (a header close/X control, plus — in the narrow drawer
+mode — a click-away scrim) closes the dock and returns the list to full width. This makes Jira
+consistent with the shipped **Slack thread side-dock** and the **calendar event-detail dock** (same
+two-pane `@container` shell). It reuses the existing deterministic Jira read/compose path — clicking a
+ticket runs a native `jira:getIssue` read (NOT the AI agent) and never requires a new OAuth scope, a
+new IPC channel, or a new fetch.
 
 ## User Scenarios
 
@@ -25,35 +76,38 @@ ticket runs a native `jira:getIssue` read (NOT the AI agent) and never requires 
 
 **As a** Jira user in cosmos
 **I want to** click a ticket in the issue list
-**So that** I can read its full detail (status, description, comments) and act on it
+**So that** I can read its full detail (status, description, comments) alongside the list, without
+losing the list
 
 **Acceptance criteria:**
 
 - Given a connected Jira panel showing an issue list (default view or a JQL search result), when I
-  click a ticket card, then the active tab's surface is replaced by that ticket's full detail
-  surface (key + status, description, comments, transition control, add-comment control) — the same
-  detail surface shape a post-write re-push renders.
-- Given I clicked a ticket, when the detail read is in flight, then the active tab shows a loading
-  indication (the existing per-tab loading state) until the detail lands.
-- Given the detail is shown, when I look at it, then a clear "back to list" affordance (e.g.
-  "← Back to list") is visible.
-- Given a ticket detail is open, when I apply a transition or add a comment (the existing
-  deterministic `jira.*` write path), then the post-write re-pushed detail still appears in the
-  same tab and the back-to-list affordance is still available afterward.
+  click a ticket card, then a detail dock opens on the **right side of the panel alongside the list**
+  (same tab) showing that ticket's full detail (key + status, description, comments, transition
+  control, add-comment control) — the same detail content a post-write re-push renders — and the
+  **issue list stays visible** (not replaced).
+- Given I clicked a ticket, when the detail read is in flight, then the panel shows a loading
+  indication (the existing per-tab loading state) until the detail lands; the still-visible list is
+  not disturbed.
+- Given a detail dock is open, when I click a different ticket card, then the **single dock retargets**
+  to that ticket (it does not stack a second dock).
+- Given a ticket detail dock is open, when I apply a transition or add a comment (the existing
+  deterministic `jira.*` write path), then the post-write re-pushed detail still appears in the dock
+  and the dock and its dismiss affordance remain available afterward.
 
-### Return to the list with "back" · P1
+### Dismiss the detail dock · P1
 
-**As a** Jira user viewing a ticket detail
-**I want to** click "back to list"
-**So that** I return to the issue list I was browsing
+**As a** Jira user viewing a ticket detail dock
+**I want to** dismiss the dock
+**So that** I return to the full issue list I was browsing
 
 **Acceptance criteria:**
 
-- Given I opened a ticket detail from the default view, when I click "back to list", then the active
-  tab shows the default-view issue list again.
-- Given I opened a ticket detail from a JQL search result, when I click "back to list", then the
-  active tab shows that search result's issue list again (the list I clicked from, not the default
-  view) — see Open Question OQ-1 on exactness of restore.
+- Given a ticket detail dock is open, when I activate its close/X control, then the dock closes and
+  the issue list returns to full width exactly as it was (same list — default view or the search
+  result I was on — same scroll, **no re-fetch**).
+- Given the panel is narrow and the dock is showing as a right-drawer overlay with a scrim, when I
+  click the scrim (click-away), then the dock closes and the underlying list is shown in full.
 
 ### Stay read-only · P1
 
@@ -101,18 +155,19 @@ ticket runs a native `jira:getIssue` read (NOT the AI agent) and never requires 
 | ID     | Requirement                                                                                                                                                                                                               |
 |--------|-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
 | FR-001 | A `TicketCard` in the Jira panel's `IssueList` MUST be clickable (it is currently display-only). Clicking it MUST carry the card's `issueKey` to the open-detail action. (Traces: "Open a ticket's detail by clicking it".) |
-| FR-002 | Clicking a ticket MUST open that ticket's detail **in place in the active tab** — replacing the active tab's current surface with the detail surface. It MUST NOT open a new tab. (Traces: settled product decision; mirrors Confluence in-place drill-in.) |
+| FR-002 | Clicking a ticket MUST open that ticket's detail in a **right-side detail dock alongside the issue list** within the same panel tab — the issue list MUST remain visible (not replaced) — not in a new tab, separate window, or whole-app view. The dock MUST reuse the project's existing side-dock pattern (the shipped Slack thread dock / calendar event-detail dock: a `@container`-gated two-pane body — side-by-side when the panel is wide enough, an absolute right-drawer overlay with a scrim when it is narrow). A clicked ticket while a dock is open MUST **re-target** the single dock to that ticket rather than open a second dock. (Traces: "Open a ticket's detail by clicking it"; #86 presentation revision — alignment with the shipped Slack/calendar side-docks.) |
 | FR-003 | Opening the detail MUST run a native, deterministic `jira:getIssue` read for the clicked `issueKey` and compose the result through `JiraSurfaceBuilder.buildIssueDetailSurface` (the existing detail surface — key/status, description, comments, transition + add-comment controls), pushed with `target: 'jira'`. It MUST NOT invoke the AI agent / `AgentRunner`. (Traces: read-only scenario; reuses the deterministic re-read path the post-write dispatcher already uses.) |
-| FR-004 | The detail surface MUST present a visible **"back to list"** affordance that returns the active tab to the list it was opened from. (Traces: "Return to the list with back"; settled product decision.) |
-| FR-005 | "Back to list" MUST restore the list the detail was opened from: the default view if opened from the default view, or the prior JQL search result if opened from a search result — without requiring the user to re-type a query. (Traces: "Return to the list with back". See OQ-1 for exactness/freshness of the restored list.) |
-| FR-006 | While the detail read is outstanding, the active tab MUST show the existing per-tab loading indication (`GenerativeTab.loadingDefault`), cleared when the detail surface (or a Notice) lands. (Traces: in-flight acceptance criterion; reuses the §4.9 default-view/search loading state.) |
+| FR-004 | The detail dock MUST present a **dismiss affordance** — a close/X control in the dock header (always available) and, in the narrow drawer mode, a click-away scrim — that closes the dock and returns the issue list to full width. (Traces: "Dismiss the detail dock"; Slack/calendar dock dismiss precedent.) |
+| FR-005 | Dismissing the dock MUST return the issue list **as it was** — the same list the detail was opened from (default view or the prior JQL search result), with no re-fetch and no surface round-trip — because the list stayed mounted beside the dock. (Traces: "Dismiss the detail dock". Replaces the v1 "back re-runs the originating read"; the dock keeps the list visible so no restore/re-read is needed.) |
+| FR-006 | While the detail read is outstanding, the panel MUST show the existing per-tab loading indication (`GenerativeTab.loadingDefault`), cleared when the detail (or a Notice) lands; the still-visible issue list MUST NOT be disturbed by the in-flight read. (Traces: in-flight acceptance criterion; reuses the §4.9 default-view/search loading state.) |
 | FR-007 | A detail read that fails with a non-`reconnect_needed` kind MUST surface as a single recoverable `Notice` in the active tab (via the existing `buildNoticeSurface` path); the panel MUST NOT crash. (Traces: "Detail read fails calmly".) |
 | FR-008 | A detail read that fails with `reconnect_needed` / `not_connected` MUST push no surface; the `JiraManager`'s `statusChanged` routes the panel to the native Connect/Reconnect affordance. (Traces: "Detail read fails calmly"; FR-016 carry-over.) |
 | FR-009 | The open-detail request MUST integrate with the existing fire-or-defer discipline so its UNSOLICITED `target:'jira'` frame never races an in-flight NL compose for the shared `originatingTabIdRef` slot: fire immediately when the correlation is idle, otherwise defer and flush when the in-flight run resolves (§4.11). (Traces: "Click does not disturb an in-flight compose".) |
 | FR-010 | The open-detail operation MUST be read-only: it requires no new OAuth scope and adds no write path. The renderer MUST send only the issue-key operation over IPC; main attaches the token. No token/secret may appear on any IPC payload, type, or A2UI surface (cosmos-wide token-in-main-only invariant). (Traces: "Stay read-only".) |
 | FR-011 | Any new IPC payload MUST be validated at the main-process boundary; an invalid or empty-`issueKey` payload MUST be warned-and-ignored (never crash) — consistent with all cosmos IPC. (Traces: edge cases; cosmos IPC invariant §4.5.) |
-| FR-012 | The existing deterministic `jira.*` write path on the detail (transition, comment) MUST continue to work unchanged: a write from the opened detail still re-pushes a fresh detail surface into the same tab, and the back-to-list affordance MUST remain available on the re-pushed detail. (Traces: "Open a ticket's detail" final acceptance criterion; §4.9 write re-push.) |
+| FR-012 | The existing deterministic `jira.*` write path on the detail (transition, comment) MUST continue to work unchanged: a write from the opened detail still re-pushes the fresh detail, the dock stays open showing it, and the dock's dismiss affordance MUST remain available afterward. (Traces: "Open a ticket's detail" final acceptance criterion; §4.9 write re-push.) |
 | FR-013 | The existing NL `PromptComposer` and the native JQL search box MUST remain present and behave unchanged alongside this feature. (Traces: non-regression of §4.9 Jira panel surfaces.) |
+| FR-014 | An open detail dock MUST be scoped to the tab it was opened in and MUST reset (close) on a tab switch, so it never bleeds across tabs; if the connection drops (`disconnect`/`reconnect_needed`) while a dock is open, the dock MUST close cleanly and the panel returns to its Connect/Reconnect affordance. (Traces: per-tab nav scoping; the Slack/calendar docks are likewise transient and per-tab.) |
 
 ## Edge Cases & Constraints
 
@@ -122,61 +177,59 @@ ticket runs a native `jira:getIssue` read (NOT the AI agent) and never requires 
 - **`getIssue` error (`network`/`rate_limited`)** → a single recoverable `Notice` in the active tab
   (FR-007); the user can go back to the list and retry.
 - **`reconnect_needed` / `not_connected` mid-click** → push nothing; native Connect/Reconnect takes
-  over via `statusChanged` (FR-008).
+  over via `statusChanged` (FR-008). An open dock closes cleanly (FR-014).
 - **Click while an NL compose is awaiting its frame** → the detail request is fired-or-deferred
-  against the shared correlation slot (FR-009); it never overwrites an awaited compose frame.
-- **Back-to-list when there is no prior list** (the tab's first surface was a detail with no
-  preceding list — e.g. a fresh tab where a detail landed first, or after the prior list state was
-  lost) → see OQ-1: the spec requires "back" to never strand the user on the detail with nowhere to
-  go; the fallback is the default view. The affordance MUST always lead somewhere (never a dead end).
-- **Back-to-list after a post-write re-push** → the re-pushed detail still carries the back
-  affordance (FR-012); "back" returns to the same originating list as the pre-write detail did.
-- **Clicking a ticket from inside a detail** → a `JiraIssueDetail` carries no nested ticket list
-  in its `comments`/controls, so there is no ticket-in-detail click to handle; this is out of scope
-  (no list-within-detail exists in the current detail surface).
-- **Out of scope:** opening detail in a NEW tab (explicitly rejected — in-place only); a
-  forward/redo navigation or a multi-level navigation stack (single back-to-list only); deep-linking
-  to a ticket by URL; pagination inside the detail's comment list; any new write capability; routing
-  the click through the AI agent.
+  against the shared correlation slot (FR-009).
+- **Connection drops while a dock is open** → the dock is transient: on `disconnect`/`reconnect_needed`
+  it resets to closed and the panel returns to its Connect/Reconnect affordance — no stuck or crashing
+  dock (FR-014).
+- **Tab switch while a dock is open** → the dock is per-tab; switching tabs closes it and the other
+  tab shows its own list with no dock; switching back shows the list (FR-014).
+- **Dock retarget after a post-write re-push** → a `jira.*` write re-pushes the fresh detail; the dock
+  stays open showing it with its dismiss affordance intact (FR-012).
+- **Narrow panel** → when the panel is too narrow for a side-by-side dock, the detail presents as an
+  absolute right-drawer overlay (with a click-away scrim) over the list rather than squeezing the
+  list into illegibility — matching the Slack/calendar dock's `@container`-gated drawer fallback.
+- **Long detail content (many comments / long description)** → the dock MUST scroll **within the dock**
+  rather than overflow it or the panel; very long content MUST NOT break the side-by-side layout or
+  push the list.
+- **Clicking a ticket from inside a detail** → a `JiraIssueDetail` carries no nested ticket list, so
+  there is no ticket-in-detail click to handle; out of scope.
+- **Out of scope:** opening detail in a NEW tab (explicitly rejected); a multi-level navigation stack
+  or forward/redo (single transient dock only); deep-linking to a ticket by URL; pagination inside the
+  detail's comment list; any new write capability; routing the click through the AI agent.
 
 ## Success Criteria
 
 | ID     | Criterion                                                                                                       |
 |--------|---------------------------------------------------------------------------------------------------------------|
-| SC-001 | Clicking a ticket in a connected Jira panel replaces the active tab's surface with that ticket's full detail (key/status, description, comments, transition + add-comment controls). |
-| SC-002 | The detail surface shows a "back to list" affordance; activating it returns the active tab to the list the detail was opened from (default view or the prior search result). |
+| SC-001 | Clicking a ticket in a connected Jira panel opens that ticket's full detail (key/status, description, comments, transition + add-comment controls) in a right-side dock **alongside the still-visible issue list**; clicking another ticket re-targets the single dock. |
+| SC-002 | The detail dock shows a dismiss affordance (header X always; click-away scrim in narrow drawer mode); dismissing it returns the issue list to full width as it was (default view or the prior search result), with no re-fetch. |
 | SC-003 | Opening a ticket detail runs a read-only `jira:getIssue` (no agent run, no new OAuth scope) and exposes no token/secret on any payload or surface. |
 | SC-004 | A failed detail read (non-reconnect) yields a calm recoverable Notice in the active tab; the app never crashes; the user can return to the list and retry. A reconnect-needed failure routes to the native Connect/Reconnect and pushes no surface. |
 | SC-005 | A ticket clicked while an NL compose is awaiting its frame does not corrupt either result (the detail frame is fired-or-deferred per the existing correlation discipline). |
-| SC-006 | A `jira.*` write performed on an opened detail still re-pushes a fresh detail into the same tab, and back-to-list remains available afterward. |
+| SC-006 | A `jira.*` write performed on an opened detail still re-pushes the fresh detail into the dock, and the dock + its dismiss affordance remain available afterward. |
+| SC-007 | An open detail dock stays in its tab: switching tabs shows no dock bleed and switching back shows the list (the dock having closed on the switch); a connection drop closes the dock cleanly. |
 
 ---
 
 ## Open Questions
 
-- [ ] **OQ-1 — Exactness and freshness of the restored list on "back to list".** The settled
-  product decision is "return to the previous list" without re-typing. The clean, consistent options
-  the plan must choose between (a plan/how concern, but the *behavioral* choice affects acceptance):
-  1. **Re-run the originating read** on back (re-issue the default-view JQL or the last search JQL via
-     the existing `jira:requestDefaultView` / `jira:requestSearchView` path). Pro: always lands on a
-     valid, fresh list and naturally handles the "no captured list" fallback (default view); reuses
-     existing channels with no new state. Con: the list is re-fetched (a brief reload) and may differ
-     from what the user clicked from if data changed.
-  2. **Restore the captured prior list surface** held in the tab (no re-fetch). Pro: instant, shows
-     exactly what the user left. Con: requires the tab to retain the pre-detail surface (the renderer
-     currently keeps only one `GenerativeTab.surface`), and needs a defined fallback when no prior
-     list was captured.
+> The #86 revision retires the v1 "back to list" open questions (OQ-1 restore-exactness, OQ-2
+> back-affordance carrier): with the dock the list stays mounted beside the detail, so there is no
+> restore/re-read and no back-row to carry — dismissing the dock simply reveals the untouched list.
+> The remaining questions are dock-styling parity, each with a default adopted from the calendar/Slack
+> docks; none blocks the plan.
 
-  Both satisfy the user-visible requirement (FR-004/FR-005) and the no-dead-end constraint (back
-  falls back to the default view when no originating list is known). **Recommendation:** option (1)
-  (re-run the originating read), because it reuses the established deterministic read/compose/push
-  channels, needs no new renderer surface-history state, and the default-view fallback is free. This
-  is flagged (not assumed) because it is the one decision the intent did not fully pin down; if the
-  user wants an instant no-refetch restore, the plan takes option (2). **This does not block writing
-  the plan** — the recommendation is actionable; confirm only if the user prefers (2).
+- [ ] **OQ-1 — Dock width & breakpoint.** The dock SHOULD reuse the Slack/calendar dock's proven
+  sizing: side-by-side at/above the `@container` `32rem` threshold with the dock at
+  `clamp(18rem, 42%, 28rem)` and `shrink-0` `border-l`; below the threshold an absolute right-drawer
+  overlay at `w-full max-w-[22rem]` with `shadow-lg` over a `bg-black/40` scrim. These are the
+  cross-panel-consistent defaults — adopted unless the designer step tunes them to the Jira list's
+  density. **No user decision required.**
+- [ ] **OQ-2 — Dismiss affordance.** v1 dismisses the dock via a **close/X control** in the dock
+  header (always available) plus the **narrow-mode click-away scrim** (mirroring Slack/calendar).
+  Esc-to-close is OPTIONAL and MAY be added for keyboard parity but is not required. Default: X +
+  scrim. **No user decision required.**
 
-- [ ] **OQ-2 — Surface-builder back affordance carrier.** The "back to list" control is a new
-  affordance on the detail surface; whether it is a new catalog component, a prop on the existing
-  detail composition, or panel chrome above the A2UI host (paralleling Confluence's native back
-  arrow row outside the A2UI surface) is an implementation choice for the plan/design, not a
-  behavioral one. Noted here only so the plan resolves it; it does not block the spec.
+> No open question blocks implementation; each carries a safe default reused from the shipped docks.

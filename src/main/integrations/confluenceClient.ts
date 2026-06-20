@@ -32,6 +32,7 @@ import type {
 } from '../../shared/confluence'
 import { decodeUnicodeEscapes } from '../../shared/confluence'
 import { confluenceApiBase } from './atlassianConfig'
+import { confluenceWebUrl } from './confluenceWebUrl'
 import { plainTextToStorage } from './atlassianText'
 
 /** Minimal `fetch` shape (injectable; defaults to global fetch). */
@@ -115,6 +116,14 @@ export interface ConfluenceCallAuth {
   token: string
   /** The resolved site cloudId targeting every read (FR-A07). */
   cloudId: string
+  /**
+   * The persisted site web ORIGIN from OAuth accessible-resources `siteUrl`
+   * (e.g. `https://acme.atlassian.net`, bare origin, NO `/wiki`). Non-secret. Used ONLY
+   * to assemble the user-facing page web URL (`getPage` → `confluenceWebUrl`); the single
+   * v2 page `_links` carries no reliable `base`, so the browsable host comes from here.
+   * Absent on legacy token sets that predate persisting `siteUrl` → the affordance omits.
+   */
+  siteUrl?: string
 }
 
 export interface ConfluenceClientDeps {
@@ -290,13 +299,21 @@ export class ConfluenceClient {
         : typeof r.body.spaceId === 'number'
           ? String(r.body.spaceId)
           : undefined
+    // confluence-detail-weblink-v1 (#87) / 404 fix (#100, deeper): enrich the canonical,
+    // non-secret web URL from the persisted site web ORIGIN (`auth.siteUrl`) + the page's
+    // `_links.webui`. The single v2 page `_links` (AbstractPageLinks: webui/editui/tinyui)
+    // has NO reliable `base`, so the host comes from `siteUrl`, not `_links.base`.
+    // Omit-when-absent (mirrors calendar #85 `htmlLink`) so the "Open in Confluence"
+    // affordance degrades to nothing (FR-004/FR-008).
+    const webUrl = confluenceWebUrl(auth.siteUrl, r.body._links)
     return {
       ok: true,
       data: {
         id: typeof r.body.id === 'string' ? r.body.id : String(r.body.id ?? pageId),
         title: decodeUnicodeEscapes(typeof r.body.title === 'string' ? r.body.title : ''),
         ...(spaceId ? { space: spaceId } : {}),
-        body: pageViewBody(r.body)
+        body: pageViewBody(r.body),
+        ...(webUrl ? { webUrl } : {})
       }
     }
   }

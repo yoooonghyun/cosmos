@@ -150,6 +150,15 @@ export interface JiraIssueDetail {
   /** Comments in order (first page returned by the issue payload). */
   comments: JiraComment[]
   /**
+   * Canonical, NON-SECRET browse URL for this issue (jira-dock-autoapply-weblink-v1,
+   * FR-010/FR-011). Assembled in MAIN as `<siteUrl>/browse/<KEY>` from the connected
+   * site URL already held in the token set — NEVER a token or secret. Omitted (absent)
+   * when the site URL is unavailable or the assembled value is not an absolute `http(s)`
+   * URL (degrade-to-omit, mirroring Confluence's `webUrl`). The dock header renders it as
+   * an external link; the list/board path never binds it (dock-only — FR-012/FR-020).
+   */
+  webUrl?: string
+  /**
    * Transitions currently available on this issue (Jira generative-UI v1, D3 /
    * FR-020). Empty when none are available or the transitions read failed (a
    * failed transitions read MUST NOT fail the whole issue read). The surface

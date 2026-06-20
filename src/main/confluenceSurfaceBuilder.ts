@@ -154,6 +154,8 @@ export function buildBoundPageDetailSurface(
     title: { path: `${CONFLUENCE_PAGE_PATH}/title` },
     space: { path: `${CONFLUENCE_PAGE_PATH}/space` },
     body: { path: `${CONFLUENCE_PAGE_PATH}/body` },
+    // #87: the canonical web URL rides the same /page value (omit-when-absent in the data).
+    webUrl: { path: `${CONFLUENCE_PAGE_PATH}/webUrl` },
     loading: { path: PATH_LOADING },
     error: { path: PATH_ERROR }
   }
@@ -175,6 +177,8 @@ function boundPageDetailSpec(): A2uiSurfaceUpdate {
     title: { path: `${CONFLUENCE_PAGE_PATH}/title` },
     space: { path: `${CONFLUENCE_PAGE_PATH}/space` },
     body: { path: `${CONFLUENCE_PAGE_PATH}/body` },
+    // #87: the canonical web URL rides the same /page value (omit-when-absent in the data).
+    webUrl: { path: `${CONFLUENCE_PAGE_PATH}/webUrl` },
     loading: { path: PATH_LOADING },
     error: { path: PATH_ERROR }
   }

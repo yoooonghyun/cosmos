@@ -367,3 +367,20 @@ export function seedEverOpenedFrom(everOpened: unknown, tabCount: number): numbe
   const n = typeof everOpened === 'number' && Number.isFinite(everOpened) ? Math.floor(everOpened) : 0
   return Math.max(safeCount, n < 0 ? 0 : n)
 }
+
+/**
+ * A terminal tab's lifecycle phase (terminal-open-directory-picker-v1):
+ *  - `awaiting` — no folder chosen yet → the VS-Code-style WELCOME view (the [Open a folder] CTA);
+ *  - `live`     — a folder is open → the live PTY + the 3-pane terminal/viewer/tree-dock split.
+ */
+export type TerminalPhase = 'awaiting' | 'live'
+
+/**
+ * Whether a folder is open for a terminal tab (terminal-file-explorer-v1 3-pane rework). PURE +
+ * null-safe: only the exact `'live'` phase counts as folder-open; anything else (including a
+ * missing/garbage value) degrades to false → the welcome view, the safe fallback. Drives whether
+ * `TerminalPanel` renders the welcome view (false) or the 3-pane split (true).
+ */
+export function isFolderOpen(phase: TerminalPhase | null | undefined): boolean {
+  return phase === 'live'
+}

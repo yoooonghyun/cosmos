@@ -1,7 +1,9 @@
 import { describe, it, expect } from 'vitest'
+import { readFileSync } from 'node:fs'
 import {
   boundRows,
   countLabel,
+  CONFLUENCE_LAYOUT_CLAMP_CLASS,
   CONFLUENCE_OPEN_DETAIL_ACTION,
   hasReadableBody,
   isOpenDetailEmittable,
@@ -100,5 +102,59 @@ describe('showEmptyState (empty vs error-supersedes — design §3.1)', () => {
 
   it('is false for an empty list WITH an error (the error notice supersedes the empty state)', () => {
     expect(showEmptyState(0, 'Reconnect.')).toBe(false)
+  })
+})
+
+/* ------------------------------------------------------------------------- *
+ * Generative layout width clamp (bug slack-generative-wrap-v1, Confluence latent instance)
+ *
+ * Regression: an agent-grouped Confluence list/detail rendered inside the SDK
+ * standard-catalog Column/Row overflowed horizontally because that SDK flex container lacks
+ * `min-w-0`, keeps `min-width: auto`, and grows to its content's intrinsic width — so a long
+ * unbroken line never wrapped. The Confluence catalog now registers width-clamped Column/Row
+ * wrappers. These tests would FAIL before the fix: the SDK container source carries NO clamp,
+ * and there was no clamping wrapper around it. Mirrors the Slack catalog's regression.
+ * ------------------------------------------------------------------------- */
+describe('CONFLUENCE_LAYOUT_CLAMP_CLASS (generative wrap clamp)', () => {
+  it('carries the width-clamp tokens that defeat the SDK flex intrinsic width', () => {
+    // min-w-0 defeats flex `min-width: auto`; max-w-full caps at the panel width;
+    // w-full keeps short content filling the column.
+    expect(CONFLUENCE_LAYOUT_CLAMP_CLASS).toContain('min-w-0')
+    expect(CONFLUENCE_LAYOUT_CLAMP_CLASS).toContain('max-w-full')
+    expect(CONFLUENCE_LAYOUT_CLAMP_CLASS).toContain('w-full')
+  })
+
+  it('the raw SDK Column/Row container that caused the bug has NO width clamp', () => {
+    // Root cause, asserted against the SDK source: its flex `<div>` className is a fixed
+    // `flex flex-col gap-4` / `flex flex-row gap-3` with NO `min-w-0`/`max-w-full`. With
+    // flex `min-width: auto` the container grows to its content's intrinsic width, so a
+    // long unbroken line overflows instead of wrapping. (The SDK components require
+    // SurfaceProvider context, so they can't be mounted in the node test env — we assert the
+    // emitted className from source.) This test fails the day the SDK adds its own clamp,
+    // signalling the wrapper is no longer needed.
+    const sdkDir = '../../../node_modules/@a2ui-sdk/react/dist/0.9/components/layout'
+    const columnSrc = readFileSync(new URL(`${sdkDir}/ColumnComponent.js`, import.meta.url), 'utf8')
+    const rowSrc = readFileSync(new URL(`${sdkDir}/RowComponent.js`, import.meta.url), 'utf8')
+    expect(columnSrc).toContain('flex flex-col')
+    expect(rowSrc).toContain('flex flex-row')
+    expect(columnSrc).not.toContain('min-w-0')
+    expect(rowSrc).not.toContain('min-w-0')
+  })
+
+  it('the Confluence catalog registers the clamped wrappers, not the raw SDK Column/Row', () => {
+    // The fix: the catalog index imports Column/Row from ./layout (which apply the clamp)
+    // instead of standardCatalog.components.Column/Row. Asserting the wiring is the
+    // node-checkable proof the agent-grouped list is rendered inside the clamp box. Before
+    // the fix the index registered the raw SDK containers directly.
+    const indexSrc = readFileSync(new URL('./index.ts', import.meta.url), 'utf8')
+    expect(indexSrc).toContain("from './layout'")
+    expect(indexSrc).not.toContain('standardCatalog.components.Column')
+    expect(indexSrc).not.toContain('standardCatalog.components.Row')
+
+    // ...and the wrapper module applies the clamp class around the SDK container.
+    const layoutSrc = readFileSync(new URL('./layout.tsx', import.meta.url), 'utf8')
+    expect(layoutSrc).toContain('CONFLUENCE_LAYOUT_CLAMP_CLASS')
+    expect(layoutSrc).toContain('standardCatalog.components.Column')
+    expect(layoutSrc).toContain('standardCatalog.components.Row')
   })
 })

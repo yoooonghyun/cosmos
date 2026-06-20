@@ -3,6 +3,7 @@ import {
   adjacentActiveId,
   closeTab,
   defaultRequestDecision,
+  isFolderOpen,
   labelFromUtterance,
   MAX_LABEL_LENGTH,
   nextTerminalIndex,
@@ -417,5 +418,22 @@ describe('terminal panel seeding is StrictMode-idempotent (terminal-tab-index-sk
     const { counter } = seed()
     expect(mintLabel(counter)).toBe('Terminal 2')
     expect(mintLabel(counter)).toBe('Terminal 3')
+  })
+})
+
+describe('isFolderOpen (welcome view ↔ 3-pane split gate)', () => {
+  it('is true ONLY for the live phase (a folder is open → render the 3-pane split)', () => {
+    expect(isFolderOpen('live')).toBe(true)
+  })
+
+  it('is false while awaiting a directory (→ render the welcome view, no split)', () => {
+    expect(isFolderOpen('awaiting')).toBe(false)
+  })
+
+  it('degrades a missing/garbage phase to false (the welcome view is the safe fallback)', () => {
+    expect(isFolderOpen(null)).toBe(false)
+    expect(isFolderOpen(undefined)).toBe(false)
+    // @ts-expect-error — guard against a non-phase value reaching the predicate at runtime.
+    expect(isFolderOpen('bogus')).toBe(false)
   })
 })

@@ -1,5 +1,12 @@
 import { describe, it, expect } from 'vitest'
-import { mapSlackError, SlackClient, type FetchLike, type SlackHttpResponse } from './slackClient'
+import {
+  compareTs,
+  mapSlackError,
+  SlackClient,
+  sortMessagesByTs,
+  type FetchLike,
+  type SlackHttpResponse
+} from './slackClient'
 
 describe('mapSlackError (FR-026, SC-005, SC-007, SC-009)', () => {
   it('maps HTTP 429 to rate_limited and honors Retry-After (FR-026)', () => {
@@ -171,6 +178,67 @@ describe('SlackClient reads (FR-013, FR-014, FR-026)', () => {
     }
   })
 
+  // slack-thread-open-in-slack-v1: getReplies additionally resolves the thread root's canonical
+  // "Open in Slack" permalink via chat.getPermalink and carries it on the page. A URL-routed
+  // fetch mock answers BOTH calls (conversations.replies + chat.getPermalink).
+  it('getReplies carries the thread permalink from chat.getPermalink (happy path)', async () => {
+    const permalink = 'https://acme.slack.com/archives/C1/p1700000000000100'
+    const fetchImpl: FetchLike = async (input) => {
+      if (input.includes('chat.getPermalink')) {
+        return res({ ok: true, permalink })
+      }
+      return res({ ok: true, messages: [{ ts: '1700000000.000100', user: 'U1', text: 'root' }] })
+    }
+    const result = await new SlackClient({ fetchImpl }).getReplies(auth, 'C1', '1700000000.000100')
+    expect(result.ok).toBe(true)
+    if (result.ok) {
+      expect(result.data.permalink).toBe(permalink)
+    }
+  })
+
+  it('getReplies omits the permalink when chat.getPermalink fails (degrade-to-omit, no crash)', async () => {
+    const fetchImpl: FetchLike = async (input) => {
+      if (input.includes('chat.getPermalink')) {
+        return res({ ok: false, error: 'message_not_found' })
+      }
+      return res({ ok: true, messages: [{ ts: '1700000000.000100', user: 'U1', text: 'root' }] })
+    }
+    const result = await new SlackClient({ fetchImpl }).getReplies(auth, 'C1', '1700000000.000100')
+    // The replies read still SUCCEEDS — a permalink failure never fails the thread read.
+    expect(result.ok).toBe(true)
+    if (result.ok) {
+      expect(result.data.permalink).toBeUndefined()
+      expect(result.data.items).toHaveLength(1)
+    }
+  })
+
+  it('getReplies does not re-resolve the permalink on a paginated (cursor) page', async () => {
+    let permalinkCalls = 0
+    const fetchImpl: FetchLike = async (input) => {
+      if (input.includes('chat.getPermalink')) {
+        permalinkCalls += 1
+        return res({ ok: true, permalink: 'https://acme.slack.com/archives/C1/p1' })
+      }
+      return res({ ok: true, messages: [] })
+    }
+    await new SlackClient({ fetchImpl }).getReplies(auth, 'C1', '1700000000.000100', 'CUR')
+    expect(permalinkCalls).toBe(0)
+  })
+
+  it('getReplies drops a non-http(s) permalink (openable-url guard)', async () => {
+    const fetchImpl: FetchLike = async (input) => {
+      if (input.includes('chat.getPermalink')) {
+        return res({ ok: true, permalink: 'slack://channel?team=T1&id=C1' })
+      }
+      return res({ ok: true, messages: [{ ts: '1700000000.000100', user: 'U1', text: 'root' }] })
+    }
+    const result = await new SlackClient({ fetchImpl }).getReplies(auth, 'C1', '1700000000.000100')
+    expect(result.ok).toBe(true)
+    if (result.ok) {
+      expect(result.data.permalink).toBeUndefined()
+    }
+  })
+
   it('search maps a missing-scope error to search_unavailable (FR-015)', async () => {
     const fetchImpl: FetchLike = async () => res({ ok: false, error: 'missing_scope' })
     const result = await new SlackClient({ fetchImpl }).search({ token: 'xoxp' }, 'q')
@@ -196,6 +264,137 @@ describe('SlackClient reads (FR-013, FR-014, FR-026)', () => {
     expect(result.ok).toBe(true)
     if (result.ok) {
       expect(result.data.displayName).toBe('U9')
+    }
+  })
+})
+
+describe('message ordering (slack-thread-order-and-empty-reply-v1, Bug 1)', () => {
+  it('compareTs orders epoch ts NUMERICALLY, not lexically (unequal-length integer parts)', () => {
+    // Lexical compare would put "999.9" AFTER "1000.0" (because '9' > '1'); numeric does not.
+    expect(compareTs('999.900000', '1000.000000')).toBeLessThan(0)
+    // Microsecond suffix tiebreaks two same-second messages.
+    expect(compareTs('1718900000.012300', '1718900000.012301')).toBeLessThan(0)
+    expect(compareTs(undefined, '1.0')).toBeLessThan(0)
+  })
+
+  it('sortMessagesByTs returns oldest→newest without mutating the input', () => {
+    const input = [{ ts: '1718900000.000200' }, { ts: '1718900000.000100' }]
+    const sorted = sortMessagesByTs(input)
+    expect(sorted.map((m) => m.ts)).toEqual(['1718900000.000100', '1718900000.000200'])
+    // input untouched (new array)
+    expect(input.map((m) => m.ts)).toEqual(['1718900000.000200', '1718900000.000100'])
+  })
+
+  it('getHistory returns messages oldest→newest even when Slack returns them newest-first', async () => {
+    // Slack's conversations.history returns NEWEST-first; the panel renders top-to-bottom, so
+    // without normalization the channel shows newest-at-top (opposite of Slack). The fix sorts
+    // ascending so the channel reads oldest→newest like Slack.
+    const fetchImpl: FetchLike = async () =>
+      res({
+        ok: true,
+        messages: [
+          { ts: '1718900000.000300', user: 'U3', text: 'newest' },
+          { ts: '1718900000.000200', user: 'U2', text: 'middle' },
+          { ts: '1718900000.000100', user: 'U1', text: 'oldest' }
+        ]
+      })
+    const result = await new SlackClient({ fetchImpl }).getHistory(auth, 'C1')
+    expect(result.ok).toBe(true)
+    if (result.ok) {
+      expect(result.data.items.map((m) => m.text)).toEqual(['oldest', 'middle', 'newest'])
+    }
+  })
+
+  it('getReplies returns the same oldest→newest order as the channel (parent first, then replies)', async () => {
+    const fetchImpl: FetchLike = async () =>
+      res({
+        ok: true,
+        messages: [
+          { ts: '1718900000.000100', user: 'U1', text: 'parent' },
+          { ts: '1718900000.000300', user: 'U3', text: 'second reply' },
+          { ts: '1718900000.000200', user: 'U2', text: 'first reply' }
+        ]
+      })
+    const result = await new SlackClient({ fetchImpl }).getReplies(auth, 'C1', '1718900000.000100')
+    expect(result.ok).toBe(true)
+    if (result.ok) {
+      expect(result.data.items.map((m) => m.text)).toEqual([
+        'parent',
+        'first reply',
+        'second reply'
+      ])
+    }
+  })
+})
+
+describe('SlackClient.postMessage (slack-send-message-v1, FR-006)', () => {
+  /** Capture the (url, init) of the single outbound request. */
+  function captureFetch(
+    body: unknown,
+    status = 200
+  ): { fetchImpl: FetchLike; calls: Array<{ url: string; init?: Parameters<FetchLike>[1] }> } {
+    const calls: Array<{ url: string; init?: Parameters<FetchLike>[1] }> = []
+    const fetchImpl: FetchLike = async (url, init) => {
+      calls.push({ url, init })
+      return res(body, status)
+    }
+    return { fetchImpl, calls }
+  }
+
+  it('POSTs chat.postMessage with the bearer token and a JSON body; returns ts (FR-006)', async () => {
+    const { fetchImpl, calls } = captureFetch({ ok: true, ts: '1700000000.000200' })
+    const result = await new SlackClient({ fetchImpl }).postMessage(
+      { token: 'xoxp-user' },
+      'C1',
+      'hello world'
+    )
+    expect(result.ok).toBe(true)
+    if (result.ok) {
+      expect(result.data.ts).toBe('1700000000.000200')
+    }
+    expect(calls).toHaveLength(1)
+    const { url, init } = calls[0]
+    expect(url).toContain('/chat.postMessage')
+    expect(init?.method).toBe('POST')
+    expect(init?.headers?.authorization).toBe('Bearer xoxp-user')
+    const sent = JSON.parse(init?.body ?? '{}')
+    expect(sent).toEqual({ channel: 'C1', text: 'hello world' })
+  })
+
+  it('includes thread_ts in the body when threadTs is provided (FR-002)', async () => {
+    const { fetchImpl, calls } = captureFetch({ ok: true, ts: '1.3' })
+    await new SlackClient({ fetchImpl }).postMessage({ token: 'xoxp' }, 'C1', 'reply', '1.2')
+    const sent = JSON.parse(calls[0].init?.body ?? '{}')
+    expect(sent).toEqual({ channel: 'C1', text: 'reply', thread_ts: '1.2' })
+  })
+
+  it('maps a rejected token to reconnect_needed (SC-007)', async () => {
+    const { fetchImpl } = captureFetch({ ok: false, error: 'token_revoked' })
+    const result = await new SlackClient({ fetchImpl }).postMessage({ token: 'x' }, 'C1', 'hi')
+    expect(result.ok).toBe(false)
+    if (!result.ok) {
+      expect(result.kind).toBe('reconnect_needed')
+    }
+  })
+
+  it('maps HTTP 429 to rate_limited honoring Retry-After (FR-026)', async () => {
+    const fetchImpl: FetchLike = async () => res({}, 429, '7')
+    const result = await new SlackClient({ fetchImpl }).postMessage({ token: 'x' }, 'C1', 'hi')
+    expect(result.ok).toBe(false)
+    if (!result.ok) {
+      expect(result.kind).toBe('rate_limited')
+      expect(result.retryAfterSeconds).toBe(7)
+    }
+  })
+
+  it('returns a network error (never throws) when fetch rejects (SC-009)', async () => {
+    const fetchImpl: FetchLike = async () => {
+      throw new Error('ECONNREFUSED')
+    }
+    const result = await new SlackClient({ fetchImpl }).postMessage({ token: 'x' }, 'C1', 'hi')
+    expect(result.ok).toBe(false)
+    if (!result.ok) {
+      expect(result.kind).toBe('network')
     }
   })
 })

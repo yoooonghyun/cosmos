@@ -97,12 +97,18 @@ describe('buildBoundMessageListSurface (FR-002/FR-003/FR-006)', () => {
     expect(root.hasMore).toEqual({ path: '/hasMore' })
   })
 
-  it('seeds the first page rows + flags (FR-003)', () => {
+  it('seeds the first page rows + flags (FR-003) with the thread coords (FR-013)', () => {
     const { dataModel } = buildBoundMessageListSurface('C1', page)
+    // slack-generative-message-parity-v1 (FR-013): seed rows carry the non-secret thread
+    // coords (channelId + threadTs == ts) so the seeded reply affordance is interactive.
     expect(dataModel[0]).toEqual({
       surfaceId: SURFACE_SLACK_HISTORY,
       path: SLACK_MESSAGES_PATH,
-      value: [slackMessageRow(MESSAGE)]
+      value: [slackMessageRow(MESSAGE, 'C1')]
+    })
+    expect((dataModel[0].value as Record<string, unknown>[])[0]).toMatchObject({
+      channelId: 'C1',
+      threadTs: MESSAGE.ts
     })
     expect(dataModel.find((d) => d.path === '/hasMore')!.value).toBe(true)
   })

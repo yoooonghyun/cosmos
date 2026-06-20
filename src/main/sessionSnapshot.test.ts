@@ -1,6 +1,7 @@
 import { describe, it, expect, vi } from 'vitest'
 import { SESSION_SCHEMA_VERSION, type SessionSnapshot } from '../shared/ipc'
 import {
+  emptyEnabledIntegrations,
   emptySnapshot,
   reconcileEverOpened,
   reconcileGenerativePanel,
@@ -35,8 +36,10 @@ function goodSnapshot(): SessionSnapshot {
       },
       jira: { tabs: [], activeTabId: null, everOpened: 0 },
       slack: { tabs: [], activeTabId: null, everOpened: 0 },
-      confluence: { tabs: [], activeTabId: null, everOpened: 0 }
-    }
+      confluence: { tabs: [], activeTabId: null, everOpened: 0 },
+      'google-calendar': { tabs: [], activeTabId: null, everOpened: 0 }
+    },
+    enabled: { slack: false, jira: false, confluence: false, 'google-calendar': false }
   }
 }
 
@@ -136,6 +139,129 @@ describe('validateSnapshot — invalid/missing required field warns + safe fallb
   })
 })
 
+describe('validateTerminalTab — openFiles (persist-workdir-open-files-v1, FR-003/FR-009/FR-012)', () => {
+  it('round-trips a valid openFiles slice (ordered relPaths + a surviving active path)', () => {
+    const warn = vi.fn()
+    const snap = goodSnapshot()
+    snap.panels.terminal.tabs = [
+      {
+        id: 'p',
+        label: 'T',
+        sessionId: 's',
+        cwd: '/w',
+        openFiles: { files: ['a.ts', 'src/b.ts', 'c.ts'], activeRelPath: 'src/b.ts' }
+      }
+    ]
+    const out = validateSnapshot(snap, warn)
+    expect(warn).not.toHaveBeenCalled()
+    expect(out!.panels.terminal.tabs[0].openFiles).toEqual({
+      files: ['a.ts', 'src/b.ts', 'c.ts'],
+      activeRelPath: 'src/b.ts'
+    })
+  })
+
+  it('restores a tab with NO openFiles (older snapshot / no files open) without error — safe default', () => {
+    const warn = vi.fn()
+    const snap = goodSnapshot()
+    snap.panels.terminal.tabs = [{ id: 'p', label: 'T', sessionId: 's', cwd: '/w' }]
+    const out = validateSnapshot(snap, warn)
+    expect(warn).not.toHaveBeenCalled()
+    expect(out!.panels.terminal.tabs[0]).not.toHaveProperty('openFiles')
+  })
+
+  it('drops a non-array files / non-string entries; omits the field when nothing valid survives', () => {
+    const snap = goodSnapshot()
+    snap.panels.terminal.tabs = [
+      { id: 'a', label: 'T', sessionId: 's', cwd: '/w', openFiles: { files: 'nope', activeRelPath: null } } as never,
+      {
+        id: 'b',
+        label: 'T',
+        sessionId: 's',
+        cwd: '/w',
+        openFiles: { files: [1, '', 'keep.ts', null, 'keep.ts'], activeRelPath: 'keep.ts' }
+      } as never,
+      { id: 'c', label: 'T', sessionId: 's', cwd: '/w', openFiles: { files: [42, null], activeRelPath: 'x' } } as never
+    ]
+    const out = validateSnapshot(snap)
+    // a: files not an array → field omitted entirely.
+    expect(out!.panels.terminal.tabs[0]).not.toHaveProperty('openFiles')
+    // b: non-string + empty + duplicate dropped → only 'keep.ts' survives (de-duped).
+    expect(out!.panels.terminal.tabs[1].openFiles).toEqual({ files: ['keep.ts'], activeRelPath: 'keep.ts' })
+    // c: every entry invalid → nothing valid → field omitted.
+    expect(out!.panels.terminal.tabs[2]).not.toHaveProperty('openFiles')
+  })
+
+  it('nulls an active path that does not name a surviving open file (FR-009)', () => {
+    const snap = goodSnapshot()
+    snap.panels.terminal.tabs = [
+      {
+        id: 'p',
+        label: 'T',
+        sessionId: 's',
+        cwd: '/w',
+        openFiles: { files: ['a.ts', 'b.ts'], activeRelPath: 'gone.ts' }
+      }
+    ]
+    const out = validateSnapshot(snap)
+    expect(out!.panels.terminal.tabs[0].openFiles).toEqual({ files: ['a.ts', 'b.ts'], activeRelPath: null })
+  })
+
+  it('nulls a non-string active path while keeping the files', () => {
+    const snap = goodSnapshot()
+    snap.panels.terminal.tabs = [
+      { id: 'p', label: 'T', sessionId: 's', cwd: '/w', openFiles: { files: ['a.ts'], activeRelPath: 7 } } as never
+    ]
+    const out = validateSnapshot(snap)
+    expect(out!.panels.terminal.tabs[0].openFiles).toEqual({ files: ['a.ts'], activeRelPath: null })
+  })
+
+  it('treats a non-object openFiles as absent (safe fallback)', () => {
+    const snap = goodSnapshot()
+    snap.panels.terminal.tabs = [
+      { id: 'p', label: 'T', sessionId: 's', cwd: '/w', openFiles: 'nope' } as never
+    ]
+    const out = validateSnapshot(snap)
+    expect(out!.panels.terminal.tabs[0]).not.toHaveProperty('openFiles')
+  })
+})
+
+describe('validateSnapshot — version bump v8 (persist-workdir-open-files-v1, FR-011/SC-006)', () => {
+  it('rejects a v7 (older) snapshot → null → clean session', () => {
+    const warn = vi.fn()
+    const snap = goodSnapshot()
+    ;(snap as { schemaVersion: number }).schemaVersion = 7
+    expect(validateSnapshot(snap, warn)).toBeNull()
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('schemaVersion'))
+  })
+
+  it('the current schema version is 8', () => {
+    expect(SESSION_SCHEMA_VERSION).toBe(8)
+  })
+})
+
+describe('validateSnapshot — #93 enabled + open-files coexistence (FR-014/SC-008)', () => {
+  it('preserves BOTH the enabled map and per-tab openFiles under one version — neither clobbers the other', () => {
+    const warn = vi.fn()
+    const snap = goodSnapshot()
+    snap.enabled = { slack: true, jira: false, confluence: true, 'google-calendar': false }
+    snap.panels.terminal.tabs = [
+      {
+        id: 'p1',
+        label: 'T',
+        sessionId: 's1',
+        cwd: '/w',
+        openFiles: { files: ['a.ts', 'b.ts'], activeRelPath: 'a.ts' }
+      }
+    ]
+    const out = validateSnapshot(snap, warn)
+    expect(warn).not.toHaveBeenCalled()
+    // #93's field intact.
+    expect(out!.enabled).toEqual({ slack: true, jira: false, confluence: true, 'google-calendar': false })
+    // this feature's field intact.
+    expect(out!.panels.terminal.tabs[0].openFiles).toEqual({ files: ['a.ts', 'b.ts'], activeRelPath: 'a.ts' })
+  })
+})
+
 describe('reconcileEverOpened (FR-010)', () => {
   it('floors to at least the tab count', () => {
     expect(reconcileEverOpened(1, 3)).toBe(3)
@@ -173,5 +299,74 @@ describe('emptySnapshot', () => {
     expect(e.panels['generated-ui'].tabs).toHaveLength(0)
     // round-trips through the validator unchanged.
     expect(validateSnapshot(e)).toEqual(e)
+  })
+
+  it('defaults every gateable integration to disabled (FR-008)', () => {
+    expect(emptySnapshot().enabled).toEqual({
+      slack: false,
+      jira: false,
+      confluence: false,
+      'google-calendar': false
+    })
+  })
+})
+
+describe('validateSnapshot — enabled map (settings-redesign-v1, FR-003/FR-007/FR-008)', () => {
+  it('round-trips a fully-specified enabled map', () => {
+    const warn = vi.fn()
+    const snap = goodSnapshot()
+    snap.enabled = { slack: true, jira: false, confluence: true, 'google-calendar': false }
+    const out = validateSnapshot(snap, warn)
+    expect(warn).not.toHaveBeenCalled()
+    expect(out!.enabled).toEqual({
+      slack: true,
+      jira: false,
+      confluence: true,
+      'google-calendar': false
+    })
+  })
+
+  it('defaults a MISSING enabled map entirely to disabled (FR-008/FR-018)', () => {
+    const snap = goodSnapshot()
+    delete (snap as { enabled?: unknown }).enabled
+    const out = validateSnapshot(snap)
+    expect(out!.enabled).toEqual({
+      slack: false,
+      jira: false,
+      confluence: false,
+      'google-calendar': false
+    })
+  })
+
+  it('defaults MISSING keys to false while keeping present true keys (the migration)', () => {
+    const snap = goodSnapshot()
+    snap.enabled = { jira: true } as never // only one key present
+    const out = validateSnapshot(snap)
+    expect(out!.enabled).toEqual({
+      slack: false,
+      jira: true,
+      confluence: false,
+      'google-calendar': false
+    })
+  })
+
+  it('coerces a non-boolean / malformed enabled value to false, never crashing (FR-016/SC-009)', () => {
+    const snap = goodSnapshot()
+    snap.enabled = { slack: 'yes', jira: 1, confluence: null, 'google-calendar': true } as never
+    const out = validateSnapshot(snap)
+    expect(out).not.toBeNull()
+    expect(out!.enabled).toEqual({
+      slack: false,
+      jira: false,
+      confluence: false,
+      'google-calendar': true
+    })
+  })
+
+  it('treats a non-object enabled field as all-disabled (FR-016)', () => {
+    const snap = goodSnapshot()
+    snap.enabled = 'nope' as never
+    const out = validateSnapshot(snap)
+    expect(out!.enabled).toEqual(emptyEnabledIntegrations())
   })
 })

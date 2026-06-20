@@ -20,7 +20,7 @@
  * over `window.cosmos.confluence`; main attaches the token.
  */
 
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { A2UIProvider, type A2UIAction } from '@a2ui-sdk/react/0.9'
 import { BookText, ChevronLeft, Loader2, Search } from 'lucide-react'
 import { Button } from '@/components/ui/button'
@@ -37,8 +37,8 @@ import {
 } from './atlassianPanelBits'
 import { confluenceCatalog, CONFLUENCE_CATALOG_ID } from './confluenceCatalog'
 import { CONFLUENCE_OPEN_DETAIL_ACTION } from './confluenceCatalog/logic'
-// Shared page-detail rich body — native panel + gen-UI overlay render IDENTICALLY (SC-002).
-import { PageDetailBody } from './confluenceCatalog/components'
+// Shared page-detail body + title — native panel + gen-UI overlay render IDENTICALLY (SC-002/SC-005).
+import { PageDetailBody, PageDetailTitle } from './confluenceCatalog/components'
 import { PanelTabStrip, type PanelTab } from './PanelTabStrip'
 import { PanelRefreshButton } from './PanelRefreshButton'
 import { panelRefreshInputsFor } from './panelRefreshLogic'
@@ -47,6 +47,7 @@ import { ActiveTabSurface } from './ActiveTabSurface'
 import { PromptComposer } from './PromptComposer'
 import { SurfaceSpinner } from './SurfaceSpinner'
 import { useGenerativePanelTabs } from './useGenerativePanelTabs'
+import { confluenceViewContext, contextChipFor } from './viewContextCapture'
 import { useRestoredGenerativePanel } from './SessionProvider'
 import { surfaceSpinnerVisible } from './promptComposerLogic'
 import { usePerTabNav } from './usePerTabNav'
@@ -259,10 +260,18 @@ function ContentList({
 
 function PageDetail({
   pageId,
-  onReconnect
+  onReconnect,
+  onWebUrl
 }: {
   pageId: string
   onReconnect: () => void
+  /**
+   * confluence-link-404-v1 #100: lift the fetched page's canonical web URL up to the panel
+   * so the "Open in Confluence" external-link affordance lives on the DETAIL'S TOP TITLE (the
+   * sticky back-row header) instead of the body title. Fires with the `webUrl` (or `undefined`
+   * to omit) once the page read resolves, and clears (undefined) while loading/on error/unmount.
+   */
+  onWebUrl?: (webUrl: string | undefined) => void
 }): React.JSX.Element {
   const [detail, setDetail] = useState<ConfluencePageDetail | null>(null)
   const [loading, setLoading] = useState(true)
@@ -284,6 +293,13 @@ function PageDetail({
     void run()
   }, [run])
 
+  // Publish the header link target to the panel: the resolved page's `webUrl` (or undefined
+  // when loading/error/no page), and clear it on unmount so a stale link never lingers.
+  useEffect(() => {
+    onWebUrl?.(detail?.webUrl)
+    return () => onWebUrl?.(undefined)
+  }, [onWebUrl, detail?.webUrl])
+
   if (error?.kind === 'reconnect_needed') {
     return <ReconnectState provider="Confluence" onReconnect={onReconnect} />
   }
@@ -300,6 +316,8 @@ function PageDetail({
     <ScrollArea className="h-full">
       <div className="flex flex-col gap-4 p-3">
         <div className="flex flex-col gap-2">
+          {/* The link affordance moved to the top back-row header (#100); the body title is
+              plain text so the page is not titled twice as a link. */}
           <h2 className="text-base font-medium leading-snug text-foreground">{detail.title}</h2>
           {detail.space && (
             <div className="flex flex-wrap items-center gap-2">
@@ -334,6 +352,11 @@ export function ConfluencePanel({ active }: { active: boolean }): React.JSX.Elem
   // panel-tabs v1: the per-tab generative surfaces (read-only, target 'confluence').
   // Zero tabs => the native search/page browser base (FR-017).
   const restoredConfluencePanel = useRestoredGenerativePanel('confluence')
+  // open-prompt-view-context-v1 (FR-004): the LIVE open page (native view or gen-UI
+  // overlay) the composer grounds against, read at send time via refs (the nav + overlay
+  // are defined just below; assigned after they are available).
+  const viewRef = useRef<ConfluenceView>(CONFLUENCE_NAV_DEFAULT.view)
+  const genUiPageRef = useRef<{ pageId: string; title: string } | null>(null)
   const {
     tabs,
     activeTabId,
@@ -346,6 +369,8 @@ export function ConfluencePanel({ active }: { active: boolean }): React.JSX.Elem
   } = useGenerativePanelTabs({
     target: 'confluence',
     panelName: 'Confluence',
+    // Ground a compose against the open page; search/list ⇒ no context (FR-005).
+    getViewContext: () => confluenceViewContext(viewRef.current, genUiPageRef.current),
     ...(restoredConfluencePanel ? { initial: restoredConfluencePanel } : {})
   })
 
@@ -361,6 +386,12 @@ export function ConfluencePanel({ active }: { active: boolean }): React.JSX.Elem
   useEffect(() => {
     setGenUiPage(null)
   }, [activeTabId])
+  // confluence-link-404-v1 #100: the open page detail's canonical web URL, lifted out of
+  // `PageDetail` so the "Open in Confluence" external-link affordance renders on the DETAIL'S
+  // TOP TITLE (the back-row header) rather than the body title. Only one detail header is on
+  // screen at a time (native `view.kind === 'page'` OR the `genUiPage` overlay), so one piece
+  // of state suffices; `PageDetail` clears it (undefined) on unmount/loading/error.
+  const [detailWebUrl, setDetailWebUrl] = useState<string | undefined>(undefined)
   // The native-base browser nav is held PER-TAB, keyed by the active tab id
   // (bug panel-shared-tab-nav-state-v1), so each tab keeps its own view + search + query.
   const {
@@ -369,6 +400,9 @@ export function ConfluencePanel({ active }: { active: boolean }): React.JSX.Elem
     drop: dropNav,
     clearAll: clearAllNav
   } = usePerTabNav<ConfluenceNav>(activeTabId, CONFLUENCE_NAV_DEFAULT)
+  // Keep the live view + overlay in sync for the send-time view-context capture (above).
+  viewRef.current = view
+  genUiPageRef.current = genUiPage
   const setView = useCallback((view: ConfluenceView) => setNav((prev) => ({ ...prev, view })), [setNav])
   const setSearchText = useCallback(
     (searchText: string) => setNav((prev) => ({ ...prev, searchText })),
@@ -562,8 +596,10 @@ export function ConfluencePanel({ active }: { active: boolean }): React.JSX.Elem
               >
                 <ChevronLeft className="size-4" />
               </Button>
-              <span className="truncate text-sm font-medium text-foreground">
-                {genUiPage.title}
+              <span className="min-w-0 truncate text-sm font-medium text-foreground">
+                {/* #100: the "Open in Confluence" link lives on this TOP header title (not the
+                    body title). `detailWebUrl` is lifted up from `PageDetail` below. */}
+                <PageDetailTitle title={genUiPage.title} webUrl={detailWebUrl} />
               </span>
             </div>
             <div className="min-h-0 flex-1">
@@ -571,6 +607,7 @@ export function ConfluencePanel({ active }: { active: boolean }): React.JSX.Elem
                 key={genUiPage.pageId}
                 pageId={genUiPage.pageId}
                 onReconnect={() => void refreshStatus()}
+                onWebUrl={setDetailWebUrl}
               />
             </div>
           </>
@@ -606,8 +643,10 @@ export function ConfluencePanel({ active }: { active: boolean }): React.JSX.Elem
                     >
                       <ChevronLeft className="size-4" />
                     </Button>
-                    <span className="truncate text-sm font-medium text-foreground">
-                      {view.title}
+                    <span className="min-w-0 truncate text-sm font-medium text-foreground">
+                      {/* #100: the "Open in Confluence" link lives on this TOP header title
+                          (not the body title). `detailWebUrl` is lifted up from `PageDetail`. */}
+                      <PageDetailTitle title={view.title} webUrl={detailWebUrl} />
                     </span>
                   </div>
                 )}
@@ -649,6 +688,7 @@ export function ConfluencePanel({ active }: { active: boolean }): React.JSX.Elem
                       key={view.pageId}
                       pageId={view.pageId}
                       onReconnect={() => void refreshStatus()}
+                      onWebUrl={setDetailWebUrl}
                     />
                   )}
                 </div>
@@ -699,6 +739,7 @@ export function ConfluencePanel({ active }: { active: boolean }): React.JSX.Elem
           onSubmit={submit}
           placeholder="Ask about your Confluence pages…"
           ariaLabel="Ask about Confluence"
+          contextChip={contextChipFor('confluence', confluenceViewContext(view, genUiPage))}
           busy={showSpinner}
         />
       )}

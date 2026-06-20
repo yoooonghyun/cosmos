@@ -29,7 +29,13 @@
 import { spawn as nodeSpawn, type ChildProcess } from 'node:child_process'
 import { isExecutableResolvable } from './ptyManager'
 import { allowedToolForTarget, groundingPromptForTarget, renderMcpConfigJsonForTarget } from './mcpConfig'
-import { DEFAULT_UI_RENDER_TARGET, type AgentStatusPayload, type UiRenderTarget } from '../shared/ipc'
+import { viewContextGroundingClause } from './viewContextGrounding'
+import {
+  DEFAULT_UI_RENDER_TARGET,
+  type AgentStatusPayload,
+  type UiRenderTarget,
+  type ViewContext
+} from '../shared/ipc'
 
 /** Sinks the runner pushes lifecycle status into; wired to IPC by the caller. */
 export interface AgentRunnerSinks {
@@ -94,8 +100,17 @@ export class AgentRunner {
    * `render_jira_ui` (so the surface lands in the Jira panel via `target: 'jira'`);
    * `'generated-ui'` (the default) registers ONLY `cosmos-render-ui` + grants ONLY
    * `render_ui`. Least-privilege per run; the single-run guard is unchanged.
+   *
+   * `viewContext` (open-prompt-view-context-v1) is the active panel's non-secret current
+   * view (the open ticket/channel/thread/page/event). When supplied it is appended to the
+   * run's grounding system prompt so deictic utterances resolve — it NEVER touches the
+   * user's literal `-p` utterance and NEVER broadens tool grants (FR-007/FR-009).
    */
-  run(utterance: string, target: UiRenderTarget = DEFAULT_UI_RENDER_TARGET): void {
+  run(
+    utterance: string,
+    target: UiRenderTarget = DEFAULT_UI_RENDER_TARGET,
+    viewContext?: ViewContext
+  ): void {
     // Single-run / blocked-while-running: ignore a submit while busy.
     if (this.running) {
       return
@@ -140,7 +155,13 @@ export class AgentRunner {
 
     // Per-target grounding (jira): force the run to render only REAL fetched tickets and
     // never fabricate, since the render tool's description carries a placeholder example.
-    const groundingPrompt = groundingPromptForTarget(target)
+    // open-prompt-view-context-v1 (FR-007): append the active panel's view-context clause
+    // (the open ticket/channel/thread/page/event) to the SAME system prompt so deictic
+    // utterances resolve — the user's literal `-p` utterance above is left untouched.
+    const groundingPrompt = composeGroundingPrompt(
+      groundingPromptForTarget(target),
+      viewContextGroundingClause(target, viewContext)
+    )
     if (groundingPrompt) {
       args.push('--append-system-prompt', groundingPrompt)
     }
@@ -229,6 +250,19 @@ export class AgentRunner {
     this.running = false
     this.child = null
   }
+}
+
+/**
+ * Combine the per-target grounding prompt and the per-run view-context clause into a single
+ * `--append-system-prompt` string (open-prompt-view-context-v1, FR-007). Either may be
+ * empty/undefined; returns the non-empty parts joined by a space, or '' when both are
+ * absent (so the caller appends NO `--append-system-prompt` — baseline behaviour).
+ */
+function composeGroundingPrompt(
+  groundingPrompt: string | undefined,
+  viewContextClause: string
+): string {
+  return [groundingPrompt, viewContextClause].filter((p) => !!p && p.length > 0).join(' ')
 }
 
 function errorMessage(err: unknown): string {

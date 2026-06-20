@@ -5,13 +5,22 @@
  * in `confluenceImageProtocol.ts`.
  *
  * The renderer rewrites a content `<img src>` to
- * `cosmos-confluence-img://confluence/<base64url(/wiki/...path)>` (see the renderer's
- * `contentImageSrc.ts`). The reference encodes ONLY a Confluence-relative `/wiki/...` path —
- * never a host, never an absolute URL, never a token. `decodeImageRef` decodes it and REJECTS
- * (→ null) anything that could escape the Confluence origin (FR-011 / SC-005 — SSRF-safe):
- * a non-`/wiki` path, an embedded scheme, a protocol-relative `//host`, a `..` traversal, a
- * backslash, or a control char. `buildAssetUrl` then appends the validated relative path to
- * the TRUSTED gateway base, fixing the origin.
+ * `cosmos-confluence-img://confluence/<base64url(ref)>` (see the renderer's
+ * `contentImageSrc.ts`), where `ref` is ONE of:
+ *   - `attachment:<id>` — the granular-scope path (confluence-attachment-scope-v1). The legacy
+ *     `/wiki/download/attachments/...` blob URL Confluence embeds 401s under granular OAuth
+ *     scopes ("scope does not match" — classic content endpoint). The `<img>` carries the
+ *     attachment id (`data-linked-resource-id`), so we resolve the bytes via the
+ *     granular-authorized v2 attachments API instead (`buildAttachmentMetaUrl` →
+ *     `GET /wiki/api/v2/attachments/{id}` → its `downloadLink` → `buildDownloadUrl`).
+ *   - a Confluence-relative `/wiki/...` path — the original path (kept for any non-attachment
+ *     content image whose `/wiki/...` src is granular-fetchable as-is).
+ * The reference encodes ONLY an attachment id or a `/wiki/...` path — never a host, never an
+ * absolute URL, never a token. `decodeImageRef` decodes + classifies it and REJECTS (→ null)
+ * anything that could escape the Confluence origin (FR-011 / SC-005 — SSRF-safe): a non-`/wiki`
+ * path, an embedded scheme, a protocol-relative `//host`, a `..` traversal, a backslash, a
+ * control char, or a non-numeric attachment id. `buildAssetUrl`/`buildAttachmentMetaUrl`/
+ * `buildDownloadUrl` then append the validated value to the TRUSTED gateway base, fixing origin.
  */
 
 import { confluenceApiBase } from './integrations/atlassianConfig'
@@ -21,6 +30,19 @@ export const COSMOS_CONFLUENCE_IMG_SCHEME = 'cosmos-confluence-img'
 
 /** The fixed authority segment. The real Confluence host is never encoded into a reference. */
 export const COSMOS_CONFLUENCE_IMG_AUTHORITY = 'confluence'
+
+/** Prefix marking a decoded ref as an attachment-id ref. Kept in sync with the renderer's
+ * `COSMOS_CONFLUENCE_ATTACHMENT_REF_PREFIX`. */
+export const COSMOS_CONFLUENCE_ATTACHMENT_REF_PREFIX = 'attachment:'
+
+/**
+ * A decoded + validated content-image reference. Either an ATTACHMENT id (resolve via the v2
+ * attachments API) or a Confluence-relative `/wiki/...` PATH (fetch directly). A forged /
+ * malformed / origin-escaping ref decodes to `null` (the SSRF guard rejected it).
+ */
+export type ImageRef =
+  | { kind: 'attachment'; attachmentId: string }
+  | { kind: 'path'; relativePath: string }
 
 /**
  * base64url-decode the encoded path segment back to its UTF-8 string, or `null` on malformed
@@ -44,11 +66,11 @@ export function decodeBase64Url(encoded: string): string | null {
 
 /**
  * Decode + VALIDATE an opaque content-image reference (the full `cosmos-confluence-img://...`
- * URL, or just the encoded path segment) into a safe Confluence-relative `/wiki/...` path, or
- * `null` if the reference is absent/malformed/forged. This is the SSRF guard (FR-011). Pure;
- * never throws.
+ * URL, or just the encoded path segment) into a classified {@link ImageRef} — an `attachment`
+ * id or a safe Confluence-relative `/wiki/...` `path` — or `null` if the reference is
+ * absent/malformed/forged. This is the SSRF guard (FR-011). Pure; never throws.
  */
-export function decodeImageRef(ref: unknown): string | null {
+export function decodeImageRef(ref: unknown): ImageRef | null {
   if (typeof ref !== 'string' || ref.trim() === '') {
     return null
   }
@@ -60,7 +82,15 @@ export function decodeImageRef(ref: unknown): string | null {
   if (decoded === null) {
     return null
   }
-  return safeWikiPath(decoded)
+  // Attachment-id ref (the granular-scope path). Validate the id is a positive integer — a
+  // non-numeric id could otherwise be path-smuggled into the v2 attachments URL.
+  if (decoded.startsWith(COSMOS_CONFLUENCE_ATTACHMENT_REF_PREFIX)) {
+    const id = decoded.slice(COSMOS_CONFLUENCE_ATTACHMENT_REF_PREFIX.length)
+    return /^[0-9]+$/.test(id) ? { kind: 'attachment', attachmentId: id } : null
+  }
+  // Legacy relative-path ref (kept for non-attachment `/wiki/...` content images).
+  const relativePath = safeWikiPath(decoded)
+  return relativePath === null ? null : { kind: 'path', relativePath }
 }
 
 /** Pull the base64url path segment out of a `cosmos-confluence-img://confluence/<seg>` URL,
@@ -143,4 +173,39 @@ function safeDecodeURIComponentPath(pathPart: string): string | null {
  */
 export function buildAssetUrl(cloudId: string, relativePath: string): string {
   return `${confluenceApiBase(cloudId)}${relativePath}`
+}
+
+/**
+ * Build the v2 attachment METADATA URL for a validated numeric attachment id
+ * (confluence-attachment-scope-v1): `${base}/wiki/api/v2/attachments/{id}` — the
+ * granular-authorized read (`read:attachment:confluence`) that returns the attachment's
+ * `downloadLink`. The id is `encodeURIComponent`-escaped defensively (it is already validated
+ * to digits by `decodeImageRef`, so this is belt-and-suspenders). Pure.
+ */
+export function buildAttachmentMetaUrl(cloudId: string, attachmentId: string): string {
+  return `${confluenceApiBase(cloudId)}/wiki/api/v2/attachments/${encodeURIComponent(attachmentId)}`
+}
+
+/**
+ * Build the absolute bytes URL from an attachment's `downloadLink` (the value returned by the
+ * v2 attachments metadata endpoint). The download link is a Confluence-relative path; Confluence
+ * returns it either rooted at the wiki context (`/wiki/...`) or at the site root (`/download/...`,
+ * `/rest/api/content/.../download`, …), so this prefixes `/wiki` to ANY non-`/wiki/` site-root
+ * path and then applies the SAME SSRF guard ({@link safeWikiPath}) before appending it to the
+ * trusted gateway base — a forged/origin-escaping link (`//host`, `..`) is rejected (→ null),
+ * never fetched. Pure; never throws.
+ */
+export function buildDownloadUrl(cloudId: string, downloadLink: unknown): string | null {
+  if (typeof downloadLink !== 'string' || downloadLink.trim() === '') {
+    return null
+  }
+  let path = downloadLink.trim()
+  // Normalize a site-root path (`/download/...`, `/rest/...`, …) to the wiki-context `/wiki/...`
+  // form so it passes the `/wiki/`-anchored SSRF guard and resolves against the gateway base. A
+  // link already `/wiki/...` is left as-is; `//host` is left for the guard to reject.
+  if (path.startsWith('/') && !path.startsWith('//') && !path.startsWith('/wiki/')) {
+    path = `/wiki${path}`
+  }
+  const safe = safeWikiPath(path)
+  return safe === null ? null : `${confluenceApiBase(cloudId)}${safe}`
 }

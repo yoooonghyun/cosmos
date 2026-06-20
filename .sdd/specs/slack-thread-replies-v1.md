@@ -1,9 +1,14 @@
 # Spec: Slack Thread Replies (generated-UI catalog) — v1
 
-**Status**: Draft
+**Status**: Superseded by slack-generative-message-parity-v1 (OQ-4)
 **Created**: 2026-06-08
 **Supersedes**: —
 **Related plan**: .sdd/plans/slack-thread-replies-v1.md
+
+> Superseded 2026-06-18: the replies behavior is carried forward (as a native thread-view
+> drill-in rather than this spec's inline-expand) by
+> `.sdd/specs/slack-generative-message-parity-v1.md`, which bundles it with the wrap, skeleton,
+> and row-unification concerns. See that spec's OQ-1/OQ-4.
 
 ---
 

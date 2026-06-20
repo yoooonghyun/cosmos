@@ -115,7 +115,14 @@ export class ConfluenceManager {
   }
 
   private auth(tokens: StoredTokenSet): ConfluenceCallAuth {
-    return { token: tokens.accessToken, cloudId: readCloudId(tokens) }
+    const siteUrl = readSiteUrl(tokens)
+    return {
+      token: tokens.accessToken,
+      cloudId: readCloudId(tokens),
+      // Non-secret site web origin (e.g. https://acme.atlassian.net) used ONLY to assemble
+      // the page web URL in getPage (confluence-link-404-v1 #100). Absent on legacy tokens.
+      ...(siteUrl ? { siteUrl } : {})
+    }
   }
 
   /**
@@ -282,6 +289,19 @@ function toStoredTokenSet(oauth: AtlassianOAuthResult): StoredTokenSet {
 function readCloudId(tokens: StoredTokenSet): string {
   const extra = tokens.extra
   return extra && typeof extra.cloudId === 'string' ? extra.cloudId : ''
+}
+
+/**
+ * The persisted site web ORIGIN (OAuth accessible-resources `url`, e.g.
+ * `https://acme.atlassian.net`), threaded to `getPage` to build the user-facing page web
+ * URL (confluence-link-404-v1 #100). Non-secret. Absent on legacy token sets that predate
+ * persisting `siteUrl` → the "Open in Confluence" affordance simply omits.
+ */
+function readSiteUrl(tokens: StoredTokenSet): string | undefined {
+  const extra = tokens.extra
+  return extra && typeof extra.siteUrl === 'string' && extra.siteUrl !== ''
+    ? extra.siteUrl
+    : undefined
 }
 
 function readSiteName(tokens: StoredTokenSet | null): string | undefined {

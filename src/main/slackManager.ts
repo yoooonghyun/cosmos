@@ -32,12 +32,16 @@ import type {
   SlackResult,
   SlackSearchMatch,
   SlackSearchParams,
+  SlackSendParams,
+  SlackSendResult,
   SlackUser
 } from '../shared/slack'
-import type { SlackCallAuth, SlackClient } from './integrations/slackClient'
+import { SLACK_WRITE_NOT_AUTHORIZED_MESSAGE, SLACK_WRITE_SCOPE } from '../shared/slack'
+import type { MessageResolvers, SlackCallAuth, SlackClient } from './integrations/slackClient'
 import type { StoredTokenSet, TokenStore } from './integrations/tokenStore'
 import type { SlackOAuthResult } from './integrations/slackOAuth'
 import { SLACK_SEARCH_SCOPE } from './integrations/slackConfig'
+import { SlackCustomEmojiResolver } from './integrations/slackEmojiList'
 
 export interface SlackManagerDeps {
   client: SlackClient
@@ -58,6 +62,12 @@ export class SlackManager {
   private state: SlackConnectionStatus['state'] = 'not_connected'
   /** Reason the most recent connect attempt failed (surfaced to the panel). */
   private lastError: string | null = null
+  /**
+   * Per-session rich-content resolver cache (slack-rich-message-render-v1, Tracks B/C). Keyed
+   * by the live token so a reconnect (new token) rebuilds it; each user-name / custom-emoji
+   * lookup is then resolved at most once per session. Rebuilt lazily by {@link resolvers}.
+   */
+  private resolverCache: { token: string; resolvers: MessageResolvers } | null = null
 
   constructor(deps: SlackManagerDeps) {
     this.deps = deps
@@ -75,6 +85,7 @@ export class SlackManager {
       ...(tokens?.accountName ? { workspaceName: tokens.accountName } : {}),
       ...(tokens?.accountId ? { teamId: tokens.accountId } : {}),
       ...(this.state === 'connected' ? { canSearch: this.canSearch(tokens) } : {}),
+      ...(this.state === 'connected' ? { canSend: this.canSend(tokens) } : {}),
       ...(this.state === 'not_connected' && this.lastError ? { lastError: this.lastError } : {})
     }
   }
@@ -86,6 +97,28 @@ export class SlackManager {
     // One user token drives every read; search is available iff its grant
     // includes search:read (FR-015).
     return Array.isArray(tokens.scopes) && tokens.scopes.includes(SLACK_SEARCH_SCOPE)
+  }
+
+  /**
+   * Whether the stored token grants `chat:write` (slack-send-message-v1, FR-008/FR-009).
+   * Read from the persisted `StoredTokenSet.scopes` (the Jira/Confluence pattern). Returns
+   * false when not connected or when the scope is absent (a read-only-era token), so a send
+   * short-circuits to `write_not_authorized` WITHOUT calling the client. Surfaced as the
+   * non-secret `canSend` status flag so the composer gates itself up front.
+   */
+  private canSend(tokens: StoredTokenSet | null): boolean {
+    if (!tokens) {
+      return false
+    }
+    return Array.isArray(tokens.scopes) && tokens.scopes.includes(SLACK_WRITE_SCOPE)
+  }
+
+  /**
+   * Public capability probe used by the send short-circuit (FR-008). Reads the granted
+   * scopes from the stored token; false on a read-only-era token / not connected.
+   */
+  getSendCapability(): boolean {
+    return this.canSend(this.deps.tokenStore.load())
   }
 
   private setState(state: SlackConnectionStatus['state']): void {
@@ -134,6 +167,7 @@ export class SlackManager {
   /** Delete the stored token; return to not_connected (FR-009, SC-010). */
   disconnect(): SlackConnectionStatus {
     this.deps.tokenStore.clear()
+    this.resolverCache = null
     this.setState('not_connected')
     return this.getStatus()
   }
@@ -155,6 +189,53 @@ export class SlackManager {
 
   private auth(tokens: StoredTokenSet): SlackCallAuth {
     return { token: tokens.accessToken }
+  }
+
+  /**
+   * The live per-call auth (token) for the connected session, or `null` when not connected /
+   * no token (slack-rich-message-render-v1, FR-014). MAIN-ONLY: the sole consumer is the
+   * `cosmos-slack-img` protocol handler, which attaches the token to its outbound `net.fetch`
+   * and never returns it to the renderer. NOT an IPC method; the token is NEVER put in any IPC
+   * payload / bridge frame / surface (SC-008). Mirrors {@link ConfluenceManager.currentAuth}.
+   */
+  currentAuth(): SlackCallAuth | null {
+    if (this.state === 'not_connected') {
+      return null
+    }
+    const tokens = this.deps.tokenStore.load()
+    return tokens ? this.auth(tokens) : null
+  }
+
+  /**
+   * Build (or reuse) the per-session rich-content resolvers for a read (Tracks B/C). Cached
+   * per token so a reconnect rebuilds them; each user-name lookup is memoized in a Map and the
+   * custom-emoji `emoji.list` map is fetched at most once. Both degrade-never-throw: a failed
+   * user lookup yields the raw id (FR-004), a failed emoji read yields no custom emoji (FR-016).
+   */
+  private resolvers(tokens: StoredTokenSet): MessageResolvers {
+    if (this.resolverCache && this.resolverCache.token === tokens.accessToken) {
+      return this.resolverCache.resolvers
+    }
+    const auth = this.auth(tokens)
+    const nameCache = new Map<string, Promise<string>>()
+    const resolveUserName = (id: string): Promise<string> => {
+      let p = nameCache.get(id)
+      if (!p) {
+        p = this.deps.client.getUser(auth, id).then((r) => (r.ok ? r.data.displayName : id))
+        nameCache.set(id, p)
+      }
+      return p
+    }
+    const emojiResolver = new SlackCustomEmojiResolver(async () => {
+      const r = await this.deps.client.getEmojiList(auth)
+      return r.ok ? r.data : null
+    })
+    const resolvers: MessageResolvers = {
+      resolveUserName,
+      resolveCustomEmojiRef: (shortcode) => emojiResolver.forShortcode(shortcode)
+    }
+    this.resolverCache = { token: tokens.accessToken, resolvers }
+    return resolvers
   }
 
   /**
@@ -183,13 +264,19 @@ export class SlackManager {
 
   getHistory(params: SlackHistoryParams): Promise<SlackResult<SlackPage<SlackMessage>>> {
     return this.run((t) =>
-      this.deps.client.getHistory(this.auth(t), params.channelId, params.cursor)
+      this.deps.client.getHistory(this.auth(t), params.channelId, params.cursor, this.resolvers(t))
     )
   }
 
   getReplies(params: SlackRepliesParams): Promise<SlackResult<SlackPage<SlackMessage>>> {
     return this.run((t) =>
-      this.deps.client.getReplies(this.auth(t), params.channelId, params.threadTs, params.cursor)
+      this.deps.client.getReplies(
+        this.auth(t),
+        params.channelId,
+        params.threadTs,
+        params.cursor,
+        this.resolvers(t)
+      )
     )
   }
 
@@ -203,11 +290,46 @@ export class SlackManager {
           message: "Search isn't available for this connection."
         })
       }
-      return this.deps.client.search(this.auth(tokens), params.query, params.cursor)
+      return this.deps.client.search(
+        this.auth(tokens),
+        params.query,
+        params.cursor,
+        this.resolvers(tokens)
+      )
     })
   }
 
   getUser(params: SlackGetUserParams): Promise<SlackResult<SlackUser>> {
     return this.run((t) => this.deps.client.getUser(this.auth(t), params.userId))
+  }
+
+  /**
+   * Send a plain-text message — the FIRST write (slack-send-message-v1, FR-006/FR-008).
+   * Short-circuits to `write_not_authorized` (NO client call) when the stored token lacks
+   * `chat:write`; otherwise routes through `run()` so the same `not_connected` /
+   * `reconnect_needed` discipline as reads applies (FR-015). A present `threadTs` posts a
+   * thread reply; absent posts a channel message. Resolves the posted message `ts`. The
+   * token stays in main and never crosses the IPC boundary (SC-006).
+   */
+  sendMessage(params: SlackSendParams): Promise<SlackResult<SlackSendResult>> {
+    return this.run((t) => {
+      // FR-008: writing needs chat:write on the user token; absent (a read-only-era
+      // token) -> short-circuit to write_not_authorized with NO client call. Checked
+      // inside run() (after ensureToken) so a disconnected send still reports
+      // not_connected rather than a misleading scope error.
+      if (!this.canSend(t)) {
+        return Promise.resolve<SlackResult<SlackSendResult>>({
+          ok: false,
+          kind: 'write_not_authorized',
+          message: SLACK_WRITE_NOT_AUTHORIZED_MESSAGE
+        })
+      }
+      return this.deps.client.postMessage(
+        this.auth(t),
+        params.channelId,
+        params.text,
+        params.threadTs
+      )
+    })
   }
 }

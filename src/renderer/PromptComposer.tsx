@@ -45,27 +45,48 @@ import { Button } from '@/components/ui/button'
 import { Textarea } from '@/components/ui/textarea'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { CosmosMark } from './CosmosMark'
+import { ContextChip } from './ContextChip'
+import type { ContextChipData } from './viewContextCapture'
 import {
   submitDecision,
   draftAfterDismiss,
   draftAfterSubmit,
   shouldCollapseOnOutsideClick,
-  escDecision
+  escDecision,
+  sentHintAfterSubmit,
+  SENT_HINT_DURATION_MS
 } from './promptComposerLogic'
 
 /**
  * Props for the shared composer. Per-panel copy only — no invented props (FR-017 gating
  * stays at the call site; each panel keeps its existing `{isConnected && …}` wrapper).
  */
+/**
+ * How much of the captured view context the user dismissed for THIS submit
+ * (open-prompt-view-context-v1, design §5). `'none'` = attach all; `'thread'` = drop only
+ * the Slack thread dimension; `'all'` = attach no context. Per-compose + non-sticky.
+ */
+export type ContextDismiss = 'none' | 'thread' | 'all'
+
 export interface PromptComposerProps {
-  /** Send the raw utterance, exactly as today (the panel hook owns agent.submit + tab bookkeeping). */
-  onSubmit: (utterance: string) => void
+  /**
+   * Send the raw utterance (the panel hook owns agent.submit + tab bookkeeping). The second
+   * arg tells the hook how much view context to attach for this submit (chip dismiss, design
+   * §5/§6); omitted ⇒ `'none'` (attach all), so existing callers are unaffected.
+   */
+  onSubmit: (utterance: string, options?: { contextDismiss: ContextDismiss }) => void
   /** Per-panel textarea placeholder (e.g. "Describe the UI you want…"). */
   placeholder: string
   /** Per-panel accessible name for the form + textarea (e.g. "Ask about your Jira issues"). */
   ariaLabel: string
   /** Accessible name for the collapsed logo button (FR-013). Defaults to "Open prompt". */
   collapsedAriaLabel?: string
+  /**
+   * Display-only descriptor of the in-view item this prompt will be grounded against
+   * (open-prompt-view-context-v1, design §6 Option 1). Undefined ⇒ no chip (design state A).
+   * NON-SECRET labels only; the panel derives it from the same state as its `viewContext`.
+   */
+  contextChip?: ContextChipData
   /**
    * True while THIS panel's active tab has a generation in flight (the same per-tab gate
    * that drives the surface spinner). While busy, the whole composer is hidden — neither the
@@ -83,6 +104,7 @@ export function PromptComposer({
   placeholder,
   ariaLabel,
   collapsedAriaLabel = 'Open prompt',
+  contextChip,
   busy = false
 }: PromptComposerProps): React.JSX.Element {
   // Collapsed/expanded is session-only, default collapsed (FR-001/FR-016).
@@ -97,6 +119,15 @@ export function PromptComposer({
   // Esc/outside-click "dismisses" (a gentle shrink-fade). Only the launch is the dramatic
   // expand the user asked for; a plain dismiss must not look like a send.
   const [launching, setLaunching] = useState(false)
+  // open-prompt-view-context-v1 (design §5): how much of the view context the user dismissed
+  // for the NEXT submit via the chip's `×`. Per-compose + non-sticky — reset whenever the
+  // composer collapses (close/reopen restores the chip) and after a successful submit.
+  const [contextDismiss, setContextDismiss] = useState<'none' | 'thread' | 'all'>('none')
+  // open-prompt-spinner-gating-v1 (OQ-3): a transient, non-blocking "Sent" hint shown after
+  // an accepted submit now that the "Generating…" blocking spinner is suppressed for a plain
+  // command. It NEVER sets `busy` (the composer/logo stay reachable) and auto-dismisses; a
+  // true UI-generation run hides it (the surface spinner is the feedback while `busy`).
+  const [sentHint, setSentHint] = useState(false)
 
   const logoRef = useRef<HTMLButtonElement | null>(null)
   const textareaRef = useRef<HTMLTextAreaElement | null>(null)
@@ -144,6 +175,9 @@ export function PromptComposer({
   const collapse = useCallback((focusLogo: boolean): void => {
     pendingLogoFocus.current = focusLogo
     setExpanded(false)
+    // Chip dismiss is per-compose (design §5): collapsing (submit/Esc/outside-click) resets
+    // it so re-opening restores the full chip.
+    setContextDismiss('none')
   }, [])
 
   // FR-005/FR-006: send only on a non-empty, non-running submit, then auto-collapse +
@@ -154,13 +188,17 @@ export function PromptComposer({
     if (!accept) {
       return
     }
-    onSubmit(value)
+    onSubmit(value, { contextDismiss }) // attach the chip-dismiss choice for this submit
     setRunning(true)
     setHasError(false)
     setValue(draftAfterSubmit()) // clear only on success (FR-005)
     setLaunching(true) // submit collapse = grow-to-fill + vanish (the "launch")
+    // open-prompt-spinner-gating-v1 (OQ-3): acknowledge the accepted submit with the transient
+    // "Sent" hint. Non-blocking — if this run turns out to generate a surface, `busy` engages
+    // and the render below hides the hint in favour of the surface spinner.
+    setSentHint(sentHintAfterSubmit(true).visible)
     collapse(true) // auto-collapse to the logo (FR-006/FR-012)
-  }, [value, running, onSubmit, collapse])
+  }, [value, running, onSubmit, contextDismiss, collapse])
 
   const handleSubmit = useCallback(
     (event: FormEvent<HTMLFormElement>): void => {
@@ -213,8 +251,21 @@ export function PromptComposer({
     return () => document.removeEventListener('mousedown', onPointerDown, true)
   }, [expanded, collapse])
 
+  // open-prompt-spinner-gating-v1 (OQ-3): auto-dismiss the transient "Sent" hint. The pure
+  // when/duration decision lives in promptComposerLogic; only the timer binding is here.
+  useEffect(() => {
+    if (!sentHint) {
+      return
+    }
+    const id = window.setTimeout(() => setSentHint(false), SENT_HINT_DURATION_MS)
+    return () => window.clearTimeout(id)
+  }, [sentHint])
+
   const canSubmit = !running && value.trim().length > 0
   const hasDraft = value.trim().length > 0
+  // The "Sent" hint shows only while NOT busy: a UI-generation run engages `busy` (the surface
+  // spinner is the feedback), so the hint is for plain commands only and never co-shows.
+  const showSentHint = sentHint && !busy
 
   // BOTH states are ALWAYS mounted so the open/close CSS transition fires in both
   // directions (FR-004): conditional mount/unmount would skip enter/exit animation.
@@ -284,6 +335,22 @@ export function PromptComposer({
           </Tooltip>
         </div>
 
+        {/* open-prompt-spinner-gating-v1 (OQ-3): the transient, non-blocking "Sent" hint for a
+            plain command. Decorative + pointer-events-none (it never blocks the logo beneath),
+            reusing the existing muted-foreground token (same as the composer hint copy). Sits
+            just above the collapsed logo and fades out on auto-dismiss. */}
+        <span
+          aria-hidden="true"
+          className={[
+            'pointer-events-none absolute bottom-[3.75rem] left-1/2 -translate-x-1/2',
+            'text-[11px] text-muted-foreground',
+            'transition-opacity duration-200 ease-out motion-reduce:transition-none',
+            showSentHint ? 'opacity-100' : 'opacity-0'
+          ].join(' ')}
+        >
+          Sent
+        </span>
+
         {/* EXPANDED: centered, constrained-width composer card (FR-010). Opaque
             (bg-popover) so tickets do not bleed through the card itself. */}
         <form
@@ -322,6 +389,21 @@ export function PromptComposer({
             aria-label={ariaLabel}
             className="max-h-[9rem] min-h-[2.5rem] resize-none border-0 bg-transparent shadow-none focus-visible:ring-0"
           />
+          {/* open-prompt-view-context-v1 (design §3/§5): the in-view context chip, between the
+              textarea and the footer. Hidden entirely once dismissed 'all'; the thread badge is
+              dropped once dismissed 'thread'. Reflects what "this ticket/channel/…" resolves to. */}
+          {contextDismiss !== 'all' && (
+            <ContextChip
+              data={
+                contextChip && contextDismiss === 'thread'
+                  ? { primary: contextChip.primary }
+                  : contextChip
+              }
+              running={running}
+              onRemoveAll={() => setContextDismiss('all')}
+              onRemoveThread={() => setContextDismiss('thread')}
+            />
+          )}
           <div className="mt-2 flex items-center justify-between gap-2">
             <span className="min-w-0 truncate text-[11px] text-muted-foreground">{HINT_COPY}</span>
             {/* FR-009: the in-button "Generating…" glyph is removed — the busy affordance

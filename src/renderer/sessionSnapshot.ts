@@ -42,6 +42,19 @@ export interface LiveTerminalTab {
   id: string
   label: string
   renamed?: boolean
+  /**
+   * The restored open-files slice for this tab (persist-workdir-open-files-v1,
+   * FR-004), surfaced by `hydrateTerminalTabs` so `useFileExplorer` can seed its
+   * open-files collection on go-live instead of starting empty. Absent for a freshly
+   * minted tab or a tab that had no files open.
+   */
+  openFiles?: { files: string[]; activeRelPath: string | null }
+}
+
+/** A pane's open-files slice (the renderer-side shape mirroring the persisted field). */
+export interface OpenFilesSlice {
+  files: string[]
+  activeRelPath: string | null
 }
 
 /**
@@ -55,6 +68,13 @@ export interface TerminalTabDraft {
   renamed?: boolean
   /** Bounded serialized scrollback captured in the renderer (FR-021). */
   scrollback?: string
+  /**
+   * The file-explorer's open files for this pane (persist-workdir-open-files-v1,
+   * FR-003/FR-006). Renderer-KNOWN (the explorer owns the open-file set), so it is
+   * carried on the draft directly — main does not enrich it. Root-relative paths
+   * only; no file contents. Attached only when non-empty.
+   */
+  openFiles?: { files: string[]; activeRelPath: string | null }
 }
 
 /** The renderer-emitted terminal panel draft (pre-enrichment). */
@@ -65,23 +85,37 @@ export interface TerminalPanelDraft {
 }
 
 /**
- * Build the terminal panel DRAFT from live tabs + a paneId→scrollback map
- * (FR-008/FR-021). `everOpened` is passed through verbatim (the live monotonic
- * counter). Scrollback is attached only when present for that pane.
+ * Build the terminal panel DRAFT from live tabs + a paneId→scrollback map and a
+ * paneId→open-files map (FR-008/FR-021; persist-workdir-open-files-v1 FR-003).
+ * `everOpened` is passed through verbatim (the live monotonic counter). Scrollback
+ * is attached only when present for that pane; `openFiles` is attached only when the
+ * pane has ≥1 open file (an empty collection is omitted, so the field stays absent —
+ * matching the "no files open" restore default).
  */
 export function buildTerminalDraft(
   state: LiveTabsState<LiveTerminalTab>,
   everOpened: number,
-  scrollbackByPane: Map<string, string> | Record<string, string>
+  scrollbackByPane: Map<string, string> | Record<string, string>,
+  openFilesByPane?: Map<string, OpenFilesSlice> | Record<string, OpenFilesSlice>
 ): TerminalPanelDraft {
   const get = (id: string): string | undefined =>
     scrollbackByPane instanceof Map ? scrollbackByPane.get(id) : scrollbackByPane[id]
+  const getOpen = (id: string): OpenFilesSlice | undefined =>
+    openFilesByPane === undefined
+      ? undefined
+      : openFilesByPane instanceof Map
+        ? openFilesByPane.get(id)
+        : openFilesByPane[id]
   return {
     tabs: state.tabs.map((t) => {
       const draft: TerminalTabDraft = { id: t.id, label: t.label }
       if (t.renamed === true) draft.renamed = true
       const sb = get(t.id)
       if (typeof sb === 'string' && sb.length > 0) draft.scrollback = sb
+      const open = getOpen(t.id)
+      if (open && Array.isArray(open.files) && open.files.length > 0) {
+        draft.openFiles = { files: open.files, activeRelPath: open.activeRelPath }
+      }
       return draft
     }),
     activeTabId: state.activeTabId,
@@ -204,6 +238,12 @@ export function hydrateTerminalTabs(
   const tabs: LiveTerminalTab[] = panel.tabs.map((t) => {
     const tab: LiveTerminalTab = { id: t.id, label: t.label }
     if (t.renamed === true) tab.renamed = true
+    // persist-workdir-open-files-v1 FR-004: surface the restored open-files slice so the
+    // tab's file explorer seeds from it on go-live. Main already normalized it (string
+    // entries only, active nulled if it left the set), so it is carried through as-is.
+    if (t.openFiles && Array.isArray(t.openFiles.files) && t.openFiles.files.length > 0) {
+      tab.openFiles = { files: t.openFiles.files, activeRelPath: t.openFiles.activeRelPath }
+    }
     return tab
   })
   const ids = new Set(tabs.map((t) => t.id))

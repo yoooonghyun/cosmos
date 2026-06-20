@@ -32,7 +32,15 @@ export default defineConfig({
           // scripts. Land at out/main/mcp/{jira,confluence}McpServer.js (match
           // the embeddedMcpConfig paths in src/main/index.ts).
           'mcp/jiraMcpServer': resolve(__dirname, 'src/mcp/jiraMcpServer.ts'),
-          'mcp/confluenceMcpServer': resolve(__dirname, 'src/mcp/confluenceMcpServer.ts')
+          'mcp/confluenceMcpServer': resolve(__dirname, 'src/mcp/confluenceMcpServer.ts'),
+          // Google Calendar integration v1: the scoped render tool entry + the read-only
+          // Google Calendar MCP entry. Land at out/main/mcp/googleCalendar{RenderUi,Mcp}Server.js
+          // (match the mcpConfig.ts paths). Without these inputs the servers never bundle.
+          'mcp/googleCalendarRenderUiServer': resolve(
+            __dirname,
+            'src/mcp/googleCalendarRenderUiServer.ts'
+          ),
+          'mcp/googleCalendarMcpServer': resolve(__dirname, 'src/mcp/googleCalendarMcpServer.ts')
         }
       }
     }

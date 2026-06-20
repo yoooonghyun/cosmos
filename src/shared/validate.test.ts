@@ -1,6 +1,7 @@
 import { describe, it, expect, vi } from 'vitest'
 import {
   validateAgentPrompt,
+  validateAgentStatusPayload,
   validateConfluenceDefaultFeed,
   validateConfluencePageDetail,
   validateDispose,
@@ -185,6 +186,46 @@ describe.each([
   )
 })
 
+describe('validateStart optional cwd (terminal-open-directory-picker-v1, FR-004/FR-008)', () => {
+  it('accepts a valid { paneId } with NO cwd (normal/restore path, unchanged)', () => {
+    const warn = vi.fn()
+    const result = validateStart({ paneId: 'p1' }, warn)
+    expect(result).toEqual({ paneId: 'p1' })
+    expect(warn).not.toHaveBeenCalled()
+  })
+
+  it('accepts a valid { paneId, cwd } with a non-empty cwd (freshly-picked tab)', () => {
+    const warn = vi.fn()
+    const result = validateStart({ paneId: 'p1', cwd: '/Users/me/project' }, warn)
+    expect(result).toEqual({ paneId: 'p1', cwd: '/Users/me/project' })
+    expect(warn).not.toHaveBeenCalled()
+  })
+
+  it('treats an explicitly-undefined cwd as absent (normal path)', () => {
+    const warn = vi.fn()
+    const result = validateStart({ paneId: 'p1', cwd: undefined } as unknown, warn)
+    expect(result).toEqual({ paneId: 'p1' })
+    expect(warn).not.toHaveBeenCalled()
+  })
+
+  it.each(['', 42, null, {}, []])(
+    'warns and returns null when cwd is present but invalid %p (SC-005)',
+    (cwd) => {
+      const warn = vi.fn()
+      const result = validateStart({ paneId: 'p1', cwd } as unknown, warn)
+      expect(result).toBeNull()
+      expect(warn).toHaveBeenCalledOnce()
+    }
+  )
+
+  it('still warns + returns null when paneId is missing even if cwd is valid', () => {
+    const warn = vi.fn()
+    const result = validateStart({ cwd: '/Users/me/project' } as unknown, warn)
+    expect(result).toBeNull()
+    expect(warn).toHaveBeenCalledOnce()
+  })
+})
+
 describe('validateAgentPrompt (FR-004, FR-010)', () => {
   it('accepts a valid utterance (happy path)', () => {
     const warn = vi.fn()
@@ -268,6 +309,106 @@ describe('validateAgentPrompt (FR-004, FR-010)', () => {
       expect(warn).toHaveBeenCalledOnce()
     }
   )
+
+  // open-prompt-view-context-v1 — optional non-secret viewContext (FR-001/FR-006).
+  it('attaches a valid viewContext when present (FR-001)', () => {
+    const warn = vi.fn()
+    const result = validateAgentPrompt(
+      {
+        utterance: 'summarize this ticket',
+        target: 'jira',
+        viewContext: { selectedIssueKey: 'PROJ-123' }
+      },
+      warn
+    )
+    expect(result).toEqual({
+      utterance: 'summarize this ticket',
+      target: 'jira',
+      viewContext: { selectedIssueKey: 'PROJ-123' }
+    })
+    expect(warn).not.toHaveBeenCalled()
+  })
+
+  it('attaches a multi-field slack viewContext (channel + thread)', () => {
+    const warn = vi.fn()
+    const result = validateAgentPrompt(
+      {
+        utterance: 'what was decided here',
+        target: 'slack',
+        viewContext: {
+          selectedChannelId: 'C1',
+          selectedChannelName: 'general',
+          threadTs: '1700000000.0001'
+        }
+      },
+      warn
+    )
+    expect(result?.viewContext).toEqual({
+      selectedChannelId: 'C1',
+      selectedChannelName: 'general',
+      threadTs: '1700000000.0001'
+    })
+    expect(warn).not.toHaveBeenCalled()
+  })
+
+  it('omits viewContext entirely when absent (backward-compatible baseline — FR-005)', () => {
+    const warn = vi.fn()
+    const result = validateAgentPrompt({ utterance: 'hi', target: 'jira' }, warn)
+    expect(result).toEqual({ utterance: 'hi', target: 'jira' })
+    expect(result).not.toHaveProperty('viewContext')
+    expect(warn).not.toHaveBeenCalled()
+  })
+
+  it('drops unknown viewContext fields but keeps the valid ones', () => {
+    const warn = vi.fn()
+    const result = validateAgentPrompt(
+      {
+        utterance: 'hi',
+        target: 'jira',
+        viewContext: { selectedIssueKey: 'PROJ-1', bogus: 'x', token: 'leak' } as unknown
+      },
+      warn
+    )
+    expect(result?.viewContext).toEqual({ selectedIssueKey: 'PROJ-1' })
+  })
+
+  it('warns and DROPS an invalid (non-object) viewContext but STILL starts the run (FR-006/SC-005)', () => {
+    const warn = vi.fn()
+    const result = validateAgentPrompt(
+      { utterance: 'still runs', target: 'jira', viewContext: 'not-an-object' } as unknown,
+      warn
+    )
+    expect(result).toEqual({ utterance: 'still runs', target: 'jira' })
+    expect(result).not.toHaveProperty('viewContext')
+    expect(warn).toHaveBeenCalledOnce()
+  })
+
+  it('warns and drops a viewContext whose field is the wrong type (run still starts)', () => {
+    const warn = vi.fn()
+    const result = validateAgentPrompt(
+      {
+        utterance: 'still runs',
+        target: 'jira',
+        viewContext: { selectedIssueKey: 42 } as unknown
+      },
+      warn
+    )
+    // The whole viewContext is dropped (warn-and-ignore) — never crashes, run still valid.
+    expect(result).toEqual({ utterance: 'still runs', target: 'jira' })
+    expect(result).not.toHaveProperty('viewContext')
+    expect(warn).toHaveBeenCalledOnce()
+  })
+
+  it('omits viewContext when it has no populated fields (empty object ⇒ baseline)', () => {
+    const warn = vi.fn()
+    const result = validateAgentPrompt(
+      { utterance: 'hi', target: 'jira', viewContext: {} },
+      warn
+    )
+    expect(result).toEqual({ utterance: 'hi', target: 'jira' })
+    expect(result).not.toHaveProperty('viewContext')
+    expect(warn).not.toHaveBeenCalled()
+  })
 })
 
 describe('validateUiRenderTarget (Jira generative-UI v2, D1 / FR-004, FR-013)', () => {
@@ -503,5 +644,79 @@ describe('validateConfluencePageDetail (confluence-detail-rich-render-v1, FR-009
     const warn = vi.fn()
     expect(validateConfluencePageDetail(raw as unknown, warn)).toBeNull()
     expect(warn).toHaveBeenCalledOnce()
+  })
+})
+
+describe('validateAgentStatusPayload (open-prompt-spinner-gating-v1, FR-008)', () => {
+  it.each(['started', 'completed', 'error'] as const)(
+    'accepts a known run state %p as-is (happy path)',
+    (state) => {
+      const warn = vi.fn()
+      expect(validateAgentStatusPayload({ state }, warn)).toEqual({ state })
+      expect(warn).not.toHaveBeenCalled()
+    }
+  )
+
+  it('preserves a string "message" (the error reason)', () => {
+    const warn = vi.fn()
+    expect(validateAgentStatusPayload({ state: 'error', message: 'boom' }, warn)).toEqual({
+      state: 'error',
+      message: 'boom'
+    })
+    expect(warn).not.toHaveBeenCalled()
+  })
+
+  it('accepts producedSurface=true on a completed status (UI-generation run)', () => {
+    const warn = vi.fn()
+    expect(
+      validateAgentStatusPayload({ state: 'completed', producedSurface: true }, warn)
+    ).toEqual({ state: 'completed', producedSurface: true })
+    expect(warn).not.toHaveBeenCalled()
+  })
+
+  it('accepts producedSurface=false on a completed status (plain command)', () => {
+    const warn = vi.fn()
+    expect(
+      validateAgentStatusPayload({ state: 'completed', producedSurface: false }, warn)
+    ).toEqual({ state: 'completed', producedSurface: false })
+    expect(warn).not.toHaveBeenCalled()
+  })
+
+  it('treats an ABSENT producedSurface as valid (optional/additive — no warn, field omitted)', () => {
+    const warn = vi.fn()
+    const result = validateAgentStatusPayload({ state: 'completed' }, warn)
+    expect(result).toEqual({ state: 'completed' })
+    expect(result).not.toHaveProperty('producedSurface')
+    expect(warn).not.toHaveBeenCalled()
+  })
+
+  it.each([1, 'true', null, {}])(
+    'warns and DROPS a non-boolean producedSurface %p while KEEPING the status (warn + ignore)',
+    (raw) => {
+      const warn = vi.fn()
+      const result = validateAgentStatusPayload(
+        { state: 'completed', producedSurface: raw } as unknown,
+        warn
+      )
+      expect(result).toEqual({ state: 'completed' })
+      expect(result).not.toHaveProperty('producedSurface')
+      expect(warn).toHaveBeenCalledOnce()
+    }
+  )
+
+  it.each([null, undefined, 'nope', 7, {}, { state: 'bogus' }])(
+    'warns and returns null for an unknown/missing run state %p (malformed status dropped)',
+    (raw) => {
+      const warn = vi.fn()
+      expect(validateAgentStatusPayload(raw as unknown, warn)).toBeNull()
+      expect(warn).toHaveBeenCalledOnce()
+    }
+  )
+
+  it('drops a non-string "message" without dropping the status', () => {
+    const warn = vi.fn()
+    expect(
+      validateAgentStatusPayload({ state: 'error', message: 42 } as unknown, warn)
+    ).toEqual({ state: 'error' })
   })
 })
