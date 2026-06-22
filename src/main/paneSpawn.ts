@@ -99,6 +99,36 @@ export function resolvePaneSpawn(
     sessionMap.set(paneId, { sessionId: resume.sessionId, cwd: effectiveCwd })
     return { args: ['--resume', resume.sessionId], resume: true, cwd: spawnCwd }
   }
+  // terminal-cwd-sandbox-v1 (idempotent re-start): there is NO resume entry and NO explicit
+  // pick, but this pane ALREADY has a recorded session+cwd. This is a SECOND `pty:start` for a
+  // pane that has already started once — most commonly React StrictMode in dev (mount → dispose
+  // → remount fires start twice), but also any benign re-issue. A re-start must NOT downgrade the
+  // pane to a fresh session in the sandbox: that mints a brand-new session in the wrong cwd and
+  // permanently overwrites the recorded folder, which is the exact cwd-sandbox bug. So we
+  // re-attach the SAME session id in the SAME recorded cwd (idempotent).
+  //
+  // FLAG CHOICE — `--session-id`, NOT `--resume`: the recorded session may have been CREATED this
+  // launch (a fresh pick minted `--session-id <id>` below) and then killed by Start#1 before any
+  // conversation exists. `claude --resume <id>` HARD-REQUIRES an existing conversation and prints
+  // "No conversation found with session ID: <id>" to the terminal when there is none — exactly the
+  // StrictMode case (Start#1 minted-then-killed an empty session, Start#2 re-attaches). Per
+  // `claude --help`, `--session-id <uuid>` = "Use a specific session ID for the conversation":
+  // CREATE-OR-CONTINUE — it attaches to the id whether or not a conversation already exists, so an
+  // empty session never errors and a populated one continues. `resume:false` (no resume-failure
+  // window — there is nothing to "fail to resume"). The GENUINE restore-from-disk path (the
+  // resumeMap branch above) still uses `--resume` because there we DO have a prior conversation
+  // persisted across app restarts and want it restored.
+  //
+  // An explicit `overrideCwd` (a real folder pick / pty:restart) takes the fresh path BELOW and
+  // still wins — only a cwd-less re-start is treated as idempotent. (The stale-cwd guard still
+  // applies: if the recorded folder no longer resolves the SPAWN falls back to the sandbox while
+  // the record is preserved, so a transient miss never erases the chosen folder.)
+  const existing = sessionMap.get(paneId)
+  if (existing && !(overrideCwd && overrideCwd.length > 0)) {
+    const exists = dirExists(existing.cwd)
+    const spawnCwd = exists ? existing.cwd : sandboxDir
+    return { args: ['--session-id', existing.sessionId], resume: false, cwd: spawnCwd }
+  }
   // Fresh path: a non-empty chosen directory overrides the default sandbox cwd (FR-004).
   const cwd = overrideCwd && overrideCwd.length > 0 ? overrideCwd : sandboxDir
   const sessionId = mintSessionId()

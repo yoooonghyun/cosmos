@@ -44,7 +44,11 @@ export function ConfirmDialog({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="sm:max-w-sm" showCloseButton={false}>
         <DialogHeader>
-          <DialogTitle className="flex items-center gap-2">
+          {/* Override the shared Dialog title's `text-lg` down to `text-base` for
+              this small confirm so the heading reads proportionate to the compact
+              footer (size="sm") rather than oversized. Scoped here via className so
+              other dialogs keep the larger shared title. */}
+          <DialogTitle className="flex items-center gap-2 text-base">
             <AlertTriangle
               aria-hidden
               className="size-4 shrink-0 text-destructive"
@@ -57,16 +61,24 @@ export function ConfirmDialog({
           {/* Cancel takes initial focus (autoFocus) so a stray Enter can never
               trigger the destructive action. `ghost` Cancel + `destructive`
               confirm mirrors the Settings Save-confirm footer so the two confirm
-              surfaces read identically. */}
+              surfaces read identically. Both are size="sm" (h-8) to match the
+              app's prevailing compact button scale (the integration
+              connect/disconnect rows) rather than the bigger default h-9. */}
           <Button
             type="button"
             variant="ghost"
+            size="sm"
             autoFocus
             onClick={() => onOpenChange(false)}
           >
             {cancelLabel}
           </Button>
-          <Button type="button" variant="destructive" onClick={onConfirm}>
+          <Button
+            type="button"
+            variant="destructive"
+            size="sm"
+            onClick={onConfirm}
+          >
             {confirmLabel}
           </Button>
         </DialogFooter>

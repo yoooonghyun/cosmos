@@ -183,10 +183,6 @@ export function PromptComposer({
   // is the ANIMATED ("current") position the eased rAF follow writes each frame — NOT the raw
   // cursor — so the button eases toward the cursor with natural accel/decel (motion refinement).
   const [dragPx, setDragPx] = useState<PixelPoint | null>(null)
-  // Whether a drag/settle animation is ACTIVE this frame. Drives the transform-transition
-  // toggle: OFF while the rAF follow owns the transform (the spring IS the easing, a CSS
-  // transition on top would double-lag/fight it), ON otherwise (the no-JS/initial paint path).
-  const [dragging, setDragging] = useState(false)
   // Pointer/start bookkeeping for the active drag gesture.
   const dragStart = useRef<{ pointerId: number; origin: PixelPoint; anchorOffset: PixelPoint } | null>(
     null
@@ -256,7 +252,6 @@ export function PromptComposer({
         f.releasing = false
         f.rafId = null
         f.lastTs = null
-        setDragging(false)
         setDragPx(null)
         return
       }
@@ -341,7 +336,6 @@ export function PromptComposer({
       // Past the threshold this becomes a drag (suppresses the click-to-open — FR-002).
       if (!draggingRef.current && isDrag(start.origin, pointer)) {
         draggingRef.current = true
-        setDragging(true) // the rAF spring owns the transform now — turn off the CSS transition
       }
       if (draggingRef.current) {
         // The cursor TARGET: button top-left at pointer minus the grab offset, clamped fully
@@ -392,7 +386,6 @@ export function PromptComposer({
           }
           f.releasing = false
           f.pendingCommit = null
-          setDragging(false)
           setDragPx(null)
         } else {
           // Let the spring DECELERATE into the final resting anchor, then commit the fraction
@@ -405,7 +398,6 @@ export function PromptComposer({
         }
       } else {
         // Sub-threshold press (a click): no drag animation was armed — nothing to settle.
-        setDragging(false)
         setDragPx(null)
       }
       dragStart.current = null
@@ -644,11 +636,17 @@ export function PromptComposer({
             // — a transition on top would double-lag and fight the spring. Otherwise transition
             // the transform (initial paint / reduced-motion fallback). Opacity always transitions
             // so the logo still fades on expand/busy.
-            dragging
-              ? 'transition-opacity duration-[400ms] ease-[cubic-bezier(0.16,1,0.3,1)]'
-              : 'transition-[opacity,transform] duration-[400ms] ease-[cubic-bezier(0.16,1,0.3,1)]',
+            // Transform is owned by the rAF spring DURING a drag and is INSTANT for resting
+            // changes (panel switch / resize / first measure) — NEVER CSS-transitioned, so the
+            // logo never animates in ("drops") from a stale top-left 0-box anchor. Opacity always
+            // transitions so the logo still fades on expand/busy and fades in once placed.
+            'transition-opacity duration-[400ms] ease-[cubic-bezier(0.16,1,0.3,1)]',
             'motion-reduce:transition-none',
-            expanded || busy
+            // Keep the logo invisible until the panel box is actually measured (width>0). A
+            // rail-switched / not-yet-laid-out panel measures a 0-box, whose resting anchor is the
+            // top-left corner; hiding it until measured means it just FADES IN at the correct spot
+            // instead of appearing at top-left and sliding into place.
+            expanded || busy || panelRect.width === 0
               ? 'pointer-events-none opacity-0'
               : 'pointer-events-auto opacity-100'
           ].join(' ')}

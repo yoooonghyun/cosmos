@@ -216,11 +216,20 @@ export interface TerminalReleaseInput {
  * "Generating…"); a true UI-generation run's surface already cleared `inFlight` when it
  * landed, so this is a no-op for it.
  *
- * Release iff the tab is still in-flight, has NO surface, AND the run did not produce a
- * surface. `producedSurface === true` ⇒ a surface was/will be pushed ⇒ do NOT release
- * (let the `ui:render` path own it). When `producedSurface` is ABSENT (an old/partial
+ * Release iff the run has NO surface AND did not produce one. `producedSurface === true`
+ * ⇒ a surface was/will be pushed via `ui:render` ⇒ do NOT release (let the `ui:render`
+ * path own the `inFlight` clear). When `producedSurface` is ABSENT (an old/partial
  * payload), fall back to surface-presence: release only when there is no surface — so a
  * real UI run (which has a surface by `completed`) is never wrongly released (FR-008).
+ *
+ * NOTE: the `inFlight` guard was intentionally REMOVED (ui-catalog-pull-spinner-signal-v1
+ * regression fix). Previously `inFlightOnSubmit()` returned `true`, so `inFlight` was
+ * always true at `completed` for a no-surface run. After the change to late-signal gating,
+ * `inFlightOnSubmit()` returns `false` — `inFlight` is only set `true` when the agent
+ * pulls `get_ui_catalog`. A run that never pulls the catalog (plain answer, text-only
+ * reply) leaves `inFlight = false`, causing the old `inFlight === true` guard to block the
+ * release and strand `originatingTabIdRef` — the panel appears stuck after submit. The
+ * release must fire whenever no surface was produced, regardless of `inFlight`.
  *
  * Invalid/missing input never throws: a missing object (or a non-boolean `inFlight`)
  * warns and returns the SAFE fallback `false` — never releasing on bad input (SDD Step 4).
@@ -233,7 +242,7 @@ export function shouldReleaseInFlightOnCompleted(
     warn('[promptComposer] shouldReleaseInFlightOnCompleted: invalid tab state; not releasing')
     return false
   }
-  return input.inFlight === true && input.hasSurface !== true && input.producedSurface !== true
+  return input.hasSurface !== true && input.producedSurface !== true
 }
 
 /**

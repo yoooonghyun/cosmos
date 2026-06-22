@@ -229,10 +229,15 @@ describe('shouldReleaseInFlightOnCompleted (open-prompt-spinner-gating-v1 FR-001
     ).toBe(false)
   })
 
-  it('does NOT release a tab that is no longer in-flight (already settled)', () => {
+  it('releases a no-surface tab even when inFlight is false (late-signal gating regression fix)', () => {
+    // ui-catalog-pull-spinner-signal-v1 regression: inFlightOnSubmit() returns false, so
+    // inFlight is only true if the agent pulled get_ui_catalog. A plain-answer run never
+    // pulls the catalog → inFlight stays false → the old inFlight===true guard blocked the
+    // release → originatingTabIdRef was never cleared → panel stuck. Must release whenever
+    // no surface was produced, regardless of inFlight.
     expect(
       shouldReleaseInFlightOnCompleted({ inFlight: false, hasSurface: false, producedSurface: false })
-    ).toBe(false)
+    ).toBe(true)
   })
 
   it('falls back to surface-presence when producedSurface is ABSENT — releases a no-surface tab (FR-008)', () => {
@@ -305,14 +310,14 @@ describe('inFlightOnSubmit (ui-catalog-pull-spinner-signal-v1 — spinner gated 
     )
 
     // 2a) PLAIN MCP/command run: never pulls the catalog ⇒ no `ui:generatingBegin` ⇒ inFlight
-    //     stays false the whole run ⇒ the spinner NEVER shows. At `completed` there is nothing to
-    //     release (inFlight already false) — the panel is never blocked.
+    //     stays false the whole run ⇒ the spinner NEVER shows. At `completed`, the release fires
+    //     (inFlight===true guard removed — regression fix) so originatingTabIdRef is always cleared.
     expect(surfaceSpinnerVisible({ inFlight: false, hasSurface: false, hasError: false })).toBe(
       false
     )
     expect(
       shouldReleaseInFlightOnCompleted({ inFlight: false, hasSurface: false, producedSurface: false })
-    ).toBe(false)
+    ).toBe(true)
 
     // 2b) UI-GENERATION run: the begin-signal sets inFlight=true (the subscription's effect) →
     //     the spinner shows DURING generation, before the surface is composed.

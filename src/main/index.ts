@@ -873,9 +873,21 @@ function registerIpcHandlers(): void {
     if (!payload) {
       return // invalid -> warned + ignored (SC-005)
     }
-    // session-persistence-v1: a closed tab's session is gone — drop its mapping so it
-    // is never persisted or resumed (FR-018).
-    terminalSessionMap.delete(payload.paneId)
+    // session-persistence-v1: a closed tab is no longer queued for resume — drop its
+    // resume entry (FR-018).
+    //
+    // terminal-cwd-sandbox-v1: do NOT delete `terminalSessionMap` here. React StrictMode
+    // (dev) unmounts a terminal tab and IMMEDIATELY remounts it, firing dispose BETWEEN the
+    // two `pty:start` calls for the SAME paneId. If dispose wiped the session record, the
+    // remount's `pty:start` would find no resume entry (consumed by start #1) and no session
+    // record, fall to the FRESH branch, and mint a brand-new `--session-id` in the sandbox —
+    // permanently overwriting the pane's real cwd (the cwd-sandbox bug). Keeping the record
+    // lets `resolvePaneSpawn` re-resume the SAME session in the SAME cwd on the remount
+    // (idempotent re-start). A genuinely-closed tab's stale record is harmless: paneIds are
+    // minted fresh per tab (never reused), enrichSnapshotForSave only enriches tabs the
+    // renderer snapshot still lists (a closed tab is absent), and its fs watcher is stopped
+    // below — so the lingering entry is never read. This mirrors the keep-on-exit policy in
+    // `onExit` (the record outlives the PTY so a restart re-spawns in the right folder).
     terminalResumeMap.delete(payload.paneId)
     // terminal-file-explorer-v1 (FR-016): release the pane's fs watcher on tab close so no
     // watcher leaks. (The session map delete above also makes its root unresolvable.)
