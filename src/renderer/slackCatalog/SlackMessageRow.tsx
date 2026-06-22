@@ -21,6 +21,7 @@ import { Avatar, AvatarFallback } from '@/components/ui/avatar'
 import { authorName, countLabel, formatTs, initials, shouldOpenThreadOnRowClick } from './logic'
 import { parseMessageRuns } from './messageContent'
 import { SlackImageViewer } from './SlackImageViewer'
+import { SlackMessageImage } from './SlackMessageImage'
 import type { SlackImageRef } from '../../shared/slack'
 
 /**
@@ -120,9 +121,11 @@ function MessageBody({
  * FR-008/FR-010). Each opaque ref is the child of a real `<button>` so it is a keyboard-
  * operable control that opens the in-app image viewer on the CLICKED image (design §3).
  * `onView(img)` lifts the click to the row, which owns the single viewer `Dialog`. main
- * resolves the ref with the token; the renderer only holds the opaque ref. A failed
- * thumbnail fetch shows the browser's broken-image state (no crash, the rest of the row
- * renders). Returns null when there are no images.
+ * resolves the ref with the token; the renderer only holds the opaque ref. Each thumbnail
+ * is a `SlackMessageImage` that shows a loading skeleton until `onLoad` and an `ImageOff`
+ * "image unavailable" placeholder on a failed fetch (slack-image-skeleton-placeholder-v1) —
+ * no crash, no layout shift, the rest of the row renders. Returns null when there are no
+ * images.
  */
 function MessageImages({
   images,
@@ -144,11 +147,7 @@ function MessageImages({
           aria-label={`View image${img.alt ? `: ${img.alt}` : ''}`}
           className="group relative overflow-hidden rounded-md border border-border/60 transition-colors hover:border-border focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 focus-visible:ring-offset-card"
         >
-          <img
-            src={img.ref}
-            alt={img.alt ?? 'image'}
-            className="max-h-40 max-w-[12rem] object-cover"
-          />
+          <SlackMessageImage img={img} />
           <span className="pointer-events-none absolute inset-0 flex items-center justify-center bg-black/0 transition-colors group-hover:bg-black/30 group-focus-visible:bg-black/30">
             <Maximize2 className="size-4 text-white opacity-0 transition-opacity group-hover:opacity-100 group-focus-visible:opacity-100" />
           </span>

@@ -35,7 +35,9 @@ import { EventDetail } from './googleCalendarCatalog/components'
 import {
   CalendarNavContext,
   CalendarDetailContext,
-  type CalendarNavValue
+  CalendarVisibilityContext,
+  type CalendarNavValue,
+  type CalendarVisibilityValue
 } from './googleCalendarCatalog/navContext'
 import {
   CALENDAR_OPEN_DETAIL_ACTION,
@@ -75,8 +77,12 @@ import { SurfaceSpinner } from './SurfaceSpinner'
 import { useGenerativePanelTabs } from './useGenerativePanelTabs'
 import { calendarViewContext, contextChipFor } from './viewContextCapture'
 import { useRestoredGenerativePanel } from './SessionProvider'
+import { seedHiddenCalendarIds } from './googleCalendarCatalog/logic'
 import { surfaceSpinnerVisible } from './promptComposerLogic'
 import { useTabShortcuts } from './useTabShortcuts'
+import { useConfirm } from './useConfirm'
+import { ConfirmDialog } from '@/components/ui/confirm-dialog'
+import { confirmCopy } from './confirmLogic'
 import type { GoogleCalendarConnectionStatus } from '../shared/googleCalendar'
 
 /* ------------------------------------------------------------------------- *
@@ -207,10 +213,12 @@ function GoogleConnectForm({
 
 function GoogleConnectionStatus({
   status,
-  onDisconnect
+  onDisconnect,
+  onCancel
 }: {
   status: GoogleCalendarConnectionStatus
   onDisconnect: () => void
+  onCancel: () => void
 }): React.JSX.Element {
   return (
     <>
@@ -223,7 +231,7 @@ function GoogleConnectionStatus({
             <Loader2 className="size-3 animate-spin" />
             Connecting…
           </span>
-          <Button type="button" variant="ghost" size="xs" onClick={onDisconnect}>
+          <Button type="button" variant="ghost" size="xs" onClick={onCancel}>
             Cancel
           </Button>
         </>
@@ -284,6 +292,17 @@ export function GoogleCalendarPanel({ active }: { active: boolean }): React.JSX.
   const disconnect = async (): Promise<void> => {
     const next = await window.cosmos.googleCalendar.disconnect()
     setStatus(next)
+  }
+
+  // disconnect-confirm-modal-v1: gate the footer Disconnect behind a confirm modal.
+  const confirmDisconnect = useConfirm()
+
+  // oauth-cancel-v1: abort an in-flight connect (the user cancelled the browser consent) so
+  // the panel returns to not_connected immediately and Connect is clickable again.
+  const cancelConnect = async (): Promise<void> => {
+    const next = await window.cosmos.googleCalendar.cancelConnect()
+    setStatus(next)
+    setBusy(false)
   }
 
   const isConnected = status.state === 'connected'
@@ -553,6 +572,77 @@ export function GoogleCalendarPanel({ active }: { active: boolean }): React.JSX.
     return Array.isArray(root?.calendars) ? root?.calendars : undefined
   }, [activeTab?.surface])
 
+  // calendar-selection-persistence: the legend's hidden-set is PER TAB — each google-calendar
+  // tab keeps its own selection, independent of sibling tabs. The set is held on the live
+  // GenerativeTab record (`hiddenCalendars`), restored from this tab's persisted snapshot and
+  // written back via `update(id, { hiddenCalendars })` on every toggle. Keyed by tab id, it
+  // survives the view-nav remount (Month↔Week↔Day re-issues the default-view request → a fresh
+  // `EventList`) AND an app restart, while staying independent across tabs.
+  const activeHidden = useMemo(
+    () => new Set(activeTab?.hiddenCalendars ?? []),
+    [activeTab?.hiddenCalendars]
+  )
+
+  // Write the active tab's hidden-set back onto its record so the report effect persists it
+  // into THIS tab's GenerativeTabSnapshot.hiddenCalendars.
+  const setActiveTabHidden = useCallback(
+    (next: Set<string>): void => {
+      const id = activeTabId
+      if (!id) {
+        return
+      }
+      update(id, { hiddenCalendars: [...next] })
+    },
+    [activeTabId, update]
+  )
+
+  // FR-010 first-paint default: the FIRST time a legend appears for a tab that has NO persisted
+  // hidden-set yet, seed THAT TAB's set from Google's own `selected` preference (a calendar
+  // hidden in Google starts hidden here). Tracked per tab id so each tab seeds once — a later
+  // explicit toggle (including re-showing a Google-deselected calendar) is never undone. Once a
+  // tab has a stored set, that set is the sole source of truth for it.
+  const seededTabsRef = useRef<Set<string>>(new Set())
+  useEffect(() => {
+    const id = activeTabId
+    if (!id || seededTabsRef.current.has(id) || !activeLegend || activeLegend.length === 0) {
+      return
+    }
+    // A tab that already restored a non-empty hidden-set is considered seeded — never re-seed.
+    if ((activeTab?.hiddenCalendars?.length ?? 0) > 0) {
+      seededTabsRef.current.add(id)
+      return
+    }
+    seededTabsRef.current.add(id)
+    const seed = seedHiddenCalendarIds(activeLegend)
+    if (seed.size > 0) {
+      update(id, { hiddenCalendars: [...seed] })
+    }
+    // Seed once per tab on its first legend; the tab's stored set is authoritative thereafter.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeTabId, activeLegend])
+
+  // The visibility wiring injected into the catalog (live default view ONLY, like the nav
+  // cluster). `onToggle` flips one id in/out of the ACTIVE TAB's hidden-set; the catalog reads
+  // `hidden` for all three views so a deselect is honored uniformly. Composed snapshots / the
+  // agent-MCP path get a null context and fall back to the catalog's ephemeral local set.
+  const visibilityValue: CalendarVisibilityValue | null = useMemo(() => {
+    if (!isLiveDefaultView) {
+      return null
+    }
+    return {
+      hidden: activeHidden,
+      onToggle: (id: string): void => {
+        const next = new Set(activeHidden)
+        if (next.has(id)) {
+          next.delete(id)
+        } else {
+          next.add(id)
+        }
+        setActiveTabHidden(next)
+      }
+    }
+  }, [isLiveDefaultView, activeHidden, setActiveTabHidden])
+
   const stripTabs: PanelTab[] = tabs.map((t) => ({
     id: t.id,
     label: t.label,
@@ -688,16 +778,21 @@ export function GoogleCalendarPanel({ active }: { active: boolean }): React.JSX.
                           catalog grid. Non-null ONLY for the live default view, so composed
                           snapshots render the plain label with no controls (FR-017). */}
                       <CalendarNavContext.Provider value={navValue}>
-                        {/* The open-detail dock's current event id flows down so the matching
-                            chip reads `selected` (FR-003). */}
-                        <CalendarDetailContext.Provider value={genUiEvent?.id ?? null}>
-                          <ActiveTabSurface
-                            surface={activeTab.surface}
-                            catalogId={CATALOG_ID}
-                            panelName="GoogleCalendarPanel"
-                            onAction={handleSurfaceAction}
-                          />
-                        </CalendarDetailContext.Provider>
+                        {/* calendar-selection-persistence: inject the panel-owned, PERSISTED
+                            hidden-set so the legend toggle survives the view-nav remount + a
+                            restart. Non-null only for the live default view. */}
+                        <CalendarVisibilityContext.Provider value={visibilityValue}>
+                          {/* The open-detail dock's current event id flows down so the matching
+                              chip reads `selected` (FR-003). */}
+                          <CalendarDetailContext.Provider value={genUiEvent?.id ?? null}>
+                            <ActiveTabSurface
+                              surface={activeTab.surface}
+                              catalogId={CATALOG_ID}
+                              panelName="GoogleCalendarPanel"
+                              onAction={handleSurfaceAction}
+                            />
+                          </CalendarDetailContext.Provider>
+                        </CalendarVisibilityContext.Provider>
                       </CalendarNavContext.Provider>
                     </A2UIProvider>
                   </div>
@@ -724,7 +819,30 @@ export function GoogleCalendarPanel({ active }: { active: boolean }): React.JSX.
         surfaceName="Calendar"
         icon={CalendarDays}
         activeTab={activeStripTab}
-        right={<GoogleConnectionStatus status={status} onDisconnect={() => void disconnect()} />}
+        right={
+          <GoogleConnectionStatus
+            status={status}
+            onDisconnect={() =>
+              confirmDisconnect.requestConfirm(
+                { integration: 'google-calendar', label: 'Google Calendar' },
+                () => void disconnect()
+              )
+            }
+            onCancel={() => void cancelConnect()}
+          />
+        }
+      />
+
+      <ConfirmDialog
+        open={confirmDisconnect.state.open}
+        title={confirmCopy('Google Calendar').title}
+        description={confirmCopy('Google Calendar').body}
+        onConfirm={confirmDisconnect.confirm}
+        onOpenChange={(next) => {
+          if (!next) {
+            confirmDisconnect.cancel()
+          }
+        }}
       />
 
       {/* Right-docked event detail (design §1.2 / §5): an ALWAYS-overlay absolute right-drawer

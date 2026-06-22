@@ -51,6 +51,7 @@ import {
   type UiApi,
   type UiActionPayload,
   type UiDataModelPayload,
+  type UiGeneratingBeginPayload,
   type UiRenderPayload
 } from '../shared/ipc'
 import type {
@@ -140,6 +141,15 @@ const uiApi: UiApi = {
       listener(payload)
     ipcRenderer.on(UiChannel.DataModel, handler)
     return () => ipcRenderer.removeListener(UiChannel.DataModel, handler)
+  },
+  // ui-catalog-pull-spinner-signal-v1 (FR-004/FR-005): the EARLY "UI generation has begun"
+  // begin-signal (a `get_ui_catalog` pull) — the panel turns the originating tab's spinner
+  // ON. NEW preload method — requires a full `npm run dev` restart; HMR won't expose it live.
+  onGeneratingBegin(listener: (payload: UiGeneratingBeginPayload) => void): () => void {
+    const handler = (_event: IpcRendererEvent, payload: UiGeneratingBeginPayload): void =>
+      listener(payload)
+    ipcRenderer.on(UiChannel.GeneratingBegin, handler)
+    return () => ipcRenderer.removeListener(UiChannel.GeneratingBegin, handler)
   }
 }
 
@@ -184,6 +194,11 @@ const slackApi: SlackApi = {
   disconnect(): Promise<SlackConnectionStatus> {
     return ipcRenderer.invoke(SlackChannelName.Disconnect)
   },
+  // oauth-cancel-v1: abort an in-flight connect (cancelled browser consent). NEW preload
+  // method — requires a full `npm run dev` restart; HMR won't expose it live.
+  cancelConnect(): Promise<SlackConnectionStatus> {
+    return ipcRenderer.invoke(SlackChannelName.CancelConnect)
+  },
   listChannels(params: SlackListChannelsParams) {
     return ipcRenderer.invoke(SlackChannelName.ListChannels, params)
   },
@@ -223,6 +238,11 @@ const jiraApi: JiraApi = {
   },
   disconnect(): Promise<JiraConnectionStatus> {
     return ipcRenderer.invoke(JiraChannelName.Disconnect)
+  },
+  // oauth-cancel-v1: abort an in-flight connect (cancelled browser consent). NEW preload
+  // method — requires a full `npm run dev` restart; HMR won't expose it live.
+  cancelConnect(): Promise<JiraConnectionStatus> {
+    return ipcRenderer.invoke(JiraChannelName.CancelConnect)
   },
   searchIssues(params: JiraSearchParams) {
     return ipcRenderer.invoke(JiraChannelName.SearchIssues, params)
@@ -271,6 +291,11 @@ const confluenceApi: ConfluenceApi = {
   disconnect(): Promise<ConfluenceConnectionStatus> {
     return ipcRenderer.invoke(ConfluenceChannelName.Disconnect)
   },
+  // oauth-cancel-v1: abort an in-flight connect (cancelled browser consent). NEW preload
+  // method — requires a full `npm run dev` restart; HMR won't expose it live.
+  cancelConnect(): Promise<ConfluenceConnectionStatus> {
+    return ipcRenderer.invoke(ConfluenceChannelName.CancelConnect)
+  },
   searchContent(params: ConfluenceSearchParams) {
     return ipcRenderer.invoke(ConfluenceChannelName.SearchContent, params)
   },
@@ -302,6 +327,11 @@ const googleCalendarApi: GoogleCalendarApi = {
   },
   disconnect(): Promise<GoogleCalendarConnectionStatus> {
     return ipcRenderer.invoke(GoogleCalendarChannelName.Disconnect)
+  },
+  // oauth-cancel-v1: abort an in-flight connect (cancelled browser consent). NEW preload
+  // method — requires a full `npm run dev` restart; HMR won't expose it live.
+  cancelConnect(): Promise<GoogleCalendarConnectionStatus> {
+    return ipcRenderer.invoke(GoogleCalendarChannelName.CancelConnect)
   },
   listEvents(params: GoogleCalendarListEventsParams) {
     return ipcRenderer.invoke(GoogleCalendarChannelName.ListEvents, params)

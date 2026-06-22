@@ -234,8 +234,35 @@ describe('validateSnapshot — version bump v8 (persist-workdir-open-files-v1, F
     expect(warn).toHaveBeenCalledWith(expect.stringContaining('schemaVersion'))
   })
 
-  it('the current schema version is 8', () => {
+  it('the current schema version is 8 (calendar-selection-persistence is additive — no bump)', () => {
     expect(SESSION_SCHEMA_VERSION).toBe(8)
+  })
+
+  // Regression guard for the schema-bump wipe (calendar-selection-persistence): a previous
+  // story bumped 8→9 for an ADDITIVE field, which made every on-disk v8 snapshot fail the
+  // equality gate and wiped the restored terminal session. The bump was reverted. A v8
+  // snapshot (the current version) carrying terminal tabs + the new additive PER-TAB
+  // hiddenCalendars field must now be ACCEPTED and its terminal tabs restored — NOT wiped.
+  it('ACCEPTS a v8 snapshot with terminal tabs + additive per-tab hiddenCalendars (no wipe)', () => {
+    const warn = vi.fn()
+    const snap = goodSnapshot()
+    ;(snap as { schemaVersion: number }).schemaVersion = 8
+    snap.panels.terminal.tabs = [
+      { id: 'pane-1', label: 'Terminal', sessionId: 'sess-1', cwd: '/work', scrollback: 'hi' }
+    ]
+    snap.panels['google-calendar'] = {
+      tabs: [{ id: 'cal-1', label: 'Calendar', untitled: false, hiddenCalendars: ['team@x'] }],
+      activeTabId: 'cal-1',
+      everOpened: 1
+    }
+    const out = validateSnapshot(snap, warn)
+    expect(warn).not.toHaveBeenCalled()
+    expect(out).not.toBeNull()
+    // The terminal session survives — NOT reset to an empty session.
+    expect(out!.panels.terminal.tabs).toHaveLength(1)
+    expect(out!.panels.terminal.tabs[0]).toMatchObject({ id: 'pane-1', sessionId: 'sess-1', cwd: '/work' })
+    // The additive per-tab calendar selection round-trips.
+    expect(out!.panels['google-calendar'].tabs[0].hiddenCalendars).toEqual(['team@x'])
   })
 })
 
@@ -368,5 +395,106 @@ describe('validateSnapshot — enabled map (settings-redesign-v1, FR-003/FR-007/
     snap.enabled = 'nope' as never
     const out = validateSnapshot(snap)
     expect(out!.enabled).toEqual(emptyEnabledIntegrations())
+  })
+})
+
+describe('validateGenerativeTab — per-tab hiddenCalendars (calendar-selection-persistence, additive)', () => {
+  /** Build a snapshot whose google-calendar panel carries the given tabs. */
+  function withCalendarTabs(tabs: unknown[]): SessionSnapshot {
+    const snap = goodSnapshot()
+    snap.panels['google-calendar'] = {
+      tabs: tabs as never,
+      activeTabId: (tabs[0] as { id?: string } | undefined)?.id ?? null,
+      everOpened: tabs.length
+    }
+    return snap
+  }
+
+  it('round-trips a valid per-tab hiddenCalendars list (the persisted deselected calendars)', () => {
+    const warn = vi.fn()
+    const snap = withCalendarTabs([
+      { id: 'cal-1', label: 'Calendar', untitled: false, hiddenCalendars: ['holidays@x', 'team@x'] }
+    ])
+    const out = validateSnapshot(snap, warn)
+    expect(warn).not.toHaveBeenCalled()
+    expect(out!.panels['google-calendar'].tabs[0].hiddenCalendars).toEqual(['holidays@x', 'team@x'])
+  })
+
+  it('defaults a MISSING hiddenCalendars to absent (the safe default — every calendar shown)', () => {
+    const snap = withCalendarTabs([{ id: 'cal-1', label: 'Calendar', untitled: false }])
+    const out = validateSnapshot(snap)
+    // Absent ⇒ the field is omitted (undefined), not an empty array — older snapshots restore cleanly.
+    expect(out!.panels['google-calendar'].tabs[0]).not.toHaveProperty('hiddenCalendars')
+  })
+
+  it('drops non-string / empty entries and dedupes, never crashing (the in-version migration)', () => {
+    const snap = withCalendarTabs([
+      { id: 'cal-1', label: 'Calendar', untitled: false, hiddenCalendars: ['a@x', '', 'a@x', 42, null, 'b@x'] }
+    ])
+    const out = validateSnapshot(snap)
+    expect(out).not.toBeNull()
+    expect(out!.panels['google-calendar'].tabs[0].hiddenCalendars).toEqual(['a@x', 'b@x'])
+  })
+
+  it('treats a non-array hiddenCalendars field as absent (safe fallback)', () => {
+    const snap = withCalendarTabs([
+      { id: 'cal-1', label: 'Calendar', untitled: false, hiddenCalendars: 'nope' }
+    ])
+    const out = validateSnapshot(snap)
+    expect(out!.panels['google-calendar'].tabs[0]).not.toHaveProperty('hiddenCalendars')
+  })
+
+  it('keeps EACH tab\'s hiddenCalendars independent — two tabs carry separate selections', () => {
+    const snap = withCalendarTabs([
+      { id: 'cal-1', label: 'Calendar', untitled: false, hiddenCalendars: ['team@x'] },
+      { id: 'cal-2', label: 'Calendar 2', untitled: false, hiddenCalendars: ['holidays@x', 'birthdays@x'] }
+    ])
+    const out = validateSnapshot(snap)
+    expect(out!.panels['google-calendar'].tabs[0].hiddenCalendars).toEqual(['team@x'])
+    expect(out!.panels['google-calendar'].tabs[1].hiddenCalendars).toEqual(['holidays@x', 'birthdays@x'])
+  })
+})
+
+describe('validateSnapshot — openPromptPosition (draggable-open-prompt-button-v1, FR-008/FR-009)', () => {
+  it('round-trips a valid in-range position (two numbers only — SC-006)', () => {
+    const warn = vi.fn()
+    const snap = { ...goodSnapshot(), openPromptPosition: { xFrac: 0.25, yFrac: 0.8 } }
+    const out = validateSnapshot(snap, warn)
+    expect(warn).not.toHaveBeenCalled()
+    expect(out!.openPromptPosition).toEqual({ xFrac: 0.25, yFrac: 0.8 })
+    // Non-secret: the only keys are the two fractions.
+    expect(Object.keys(out!.openPromptPosition!).sort()).toEqual(['xFrac', 'yFrac'])
+  })
+
+  it('CLAMPS an out-of-range / off-screen-after-resize position into [0,1] (FR-005/FR-012/SC-007)', () => {
+    const snap = { ...goodSnapshot(), openPromptPosition: { xFrac: 5, yFrac: -2 } }
+    const out = validateSnapshot(snap)
+    expect(out!.openPromptPosition).toEqual({ xFrac: 1, yFrac: 0 })
+  })
+
+  it('treats a non-number component as ABSENT (field omitted ⇒ default on restore)', () => {
+    const snap = { ...goodSnapshot(), openPromptPosition: { xFrac: 'nope', yFrac: 0.5 } }
+    const out = validateSnapshot(snap)
+    expect(out).not.toHaveProperty('openPromptPosition')
+  })
+
+  it('treats a non-finite component (NaN/Infinity) as absent', () => {
+    const snap = { ...goodSnapshot(), openPromptPosition: { xFrac: Number.NaN, yFrac: 0.5 } }
+    expect(validateSnapshot(snap)).not.toHaveProperty('openPromptPosition')
+  })
+
+  it('treats a non-object openPromptPosition as absent (safe fallback)', () => {
+    const snap = { ...goodSnapshot(), openPromptPosition: 'bottom' as unknown }
+    expect(validateSnapshot(snap)).not.toHaveProperty('openPromptPosition')
+  })
+
+  it('a PRE-FEATURE snapshot (no field) still validates as v8 with the field absent (SC-004)', () => {
+    const warn = vi.fn()
+    const snap = goodSnapshot() // no openPromptPosition
+    const out = validateSnapshot(snap, warn)
+    expect(warn).not.toHaveBeenCalled()
+    expect(out).not.toBeNull()
+    expect(out!.schemaVersion).toBe(SESSION_SCHEMA_VERSION) // still 8 — NO bump
+    expect(out).not.toHaveProperty('openPromptPosition')
   })
 })

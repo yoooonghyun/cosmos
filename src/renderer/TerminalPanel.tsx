@@ -34,6 +34,7 @@ import { PanelTabStrip, type PanelTab } from './PanelTabStrip'
 import { PanelFooter } from './PanelFooter'
 import { usePanelTabs } from './usePanelTabs'
 import { useTabShortcuts } from './useTabShortcuts'
+import { mapTerminalKey } from './terminalKeymap'
 import {
   isFolderOpen,
   nextTerminalIndex,
@@ -209,6 +210,23 @@ function TerminalView({
     // FR-004: forward keyboard input to THIS pane's PTY.
     const inputDisposable = term.onData((data) => {
       window.cosmos.pty.sendInput({ paneId, data })
+    })
+
+    // macOS readline chords (Cmd/Option+Arrow line/word motion, Shift/Option+Enter soft
+    // newline) that xterm doesn't translate. mapTerminalKey returns the bytes to send (we
+    // suppress xterm's default by returning false), or null to let xterm handle the key
+    // unchanged — so plain typing, Enter-submit, Ctrl-C and paste are untouched.
+    term.attachCustomKeyEventHandler((e) => {
+      const seq = mapTerminalKey(e)
+      if (seq === null) {
+        return true
+      }
+      // seq === '' means "suppress xterm's default but send nothing" (used to block
+      // the keypress-leak \r for Shift/Alt+Enter — see terminalKeymap.ts module doc).
+      if (seq !== '') {
+        window.cosmos.pty.sendInput({ paneId, data: seq })
+      }
+      return false
     })
 
     // FR-005: propagate resize, debounced.

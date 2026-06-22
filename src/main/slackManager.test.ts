@@ -1,12 +1,16 @@
 import { describe, it, expect, vi } from 'vitest'
 import { SlackManager, type SlackManagerDeps } from './slackManager'
 import type { SlackClient } from './integrations/slackClient'
-import type { SlackOAuthResult } from './integrations/slackOAuth'
+import { runSlackOAuth, type SlackOAuthResult } from './integrations/slackOAuth'
 import type { StoredTokenSet, TokenStore } from './integrations/tokenStore'
+import type { TokenExchangeResult } from './integrations/oauthPkce'
 import type { SlackResult } from '../shared/slack'
 
-/** An in-memory TokenStore stand-in covering the methods SlackManager uses. */
-function makeFakeStore(initial: StoredTokenSet | null = null) {
+/**
+ * An in-memory TokenStore stand-in covering the methods SlackManager uses. `expired`
+ * drives {@link TokenStore.isExpired} so the rotating-token refresh path is exercisable.
+ */
+function makeFakeStore(initial: StoredTokenSet | null = null, expired = false) {
   let tokens = initial
   const store = {
     load: () => tokens,
@@ -17,7 +21,7 @@ function makeFakeStore(initial: StoredTokenSet | null = null) {
       tokens = null
     },
     has: () => tokens !== null,
-    isExpired: () => false
+    isExpired: () => expired
   }
   return {
     store: store as unknown as TokenStore,
@@ -60,6 +64,7 @@ function makeManager(deps: Partial<SlackManagerDeps> & { store: TokenStore }) {
     client: deps.client ?? makeClient(),
     tokenStore: deps.store,
     runOAuth: deps.runOAuth ?? vi.fn(oauthOk),
+    ...(deps.refresh ? { refresh: deps.refresh } : {}),
     onStatusChanged
   })
   return { manager, onStatusChanged }
@@ -160,6 +165,80 @@ describe('SlackManager state machine (FR-008, FR-009, SC-007, SC-010)', () => {
     const status = manager.disconnect()
     expect(status.state).toBe('not_connected')
     expect(current()).toBeNull()
+  })
+
+  // oauth-cancel-v1: the user cancels the browser consent. The real loopback flow is exercised
+  // (runSlackOAuth + a fake http server) so the cancel path is end-to-end: cancelConnect() aborts
+  // the in-flight loopback (the fake server's close() is called), returns to not_connected, and a
+  // subsequent connect() is NOT blocked.
+  it('cancelConnect() aborts the in-flight OAuth, returns to not_connected, and a later connect() works', async () => {
+    const { store, current } = makeFakeStore(null)
+    // A fake http server that binds (never delivers a callback) and records close().
+    const fakeServer = {
+      bound: false,
+      closed: false,
+      _err: undefined as undefined | (() => void),
+      on(): void {},
+      once(event: string, cb: () => void): void {
+        if (event === 'error') this._err = cb
+      },
+      removeListener(): void {},
+      listen(_port: number, _host: string, cb: () => void): void {
+        this.bound = true
+        queueMicrotask(cb)
+      },
+      close(): void {
+        this.closed = true
+      }
+    }
+    const serverFactory = (() => fakeServer) as unknown as Parameters<typeof runSlackOAuth>[0]['serverFactory']
+
+    let calls = 0
+    const runOAuth = vi.fn((signal?: AbortSignal): Promise<SlackOAuthResult> => {
+      calls += 1
+      if (calls === 1) {
+        // First attempt: the real loopback wait that the user will cancel (never delivers).
+        return runSlackOAuth({
+          clientId: 'CID',
+          openExternal: () => {},
+          serverFactory,
+          ...(signal ? { signal } : {})
+        })
+      }
+      // Second attempt (after cancel): succeeds immediately.
+      return oauthOk()
+    })
+
+    const { manager } = makeManager({ store, runOAuth })
+
+    // Start connect() — it stays pending on the loopback wait.
+    const connecting = manager.connect()
+    await Promise.resolve()
+    await Promise.resolve()
+    expect(manager.getStatus().state).toBe('connecting')
+    expect(fakeServer.bound).toBe(true)
+
+    // Cancel: returns to not_connected synchronously + aborts the loopback (close called).
+    const cancelled = manager.cancelConnect()
+    expect(cancelled.state).toBe('not_connected')
+    expect(cancelled.lastError).toMatch(/cancelled/i)
+    expect(fakeServer.closed).toBe(true)
+    // The aborted connect() resolves to a not_connected status without clobbering the message.
+    await expect(connecting).resolves.toMatchObject({ state: 'not_connected' })
+    expect(current()).toBeNull()
+
+    // A subsequent connect() is NOT blocked and succeeds.
+    const reconnected = await manager.connect()
+    expect(reconnected.state).toBe('connected')
+    expect(current()?.accessToken).toBe('xoxp-1')
+  })
+
+  it('cancelConnect() is a no-op when no connect is in flight', () => {
+    const { store } = makeFakeStore(connectedTokens)
+    const { manager } = makeManager({ store })
+    // Already connected — cancel must not disturb the connection.
+    const status = manager.cancelConnect()
+    expect(status.state).toBe('connected')
   })
 
   it('a read while not_connected returns a structured not_connected result (no token attached)', async () => {
@@ -351,5 +430,169 @@ describe('SlackManager.sendMessage (slack-send-message-v1, FR-006..FR-009, FR-01
     const { manager } = makeManager({ store })
     const result = await manager.sendMessage({ channelId: 'C1', text: 'hi' })
     expect(JSON.stringify(result)).not.toContain('xoxp-secret')
+  })
+})
+
+describe('SlackManager rotating-token refresh (slack-oauth-keeps-unlinking-v1)', () => {
+  /** A rotating-token connect result: carries a refresh token + expiry. */
+  const rotatingOAuth = async (): Promise<SlackOAuthResult> => ({
+    userToken: 'xoxe.xoxp-1',
+    scopes: ['channels:read', 'search:read', 'chat:write'],
+    refreshToken: 'xoxe-1.refresh',
+    expiresInSeconds: 43200,
+    teamId: 'T1',
+    teamName: 'Acme'
+  })
+
+  it('connect() persists the rotation refresh token + expiry so the token can be refreshed', async () => {
+    const { store, current } = makeFakeStore(null)
+    const { manager } = makeManager({ store, runOAuth: vi.fn(rotatingOAuth) })
+    const status = await manager.connect()
+    expect(status.state).toBe('connected')
+    const saved = current()
+    expect(saved?.refreshToken).toBe('xoxe-1.refresh')
+    expect(typeof saved?.expiresAtMs).toBe('number')
+  })
+
+  it('connect() of a classic non-rotating token persists NO refresh token or expiry (no-op)', async () => {
+    const { store, current } = makeFakeStore(null)
+    // Default oauthOk has neither refreshToken nor expiresInSeconds.
+    const { manager } = makeManager({ store })
+    await manager.connect()
+    const saved = current()
+    expect(saved?.refreshToken).toBeUndefined()
+    expect(saved?.expiresAtMs).toBeUndefined()
+  })
+
+  it('a read with an EXPIRED rotating token proactively refreshes, persists, and uses the new token', async () => {
+    const expiredRotating: StoredTokenSet = {
+      accessToken: 'xoxe.xoxp-old',
+      scopes: ['channels:read'],
+      refreshToken: 'refresh-old',
+      expiresAtMs: 1
+    }
+    const { store, current } = makeFakeStore(expiredRotating, true)
+    const refresh = vi.fn(
+      async (): Promise<TokenExchangeResult> => ({
+        accessToken: 'xoxe.xoxp-new',
+        refreshToken: 'refresh-new',
+        expiresInSeconds: 43200,
+        raw: {}
+      })
+    )
+    const client = makeClient()
+    const { manager } = makeManager({ store, client, refresh })
+
+    const result = await manager.listChannels({})
+
+    expect(result.ok).toBe(true)
+    expect(refresh).toHaveBeenCalledWith('refresh-old')
+    // The refreshed token is persisted (rotated refresh token replaces the old one)...
+    expect(current()?.accessToken).toBe('xoxe.xoxp-new')
+    expect(current()?.refreshToken).toBe('refresh-new')
+    // ...and the read used the NEW token, not the stale one.
+    expect(client.listChannels).toHaveBeenCalledWith({ token: 'xoxe.xoxp-new' }, undefined)
+    expect(manager.getStatus().state).toBe('connected')
+  })
+
+  it('reactively refreshes + retries ONCE when a read returns reconnect_needed (early revocation)', async () => {
+    const rotating: StoredTokenSet = {
+      accessToken: 'xoxe.xoxp-old',
+      scopes: ['channels:read'],
+      refreshToken: 'refresh-old'
+    }
+    const { store } = makeFakeStore(rotating, false)
+    const refresh = vi.fn(
+      async (): Promise<TokenExchangeResult> => ({
+        accessToken: 'xoxe.xoxp-new',
+        refreshToken: 'refresh-new',
+        raw: {}
+      })
+    )
+    let calls = 0
+    const client = makeClient({
+      listChannels: vi.fn(async (): Promise<SlackResult<unknown>> => {
+        calls += 1
+        return calls === 1
+          ? { ok: false, kind: 'reconnect_needed', message: 'expired' }
+          : { ok: true, data: { items: [] } }
+      }) as unknown as SlackClient['listChannels']
+    })
+    const { manager } = makeManager({ store, client, refresh })
+
+    const result = await manager.listChannels({})
+
+    expect(result.ok).toBe(true)
+    expect(refresh).toHaveBeenCalledOnce()
+    expect(calls).toBe(2)
+    expect(manager.getStatus().state).toBe('connected')
+  })
+
+  it('a refresh FAILURE on an expired rotating token surfaces reconnect_needed (does NOT clear the token)', async () => {
+    const expiredRotating: StoredTokenSet = {
+      accessToken: 'xoxe.xoxp-old',
+      scopes: ['channels:read'],
+      refreshToken: 'refresh-old',
+      expiresAtMs: 1
+    }
+    const { store, current } = makeFakeStore(expiredRotating, true)
+    const refresh = vi.fn(async (): Promise<TokenExchangeResult> => {
+      throw new Error('invalid_grant')
+    })
+    const client = makeClient()
+    const { manager } = makeManager({ store, client, refresh })
+
+    const result = await manager.listChannels({})
+
+    expect(result.ok).toBe(false)
+    if (!result.ok) {
+      expect(result.kind).toBe('reconnect_needed')
+    }
+    expect(client.listChannels).not.toHaveBeenCalled()
+    expect(manager.getStatus().state).toBe('reconnect_needed')
+    // The token is NOT cleared — a later reconnect/launch can still recover it.
+    expect(current()).not.toBeNull()
+  })
+
+  it('single-flight: two concurrent expired-token reads issue exactly ONE refresh POST and both succeed (slack-oauth-keeps-unlinking-v2)', async () => {
+    // Slack rotating refresh tokens are single-use. Without a single-flight guard,
+    // two concurrent reads each call tryRefresh with the same stored token: the first
+    // rotates it (old token invalidated), the second posts the now-invalid token →
+    // invalid_refresh_token → reconnect_needed. The guard coalesces both onto the
+    // same in-flight promise so only one POST is issued.
+    const expiredRotating: StoredTokenSet = {
+      accessToken: 'xoxe.xoxp-old',
+      scopes: ['channels:read'],
+      refreshToken: 'refresh-old',
+      expiresAtMs: 1
+    }
+    const { store, current } = makeFakeStore(expiredRotating, true)
+    const refresh = vi.fn(
+      async (): Promise<TokenExchangeResult> => ({
+        accessToken: 'xoxe.xoxp-new',
+        refreshToken: 'refresh-new',
+        expiresInSeconds: 43200,
+        raw: {}
+      })
+    )
+    const client = makeClient()
+    const { manager } = makeManager({ store, client, refresh })
+
+    // Fire two reads simultaneously against an expired token.
+    const [r1, r2] = await Promise.all([
+      manager.listChannels({}),
+      manager.listChannels({})
+    ])
+
+    // Both reads must succeed.
+    expect(r1.ok).toBe(true)
+    expect(r2.ok).toBe(true)
+    // Exactly ONE refresh POST was issued — single-use token not double-spent.
+    expect(refresh).toHaveBeenCalledOnce()
+    // The new rotated token is persisted.
+    expect(current()?.accessToken).toBe('xoxe.xoxp-new')
+    expect(current()?.refreshToken).toBe('refresh-new')
+    // Connection stays connected.
+    expect(manager.getStatus().state).toBe('connected')
   })
 })

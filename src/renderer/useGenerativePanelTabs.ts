@@ -38,7 +38,7 @@ import {
   shouldFlushDeferredDefault
 } from './panelTabs'
 import { buildGenerativePanel, hydrateGenerativeTabs } from './sessionSnapshot'
-import { shouldReleaseInFlightOnCompleted } from './promptComposerLogic'
+import { inFlightOnSubmit, shouldReleaseInFlightOnCompleted } from './promptComposerLogic'
 import { useReportPanel } from './SessionProvider'
 import type { GenerativePanelKey } from '../shared/ipc'
 import type { AdapterBinding, AdapterDescriptor } from '../shared/adapter'
@@ -138,6 +138,15 @@ export interface GenerativeTab {
    * Mutually exclusive with {@link descriptor}. No token/secret. Session-only otherwise.
    */
   bindings?: AdapterBinding[]
+  /**
+   * The Google Calendar legend's HIDDEN (deselected) calendar ids for THIS tab
+   * (calendar-selection-persistence). PER-TAB so each google-calendar tab keeps its own
+   * selection. The panel reads the active tab's set, renders the legend against it, and
+   * writes back via `update(id, { hiddenCalendars })` on every toggle so it persists into
+   * this tab's `GenerativeTabSnapshot.hiddenCalendars` and rehydrates on restore. Non-secret
+   * email-like ids. Only google-calendar tabs ever set it; the other panels never do.
+   */
+  hiddenCalendars?: string[]
 }
 
 export interface GenerativePanelTabs extends PanelTabsController<GenerativeTab> {
@@ -473,10 +482,49 @@ export function useGenerativePanelTabs(
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [update])
 
+  // ui-catalog-pull-spinner-signal-v1 (FR-005/FR-008): the EARLY "UI generation has begun"
+  // begin-signal subscription. When a `ui:generatingBegin` for THIS panel's `target` arrives —
+  // the run pulled `get_ui_catalog`, so it WILL generate UI — turn the originating tab's
+  // per-tab spinner ON (gating it on this signal instead of optimistically at submit). The
+  // signal correlates to the same single-run `originatingTabIdRef` slot as `ui:render`; if that
+  // tab was closed (or the begin-signal came from the interactive PTY with no originating tab),
+  // it is safely DISCARDED (FR-008). IDEMPOTENT: a second begin-signal on an already-in-flight
+  // tab is a no-op. The `ui:render` land + `completed`/`error` release are unchanged stop
+  // conditions. Reads correlation/tab state through refs so it never re-subscribes.
+  useEffect(() => {
+    const off = window.cosmos.ui.onGeneratingBegin((payload) => {
+      if (payload.target !== target) {
+        return
+      }
+      const tabId = originatingTabIdRef.current
+      // No originating tab (interactive PTY pull, or a plain run that never submitted through
+      // this panel) ⇒ discard. A closed originating tab ⇒ discard (FR-008).
+      if (!tabId || !tabIdsRef.current.has(tabId)) {
+        return
+      }
+      // Idempotent: only engage if not already in-flight (avoid a redundant state write).
+      if (tabsByIdRef.current.get(tabId)?.inFlight === true) {
+        return
+      }
+      update(tabId, { inFlight: true })
+    })
+    return off
+    // stable: update is useCallback; correlation + tab reads go through refs.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [target, update])
+
   const submit = useCallback(
     (utterance: string, options?: { contextDismiss?: 'none' | 'thread' | 'all' }) => {
       // FR-012 / FR-012a: fill the active tab, or auto-create the first tab when zero.
       let targetTabId = activeTabId
+      // ui-catalog-pull-spinner-signal-v1 (FR-005/FR-006): submit no longer optimistically spins.
+      // `inFlightOnSubmit()` now returns `false` — the per-tab spinner is gated on the EARLY
+      // `ui:generatingBegin` begin-signal (the `get_ui_catalog` pull), turned ON by the
+      // subscription above when this run pulls the catalog. A plain MCP/command run never pulls
+      // the catalog, so it never spins. The `ui:render` land + `completed`/`error` release remain
+      // the stop conditions. We STILL set `originatingTabIdRef`/`pendingUtteranceRef` below so the
+      // begin-signal and the surface can both find the originating tab.
+      const inFlight = inFlightOnSubmit()
       if (!targetTabId) {
         const id = crypto.randomUUID()
         open({
@@ -484,17 +532,16 @@ export function useGenerativePanelTabs(
           label: labelFromUtterance(utterance),
           untitled: false,
           surface: null,
-          inFlight: true
+          inFlight
         })
         targetTabId = id
       } else {
-        // FR-014: mark the active tab in-flight; drop any prior error. Also CLEAR the prior
-        // surface so the panel blanks to just the send-spinner until the new surface lands
-        // (composer-send-animation-v1: "panel goes blank, only the spinner spins"). Safe for
-        // every target: a blocking `generated-ui` surface can only be re-submitted over once
-        // its run has completed (the single-run guard blocks submit while it awaits an
-        // action), and the other targets settle immediately, so no pending call is orphaned.
-        update(targetTabId, { inFlight: true, error: undefined, surface: null })
+        // FR-014: drop any prior error and CLEAR the prior surface so the panel blanks until
+        // the new surface lands. Safe for every target: a blocking `generated-ui` surface can
+        // only be re-submitted over once its run has completed (the single-run guard blocks
+        // submit while it awaits an action), and the other targets settle immediately, so no
+        // pending call is orphaned. `inFlight` is gated by `inFlightOnSubmit()` (see above).
+        update(targetTabId, { inFlight, error: undefined, surface: null })
       }
       originatingTabIdRef.current = targetTabId
       pendingUtteranceRef.current.set(targetTabId, utterance)

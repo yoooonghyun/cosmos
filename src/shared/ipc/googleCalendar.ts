@@ -29,6 +29,12 @@ export const GoogleCalendarChannelName = {
   Connect: 'googleCalendar:connect',
   /** R->M (invoke): delete the stored token; resolves with not-connected status. */
   Disconnect: 'googleCalendar:disconnect',
+  /**
+   * R->M (invoke): abort an in-flight connect (the user cancelled the browser consent);
+   * resolves with the resulting not-connected status so the panel can retry immediately
+   * (oauth-cancel-v1). Carries no payload and no token/secret.
+   */
+  CancelConnect: 'googleCalendar:cancelConnect',
   /** R->M (invoke): list events on the primary calendar within a window (paginated). */
   ListEvents: 'googleCalendar:listEvents',
   /**
@@ -102,6 +108,11 @@ export interface GoogleCalendarApi {
   connect(): Promise<GoogleCalendarConnectionStatus>
   /** R->M. Delete the stored token; resolves with not-connected status. */
   disconnect(): Promise<GoogleCalendarConnectionStatus>
+  /**
+   * R->M. Abort an in-flight connect (the user cancelled the browser consent); resolves with
+   * the resulting not-connected status so the panel can retry immediately (oauth-cancel-v1).
+   */
+  cancelConnect(): Promise<GoogleCalendarConnectionStatus>
   /** R->M. List events on the primary calendar within a window (paginated). */
   listEvents(
     params: GoogleCalendarListEventsParams

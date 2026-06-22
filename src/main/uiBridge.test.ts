@@ -499,3 +499,89 @@ describe('UiBridge — re-entrant refresh-kick null-safety (Defect A)', () => {
     }
   })
 })
+
+/**
+ * UiBridge — the EARLY "UI generation has begun" begin-signal handler
+ * (ui-catalog-pull-spinner-signal-v1, FR-003/FR-004). A `{ kind:'generating', target }` frame
+ * is fire-and-forget: main forwards the non-secret target to `pushGeneratingBegin`, mints NO
+ * requestId, settles NO call (sends NO result frame), and never touches a pending render.
+ * Exercises the real socket path; a malformed/unknown frame is ignored.
+ */
+describe('UiBridge — generating begin-signal (FR-003/FR-004)', () => {
+  let dir: string
+  let bridge: UiBridge
+  let pushed: UiRenderPayload[]
+  let begins: { target: UiRenderTarget }[]
+  let warn: ReturnType<typeof vi.fn>
+  let socket: Socket | null = null
+
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), 'cosmos-uibridge-gen-'))
+    pushed = []
+    begins = []
+    warn = vi.fn()
+    bridge = new UiBridge({
+      projectDir: dir,
+      pushRender: (p) => pushed.push(p),
+      pushGeneratingBegin: (p) => begins.push(p),
+      warn: warn as never
+    })
+    bridge.start()
+  })
+
+  afterEach(() => {
+    socket?.destroy()
+    socket = null
+    bridge.stop()
+    rmSync(dir, { recursive: true, force: true })
+  })
+
+  it('forwards the target to pushGeneratingBegin, mints no requestId, pushes no render, sends no result', async () => {
+    socket = await dial(bridgeSocketPath(dir))
+    const result = await renderAndAwaitResult(
+      socket,
+      { kind: 'generating', callId: 'g-1', target: 'jira' } as unknown as BridgeRenderRequest
+    )
+    // No result frame comes back (fire-and-forget).
+    expect(result).toBeNull()
+    expect(begins).toEqual([{ target: 'jira' }])
+    // No surface pushed, no pending call created.
+    expect(pushed).toHaveLength(0)
+  })
+
+  it('defaults an absent target to generated-ui', async () => {
+    socket = await dial(bridgeSocketPath(dir))
+    await renderAndAwaitResult(
+      socket,
+      { kind: 'generating', callId: 'g-2' } as unknown as BridgeRenderRequest
+    )
+    expect(begins).toEqual([{ target: 'generated-ui' }])
+  })
+
+  it('a subsequent render frame is unaffected — the begin-signal never touched pending state', async () => {
+    socket = await dial(bridgeSocketPath(dir))
+    await renderAndAwaitResult(
+      socket,
+      { kind: 'generating', callId: 'g-3', target: 'generated-ui' } as unknown as BridgeRenderRequest
+    )
+    // A real 'generated-ui' render now blocks (stays pending) exactly as normal — the prior
+    // generating frame did not mint/settle anything.
+    const result = await renderAndAwaitResult(socket, makeFrame('generated-ui', 'c-after-gen'))
+    expect(result).toBeNull()
+    expect(pushed).toHaveLength(1)
+    expect(pushed[0].target).toBe('generated-ui')
+    expect(begins).toHaveLength(1)
+  })
+
+  it('ignores an unknown bridge message kind (warn-and-ignore)', async () => {
+    socket = await dial(bridgeSocketPath(dir))
+    const result = await renderAndAwaitResult(
+      socket,
+      { kind: 'bogus', callId: 'g-x' } as unknown as BridgeRenderRequest
+    )
+    expect(result).toBeNull()
+    expect(begins).toHaveLength(0)
+    expect(pushed).toHaveLength(0)
+    expect(warn).toHaveBeenCalled()
+  })
+})

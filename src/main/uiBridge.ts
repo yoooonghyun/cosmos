@@ -83,6 +83,14 @@ export interface UiBridgeDeps {
   ) => { spec: A2uiSurfaceUpdate; dataModel: UiDataModelPayload[] } | null
   /** Push one `updateDataModel` to the renderer (the rebind SEED). Injected. */
   pushDataModel?: (payload: UiDataModelPayload) => void
+  /**
+   * ui-catalog-pull-spinner-signal-v1 (FR-003/FR-004): forward the EARLY "UI generation has
+   * begun" begin-signal to the renderer. Called from a fire-and-forget `{ kind:'generating' }`
+   * bridge frame (a `get_ui_catalog` pull) — main mints NO requestId, touches NO pending call,
+   * just forwards the non-secret `target`. Injected so `UiBridge` stays IPC-agnostic; absent ⇒
+   * the begin-signal is dropped (no spinner). NON-SECRET: target only.
+   */
+  pushGeneratingBegin?: (payload: { target: UiRenderTarget }) => void
   /** Optional warning logger. Defaults to console.warn. */
   warn?: WarnFn
 }
@@ -110,6 +118,7 @@ export class UiBridge {
     target: UiRenderTarget
   ) => { spec: A2uiSurfaceUpdate; dataModel: UiDataModelPayload[] } | null
   private readonly pushDataModel?: (payload: UiDataModelPayload) => void
+  private readonly pushGeneratingBegin?: (payload: { target: UiRenderTarget }) => void
   /** At most one active surface at a time (FR-014). */
   private active: OutstandingCall | null = null
   private readonly sockets = new Set<Socket>()
@@ -121,6 +130,7 @@ export class UiBridge {
     this.registerAgentSurface = deps.registerAgentSurface
     this.registerAgentSurfaceBindings = deps.registerAgentSurfaceBindings
     this.pushDataModel = deps.pushDataModel
+    this.pushGeneratingBegin = deps.pushGeneratingBegin
   }
 
   /** Start listening for the spawned MCP entry script. Idempotent-ish. */
@@ -220,6 +230,14 @@ export class UiBridge {
       message = JSON.parse(line) as BridgeClientMessage
     } catch {
       this.warn('[ui] ignoring malformed bridge frame')
+      return
+    }
+    // ui-catalog-pull-spinner-signal-v1 (FR-003/FR-004): a fire-and-forget begin-signal — a
+    // render server called `get_ui_catalog`. Forward the non-secret target to the renderer and
+    // RETURN: mint NO requestId, touch NO `this.active`, settle NO call. Handled BEFORE the
+    // `kind !== 'render'` reject so it is not treated as an unknown frame.
+    if (message.kind === 'generating') {
+      this.pushGeneratingBegin?.({ target: message.target ?? DEFAULT_UI_RENDER_TARGET })
       return
     }
     if (message.kind !== 'render') {

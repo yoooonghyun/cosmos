@@ -1,5 +1,54 @@
 import { describe, it, expect, vi } from 'vitest'
-import { validateUiAction, validateSurfaceUpdate } from './validate'
+import {
+  validateUiAction,
+  validateSurfaceUpdate,
+  validateUiGeneratingBeginPayload
+} from './validate'
+
+describe('validateUiGeneratingBeginPayload (ui-catalog-pull-spinner-signal-v1, FR-004/FR-011/FR-012)', () => {
+  it('accepts each known render target (happy path) and returns target-only', () => {
+    const warn = vi.fn()
+    for (const target of [
+      'generated-ui',
+      'jira',
+      'slack',
+      'confluence',
+      'google-calendar'
+    ] as const) {
+      expect(validateUiGeneratingBeginPayload({ target }, warn)).toEqual({ target })
+    }
+    expect(warn).not.toHaveBeenCalled()
+  })
+
+  it('strips any extra non-secret field — only target survives', () => {
+    const warn = vi.fn()
+    const result = validateUiGeneratingBeginPayload(
+      { target: 'jira', stray: 'x', token: 'NOPE' } as unknown,
+      warn
+    )
+    expect(result).toEqual({ target: 'jira' })
+    expect(warn).not.toHaveBeenCalled()
+  })
+
+  it('warns and drops an unknown target (warn-and-ignore, FR-012)', () => {
+    const warn = vi.fn()
+    expect(validateUiGeneratingBeginPayload({ target: 'mystery' }, warn)).toBeNull()
+    expect(warn).toHaveBeenCalledTimes(1)
+  })
+
+  it('warns and drops a missing target', () => {
+    const warn = vi.fn()
+    expect(validateUiGeneratingBeginPayload({}, warn)).toBeNull()
+    expect(warn).toHaveBeenCalledTimes(1)
+  })
+
+  it('warns and drops a non-object payload', () => {
+    const warn = vi.fn()
+    expect(validateUiGeneratingBeginPayload(null, warn)).toBeNull()
+    expect(validateUiGeneratingBeginPayload('jira', warn)).toBeNull()
+    expect(warn).toHaveBeenCalledTimes(2)
+  })
+})
 
 describe('validateUiAction (FR-006, FR-010, SC-006)', () => {
   it('accepts a valid submit action with actionId and values (happy path)', () => {

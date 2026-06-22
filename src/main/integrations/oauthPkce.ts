@@ -140,8 +140,13 @@ export function buildAuthorizeUrl(params: AuthorizeUrlParams): string {
   return url.toString()
 }
 
-/** Why awaiting the loopback callback failed. */
-export type LoopbackErrorKind = 'denied' | 'state_mismatch' | 'timeout' | 'no_port'
+/**
+ * Why awaiting the loopback callback failed.
+ *   - `cancelled` when the caller aborts the in-flight flow via the {@link AwaitLoopbackParams.signal}
+ *     `AbortSignal` (e.g. the user clicks Cancel after closing the browser tab — there is no
+ *     `error` redirect, so the flow would otherwise wait out the full `timeoutMs`).
+ */
+export type LoopbackErrorKind = 'denied' | 'state_mismatch' | 'timeout' | 'no_port' | 'cancelled'
 
 /** Error thrown/rejected by {@link awaitLoopbackCallback}. */
 export class LoopbackCallbackError extends Error {
@@ -178,6 +183,14 @@ export interface AwaitLoopbackParams {
   onListening?: (port: number) => void
   /** Injectable server factory (tests pass a fake). */
   serverFactory?: ServerFactory
+  /**
+   * Optional abort handle: when the caller aborts this signal the loopback server is closed
+   * cleanly and the pending promise rejects with a `cancelled` {@link LoopbackCallbackError}.
+   * Lets a manager abort an in-flight connect (the user closed the browser tab, so no `error`
+   * redirect arrives) WITHOUT waiting out `timeoutMs`. Abort after settle is a safe no-op; an
+   * already-aborted signal rejects immediately without binding a port.
+   */
+  signal?: AbortSignal
 }
 
 /** Result of a successful loopback capture. */
@@ -263,12 +276,29 @@ export function awaitLoopbackCallback(
         return
       }
       settled = true
+      if (params.signal) {
+        params.signal.removeEventListener('abort', onAbort)
+      }
       cleanup()
       if (err) {
         reject(err)
       } else if (result) {
         resolve(result)
       }
+    }
+
+    // Cancel path: aborting closes the server (via cleanup in finish) and rejects with
+    // `cancelled`. Idempotent + safe after settle (finish short-circuits once settled).
+    function onAbort(): void {
+      finish(new LoopbackCallbackError('cancelled', 'authorization cancelled'))
+    }
+    if (params.signal) {
+      if (params.signal.aborted) {
+        // Already aborted before we bind a port — reject immediately, bind nothing.
+        finish(new LoopbackCallbackError('cancelled', 'authorization cancelled'))
+        return
+      }
+      params.signal.addEventListener('abort', onAbort)
     }
 
     server.on('error', () => {

@@ -4,7 +4,12 @@
  * `src/shared/validate.ts` barrel.
  */
 
-import type { A2uiSurfaceUpdate, UiActionPayload, UiDataModelPayload } from './ui'
+import type {
+  A2uiSurfaceUpdate,
+  UiActionPayload,
+  UiDataModelPayload,
+  UiGeneratingBeginPayload
+} from './ui'
 import type { UiRenderTarget } from './common'
 import { DEFAULT_UI_RENDER_TARGET } from './common'
 import { defaultWarn, isNonEmptyString, isObject, type WarnFn } from './common.validate'
@@ -127,6 +132,48 @@ export function validateSurfaceUpdate(
     return null
   }
   return raw as unknown as A2uiSurfaceUpdate
+}
+
+/** The five known render targets — a `ui:generatingBegin` target MUST be one of these. */
+const KNOWN_UI_RENDER_TARGETS: readonly UiRenderTarget[] = [
+  'generated-ui',
+  'jira',
+  'slack',
+  'confluence',
+  'google-calendar'
+]
+
+/**
+ * Validate a `ui:generatingBegin` begin-signal payload (ui-catalog-pull-spinner-signal-v1,
+ * FR-004/FR-011/FR-012). NON-SECRET: target only.
+ *
+ * Required:
+ *  - `target` is one of the five known {@link UiRenderTarget}s.
+ *
+ * Unlike {@link validateUiRenderTarget} (which silently defaults a missing/unknown target),
+ * this is a STRICT inbound-payload validator: a non-object, or a missing/unknown `target`,
+ * is WARNED and the payload IGNORED (returns null) so a bad begin-signal can never engage a
+ * panel's spinner or crash it (FR-012). The renderer drives the per-tab spinner only from a
+ * VALIDATED begin-signal.
+ *
+ * @returns the validated payload, or `null` if invalid (caller ignores null).
+ */
+export function validateUiGeneratingBeginPayload(
+  raw: unknown,
+  warn: WarnFn = defaultWarn
+): UiGeneratingBeginPayload | null {
+  if (!isObject(raw)) {
+    warn('[ui] ignoring ui:generatingBegin — payload is not an object:', raw)
+    return null
+  }
+  if (
+    typeof raw.target !== 'string' ||
+    !KNOWN_UI_RENDER_TARGETS.includes(raw.target as UiRenderTarget)
+  ) {
+    warn('[ui] ignoring ui:generatingBegin — "target" must be a known render target:', raw)
+    return null
+  }
+  return { target: raw.target as UiRenderTarget }
 }
 
 /**

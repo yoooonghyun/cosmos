@@ -140,6 +140,26 @@ interface PtySession {
   resume: boolean
   /** Epoch ms when this session was spawned (for the resume-failure window). */
   startedAtMs: number
+  /**
+   * The absolute working directory this pane was spawned in (the persisted/picked
+   * session cwd, FR-019). Remembered so a per-tab `restart` (FR-026) respawns in the
+   * SAME directory instead of reverting to the manager-default sandbox cwd — which
+   * would otherwise make a restored/restarted tab (and its file explorer) point at the
+   * wrong directory (terminal-restart-cwd-regression).
+   */
+  cwd?: string
+  /**
+   * True once this session has been INTENTIONALLY killed via `kill`/`killAll`
+   * (tab close, app quit, renderer reload). node-pty's `proc.kill()` makes the
+   * PTY's `onExit` fire asynchronously with SIGHUP (signal 1); the captured
+   * handler checks this flag and returns WITHOUT emitting to the renderer, so an
+   * intentional kill never produces a spurious "claude exited (signal 1)" event
+   * — which on a renderer reload would otherwise reach the reloaded, restored
+   * pane and break both the claude pane and its file explorer
+   * (restart-pty-cwd regression). A genuine, self-driven abnormal exit leaves
+   * this false and still emits normally.
+   */
+  disposed: boolean
 }
 
 export class PtyManager {
@@ -220,7 +240,15 @@ export class PtyManager {
       return
     }
 
-    const session: PtySession = { proc, cols, rows, resume, startedAtMs: this.now() }
+    const session: PtySession = {
+      proc,
+      cols,
+      rows,
+      resume,
+      startedAtMs: this.now(),
+      cwd,
+      disposed: false
+    }
     this.sessions.set(paneId, session)
 
     proc.onData((data: string) => {
@@ -228,6 +256,18 @@ export class PtyManager {
     })
 
     proc.onExit(({ exitCode, signal }) => {
+      // An INTENTIONAL kill (`kill`/`killAll`) sets `disposed` before calling
+      // `proc.kill()`. node-pty then fires this handler asynchronously with
+      // SIGHUP (signal 1); we must NOT emit an exit for it, or a renderer reload
+      // (which calls killAll while the window survives) would deliver a spurious
+      // "claude exited (signal 1)" to the reloaded, restored pane and break both
+      // the claude pane and its file explorer (restart-pty-cwd regression). The
+      // session object is captured here, so this works even after the map entry
+      // was already removed by `kill`. A genuine self-driven exit leaves
+      // `disposed` false and still emits below.
+      if (session.disposed) {
+        return
+      }
       // Only clear if this is still the active session for the pane (guards
       // against a stale handler firing after a restart replaced the process).
       if (this.sessions.get(paneId) === session) {
@@ -261,11 +301,17 @@ export class PtyManager {
   }
 
   /**
-   * FR-008/FR-026: kill `paneId`'s current process then spawn a fresh one. Other
-   * panes are unaffected.
+   * FR-008/FR-026: kill `paneId`'s current process then spawn a fresh one IN THE SAME
+   * WORKING DIRECTORY. The respawn reuses the pane's remembered cwd (the persisted/
+   * picked session dir) so a restart never reverts the terminal — and its file
+   * explorer, which roots on this cwd — to the manager-default sandbox dir
+   * (terminal-restart-cwd-regression). A restart is always a FRESH spawn (no `--resume`),
+   * so it never re-arms the resume-failure window. Other panes are unaffected. The pane's
+   * cwd must be read BEFORE `start` kills the existing session (which clears it).
    */
   restart(paneId: string): void {
-    this.start(paneId)
+    const cwd = this.sessions.get(paneId)?.cwd
+    this.start(paneId, cwd !== undefined ? { cwd } : {})
   }
 
   /**
@@ -311,6 +357,9 @@ export class PtyManager {
       return
     }
     this.sessions.delete(paneId)
+    // Mark intentional BEFORE killing so the captured `onExit` handler suppresses
+    // the SIGHUP exit node-pty fires for an intentional kill (restart-pty-cwd).
+    session.disposed = true
     try {
       session.proc.kill()
     } catch {
@@ -325,6 +374,11 @@ export class PtyManager {
    */
   killAll(): void {
     for (const session of this.sessions.values()) {
+      // Mark intentional BEFORE killing so each captured `onExit` handler
+      // suppresses the SIGHUP exit node-pty fires for an intentional kill — on a
+      // renderer reload the window survives, so an emitted exit would reach the
+      // reloaded, restored pane (restart-pty-cwd).
+      session.disposed = true
       try {
         session.proc.kill()
       } catch {

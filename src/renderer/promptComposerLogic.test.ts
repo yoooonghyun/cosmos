@@ -9,6 +9,8 @@ import {
   surfaceSpinnerVisible,
   shouldReleaseInFlightOnCompleted,
   sentHintAfterSubmit,
+  inFlightOnSubmit,
+  composerInteractiveAfterSubmit,
   SENT_HINT_DURATION_MS,
   type ComposerState
 } from './promptComposerLogic'
@@ -279,6 +281,90 @@ describe('sentHintAfterSubmit (open-prompt-spinner-gating-v1, OQ-3 — transient
   it('exposes a finite auto-dismiss duration (the timer binding lives in the .tsx)', () => {
     expect(typeof SENT_HINT_DURATION_MS).toBe('number')
     expect(SENT_HINT_DURATION_MS).toBeGreaterThan(0)
+  })
+})
+
+describe('inFlightOnSubmit (ui-catalog-pull-spinner-signal-v1 — spinner gated on the begin-signal, NOT optimistically at submit)', () => {
+  it('submit does NOT optimistically engage inFlight — the begin-signal is the gate', () => {
+    // The render surface is split: the agent must pull `get_ui_catalog` before it can author a
+    // surface, and that pull fires `ui:generatingBegin` — a TRUE early UI-vs-plain signal. So
+    // submit no longer spins optimistically; `inFlightOnSubmit()` is now `false`. FAILS if it
+    // still returns `true` (the prior optimistic gate that flickered for plain runs).
+    expect(inFlightOnSubmit()).toBe(false)
+  })
+
+  // Drive the FULL spinner lifecycle through the real predicates as `useGenerativePanelTabs`
+  // wires them: a plain run (no begin-signal) NEVER spins; a UI-generation run spins from the
+  // begin-signal (which sets inFlight) until the surface lands.
+  it('plain MCP run (no begin-signal) → spinner NEVER shows; UI run (begin-signal sets inFlight) → spinner shows then clears on surface land', () => {
+    // 1) At submit, neither kind is in-flight (the begin-signal has not arrived yet).
+    const atSubmit = inFlightOnSubmit()
+    expect(atSubmit).toBe(false)
+    expect(surfaceSpinnerVisible({ inFlight: atSubmit, hasSurface: false, hasError: false })).toBe(
+      false
+    )
+
+    // 2a) PLAIN MCP/command run: never pulls the catalog ⇒ no `ui:generatingBegin` ⇒ inFlight
+    //     stays false the whole run ⇒ the spinner NEVER shows. At `completed` there is nothing to
+    //     release (inFlight already false) — the panel is never blocked.
+    expect(surfaceSpinnerVisible({ inFlight: false, hasSurface: false, hasError: false })).toBe(
+      false
+    )
+    expect(
+      shouldReleaseInFlightOnCompleted({ inFlight: false, hasSurface: false, producedSurface: false })
+    ).toBe(false)
+
+    // 2b) UI-GENERATION run: the begin-signal sets inFlight=true (the subscription's effect) →
+    //     the spinner shows DURING generation, before the surface is composed.
+    const afterBeginSignal = true // useGenerativePanelTabs sets inFlight on ui:generatingBegin.
+    expect(
+      surfaceSpinnerVisible({ inFlight: afterBeginSignal, hasSurface: false, hasError: false })
+    ).toBe(true)
+
+    // 2c) The `ui:render` surface lands → inFlight cleared + surface present → spinner hidden
+    //     (replaced by the surface). The `completed`-release is belt-and-suspenders (no-op).
+    expect(surfaceSpinnerVisible({ inFlight: false, hasSurface: true, hasError: false })).toBe(false)
+
+    // 2d) Catalog pulled but NO surface ever lands (aborted run): inFlight is still true at
+    //     `completed` with producedSurface=false → the release fires → spinner clears (no hang).
+    expect(
+      shouldReleaseInFlightOnCompleted({ inFlight: true, hasSurface: false, producedSurface: false })
+    ).toBe(true)
+  })
+})
+
+describe('composerInteractiveAfterSubmit (open-prompt-spinner-gating — non-UI submit must not block)', () => {
+  it('a plain submit leaves the composer INTERACTIVE — never locked for the run (the root-cause fix)', () => {
+    // REGRESSION: previously `submit` set a local `running` flag (and `agent:status`
+    // `started` kept it set) for the WHOLE agent run, so a reopened composer was dead —
+    // textarea disabled, Send disabled, submit rejected — until the run completed. A plain
+    // fire-and-forget submit must return the composer to a usable state immediately.
+    expect(composerInteractiveAfterSubmit()).toBe(true)
+  })
+
+  it('the derived lock is false, so the composer is never disabled merely because a run is in flight', () => {
+    // The component derives `composerLocked = !composerInteractiveAfterSubmit()` and uses it
+    // for the textarea `disabled`, the Send `canSubmit`, and the submit-accept gate.
+    const composerLocked = !composerInteractiveAfterSubmit()
+    expect(composerLocked).toBe(false)
+  })
+
+  it('Send is still ENABLED with text after a submit, even while an agent run is in flight', () => {
+    // `canSubmit = !composerLocked && value.trim().length > 0`. With the lock false, a
+    // reopened composer can send again immediately — the user is not blocked by the run.
+    const composerLocked = !composerInteractiveAfterSubmit()
+    const canSubmit = !composerLocked && 'next prompt'.trim().length > 0
+    expect(canSubmit).toBe(true)
+  })
+
+  it('submitDecision ACCEPTS the next plain submit mid-run (running fed from composerLocked, not the agent run)', () => {
+    // This is the exact wiring `submit` uses: `submitDecision({ value, running: composerLocked })`.
+    // Before the fix, `running` was the agent-run flag (true mid-run) → submit rejected → blocked.
+    // Now it is the composer lock (false) → the next send is accepted while the prior run runs.
+    const composerLocked = !composerInteractiveAfterSubmit()
+    expect(submitDecision({ value: 'another command', running: composerLocked })).toEqual({
+      accept: true
+    })
   })
 })
 

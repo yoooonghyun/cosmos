@@ -31,6 +31,12 @@ export const ConfluenceChannelName = {
   Connect: 'confluence:connect',
   /** R->M (invoke): delete the stored token; resolves with not-connected status. FR-A14. */
   Disconnect: 'confluence:disconnect',
+  /**
+   * R->M (invoke): abort an in-flight connect (the user cancelled the browser consent);
+   * resolves with the resulting not-connected status so the panel can retry immediately
+   * (oauth-cancel-v1). Carries no payload and no token/secret.
+   */
+  CancelConnect: 'confluence:cancelConnect',
   /** R->M (invoke): search content (paginated). FR-C04. */
   SearchContent: 'confluence:searchContent',
   /**
@@ -62,6 +68,11 @@ export interface ConfluenceApi {
   connect(): Promise<ConfluenceConnectionStatus>
   /** R->M. Delete the stored token; resolves with not-connected status. FR-A14. */
   disconnect(): Promise<ConfluenceConnectionStatus>
+  /**
+   * R->M. Abort an in-flight connect (the user cancelled the browser consent); resolves with
+   * the resulting not-connected status so the panel can retry immediately (oauth-cancel-v1).
+   */
+  cancelConnect(): Promise<ConfluenceConnectionStatus>
   /** R->M. Search content (paginated). FR-C04. */
   searchContent(
     params: ConfluenceSearchParams

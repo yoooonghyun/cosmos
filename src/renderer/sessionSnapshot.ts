@@ -146,6 +146,14 @@ export function buildGenerativeTab(tab: GenerativeTab): GenerativeTabSnapshot {
     // multi-region: a partitioned surface persists its per-container bindings instead.
     if (tab.bindings) snap.bindings = tab.bindings
   }
+  // calendar-selection-persistence: persist THIS tab's Google Calendar hidden-set (a
+  // non-secret list of deselected calendar ids). Additive + OPTIONAL — attached only when
+  // non-empty (an empty/absent set restores as "every calendar shown"). Persisted
+  // independent of `composed` so a LIVE default-view tab (composed:false) keeps its
+  // selection across a restart. Only google-calendar tabs ever set it.
+  if (Array.isArray(tab.hiddenCalendars) && tab.hiddenCalendars.length > 0) {
+    snap.hiddenCalendars = [...tab.hiddenCalendars]
+  }
   return snap
 }
 
@@ -209,6 +217,13 @@ export function hydrateGenerativeTabs(
         tab.surface.bindings = t.bindings
         tab.surface.restored = true
       }
+    }
+    // calendar-selection-persistence: restore THIS tab's Google Calendar hidden-set so the
+    // panel seeds its per-tab visibility from it (independent of `composed`; main already
+    // normalized it — string entries only, deduped). Absent ⇒ left undefined (every
+    // calendar shown). Only google-calendar tabs ever carry one.
+    if (Array.isArray(t.hiddenCalendars) && t.hiddenCalendars.length > 0) {
+      tab.hiddenCalendars = [...t.hiddenCalendars]
     }
     return tab
   })

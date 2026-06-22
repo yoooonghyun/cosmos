@@ -232,11 +232,23 @@ export function validateJiraCreate(
     warn('[jira] ignoring create — optional "description" must be a string when present:', raw)
     return null
   }
+  // jira-create-parent-v1 (FR-003): optional `parentKey`. When PRESENT it MUST be a
+  // non-empty (post-trim) string — a present-but-empty/whitespace value warns + ignores
+  // the WHOLE create (per the required-field convention). It is TRIMMED before use; when
+  // absent the result OMITS it entirely (no empty-string default). Non-secret (FR-010).
+  if (
+    raw.parentKey !== undefined &&
+    (typeof raw.parentKey !== 'string' || raw.parentKey.trim().length === 0)
+  ) {
+    warn('[jira] ignoring create — optional "parentKey" must be a non-empty, non-whitespace string when present:', raw)
+    return null
+  }
   return {
     projectKey: raw.projectKey,
     issueType: raw.issueType,
     summary: raw.summary,
-    description: typeof raw.description === 'string' ? raw.description : ''
+    description: typeof raw.description === 'string' ? raw.description : '',
+    ...(typeof raw.parentKey === 'string' ? { parentKey: raw.parentKey.trim() } : {})
   }
 }
 

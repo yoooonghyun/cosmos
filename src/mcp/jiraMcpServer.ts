@@ -213,24 +213,29 @@ async function main(): Promise<void> {
       description:
         'MUTATES Jira: create a NEW issue. Pass the fixed minimal fields — `projectKey` ' +
         '(e.g. PROJ), `issueType` (the type NAME, e.g. Task/Bug/Story), `summary` ' +
-        '(non-empty), and an optional `description` (plain text). Returns the new issue ' +
+        '(non-empty), and an optional `description` (plain text). Optionally pass ' +
+        '`parentKey` (a parent issue KEY, e.g. PROJ-123) to nest the new issue under a ' +
+        'parent: a Sub-task REQUIRES its parent, and a team-managed Story/Task may set its ' +
+        'parent Epic. Omit `parentKey` for a top-level issue. Returns the new issue ' +
         'key or a structured error (e.g. the project requires additional required fields, ' +
-        'an unknown project/type, or reconnect needed). Does NOT discover per-project ' +
-        'required fields.',
+        'an invalid/cross-project parent, an unknown project/type, or reconnect needed). ' +
+        'Does NOT discover per-project required fields.',
       inputSchema: {
         projectKey: z.string(),
         issueType: z.string(),
         summary: z.string(),
-        description: z.string().optional()
+        description: z.string().optional(),
+        parentKey: z.string().optional()
       }
     },
-    async ({ projectKey, issueType, summary, description }) =>
+    async ({ projectKey, issueType, summary, description, parentKey }) =>
       toToolResult(
         await bridge.call(JiraOp.CreateIssue, {
           projectKey,
           issueType,
           summary,
-          ...(description !== undefined ? { description } : {})
+          ...(description !== undefined ? { description } : {}),
+          ...(parentKey !== undefined ? { parentKey } : {})
         })
       )
   )

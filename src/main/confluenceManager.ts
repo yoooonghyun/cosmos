@@ -42,8 +42,12 @@ export type RefreshFn = (refreshToken: string) => Promise<TokenExchangeResult>
 export interface ConfluenceManagerDeps {
   client: ConfluenceClient
   tokenStore: TokenStore
-  /** Run the Atlassian OAuth flow for Confluence (main wires {@link runAtlassianOAuth}). */
-  runOAuth: () => Promise<AtlassianOAuthResult>
+  /**
+   * Run the Atlassian OAuth flow for Confluence (main wires {@link runAtlassianOAuth}). The
+   * optional `signal` is threaded to the loopback wait so {@link ConfluenceManager.cancelConnect}
+   * can abort an in-flight connect instead of waiting out the 3-minute OAuth timeout.
+   */
+  runOAuth: (signal?: AbortSignal) => Promise<AtlassianOAuthResult>
   /** Refresh the access token (rotation — FR-A09); main wires {@link refreshAtlassianToken}. */
   refresh: RefreshFn
   /** Notify on every state change (main wires this to `confluence:statusChanged`). */
@@ -54,6 +58,11 @@ export class ConfluenceManager {
   private readonly deps: ConfluenceManagerDeps
   private state: ConfluenceConnectionStatus['state'] = 'not_connected'
   private lastError: string | null = null
+  /**
+   * Abort handle for the in-flight connect (oauth-cancel-v1). Held only while `connecting`
+   * so {@link cancelConnect} can abort the pending loopback wait. Cleared when connect settles.
+   */
+  private connectAbort: AbortController | null = null
 
   constructor(deps: ConfluenceManagerDeps) {
     this.deps = deps
@@ -89,18 +98,26 @@ export class ConfluenceManager {
       return this.getStatus()
     }
     this.lastError = null
+    const abort = new AbortController()
+    this.connectAbort = abort
     this.setState('connecting')
 
     let oauth: AtlassianOAuthResult
     try {
-      oauth = await this.deps.runOAuth()
+      oauth = await this.deps.runOAuth(abort.signal)
     } catch (err) {
-      this.lastError =
-        'Confluence connection was cancelled or failed. Click Connect to try again.'
-      console.error('[confluence] connect failed:', err instanceof Error ? err.message : err)
-      this.setState('not_connected')
+      // A user cancel (cancelConnect aborted the signal) already reset state with its own
+      // gentle message; the `connectAbort === abort` guard keeps this branch from clobbering it.
+      if (this.connectAbort === abort) {
+        this.lastError =
+          'Confluence connection was cancelled or failed. Click Connect to try again.'
+        this.connectAbort = null
+        console.error('[confluence] connect failed:', err instanceof Error ? err.message : err)
+        this.setState('not_connected')
+      }
       return this.getStatus()
     }
+    this.connectAbort = null
 
     this.deps.tokenStore.save(toStoredTokenSet(oauth))
     this.setState('connected')
@@ -111,6 +128,24 @@ export class ConfluenceManager {
   disconnect(): ConfluenceConnectionStatus {
     this.deps.tokenStore.clear()
     this.setState('not_connected')
+    return this.getStatus()
+  }
+
+  /**
+   * Abort an in-flight connect (oauth-cancel-v1). A cancelled browser consent sends no `error`
+   * redirect, so the loopback wait would hang until the 3-minute OAuth timeout. This aborts the
+   * pending wait and returns to not_connected so the user can retry. No-op when no connect is in
+   * flight; carries no token/secret.
+   */
+  cancelConnect(): ConfluenceConnectionStatus {
+    if (this.state !== 'connecting' || !this.connectAbort) {
+      return this.getStatus()
+    }
+    const abort = this.connectAbort
+    this.connectAbort = null
+    this.lastError = 'Connection cancelled.'
+    this.setState('not_connected')
+    abort.abort()
     return this.getStatus()
   }
 

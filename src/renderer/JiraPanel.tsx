@@ -61,6 +61,9 @@ import {
 } from './activeTabSurfaceRefresh'
 import { surfaceSpinnerVisible } from './promptComposerLogic'
 import { useTabShortcuts } from './useTabShortcuts'
+import { useConfirm } from './useConfirm'
+import { ConfirmDialog } from '@/components/ui/confirm-dialog'
+import { confirmCopy } from './confirmLogic'
 import type { UiRenderPayload } from '../shared/ipc'
 import type { JiraConnectionStatus } from '../shared/jira'
 
@@ -273,6 +276,17 @@ export function JiraPanel({ active }: { active: boolean }): React.JSX.Element {
   const disconnect = async (): Promise<void> => {
     const next = await window.cosmos.jira.disconnect()
     setStatus(next)
+  }
+
+  // disconnect-confirm-modal-v1: gate the footer Disconnect behind a confirm modal.
+  const confirmDisconnect = useConfirm()
+
+  // oauth-cancel-v1: abort an in-flight connect (the user cancelled the browser consent) so
+  // the panel returns to not_connected immediately and Connect is clickable again.
+  const cancelConnect = async (): Promise<void> => {
+    const next = await window.cosmos.jira.cancelConnect()
+    setStatus(next)
+    setBusy(false)
   }
 
   const isConnected = status.state === 'connected'
@@ -728,7 +742,29 @@ export function JiraPanel({ active }: { active: boolean }): React.JSX.Element {
         surfaceName="Jira"
         icon={SquareKanban}
         activeTab={activeStripTab}
-        right={<ConnectionStatus status={status} onDisconnect={() => void disconnect()} />}
+        right={
+          <ConnectionStatus
+            status={status}
+            onDisconnect={() =>
+              confirmDisconnect.requestConfirm({ integration: 'jira', label: 'Jira' }, () =>
+                void disconnect()
+              )
+            }
+            onCancel={() => void cancelConnect()}
+          />
+        }
+      />
+
+      <ConfirmDialog
+        open={confirmDisconnect.state.open}
+        title={confirmCopy('Jira').title}
+        description={confirmCopy('Jira').body}
+        onConfirm={confirmDisconnect.confirm}
+        onOpenChange={(next) => {
+          if (!next) {
+            confirmDisconnect.cancel()
+          }
+        }}
       />
     </section>
   )

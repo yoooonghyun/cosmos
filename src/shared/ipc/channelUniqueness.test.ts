@@ -53,7 +53,7 @@ describe('IPC channel wire strings (modular contract)', () => {
     }
   })
 
-  it('bumps SESSION_SCHEMA_VERSION to 8 for per-tab openFiles (persist-workdir-open-files-v1)', () => {
+  it('keeps SESSION_SCHEMA_VERSION at 8 (calendar-selection-persistence is additive — no bump)', () => {
     expect(SESSION_SCHEMA_VERSION).toBe(8)
   })
 })

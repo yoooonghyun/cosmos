@@ -74,6 +74,27 @@ export type SessionChannelName =
  * `openFiles` value is normalized at the boundary (non-string entries dropped, an active
  * path not naming a surviving open file nulled out; see validateTerminalTab). This change
  * composes ON TOP of v7's `enabled` migration — both fields coexist in a v8 snapshot.
+ *
+ * calendar-selection-persistence (NO version bump): the Google Calendar legend's
+ * deselected (hidden) calendar ids are persisted PER generative TAB as the additive
+ * OPTIONAL `GenerativeTabSnapshot.hiddenCalendars` string[] (non-secret email-like ids,
+ * never tokens). Purely additive + OPTIONAL, so an older snapshot lacking it restores
+ * cleanly (the field defaults to absent ⇒ []), exactly like `openFiles` was added to
+ * `TerminalTabSnapshot` without a bump — a bump would needlessly invalidate every prior
+ * snapshot and wipe the restored session. A present-but-malformed value is normalized at
+ * the boundary (non-string / empty entries dropped, deduped; see validateHiddenCalendars).
+ *
+ * draggable-open-prompt-button-v1 (NO version bump): the collapsed Open-Prompt logo
+ * button's user-chosen position is persisted as the additive OPTIONAL TOP-LEVEL
+ * `SessionSnapshot.openPromptPosition` — a normalized fraction `{ xFrac, yFrac }` in
+ * `[0,1]` of the panel content area (NON-SECRET; two numbers only, never a token/path).
+ * It is GLOBAL (one value for every panel's button), so it lives at the top level, NOT
+ * under `panels`. Purely additive + OPTIONAL: an older snapshot lacking it restores
+ * cleanly (the field defaults to absent ⇒ the centered-bottom default), exactly like
+ * `hiddenCalendars`/`openFiles` were added without a bump — a bump would needlessly
+ * invalidate every prior snapshot and wipe the restored session. A present-but-malformed
+ * value is normalized at the boundary (each component clamped to `[0,1]`, a non-object
+ * or non-number treated as absent ⇒ default; see validateOpenPromptPosition).
  */
 export const SESSION_SCHEMA_VERSION = 8
 
@@ -172,6 +193,18 @@ export interface GenerativeTabSnapshot {
    * `{ dataSource, query }` by the validator (FR-007/FR-021).
    */
   bindings?: AdapterBinding[]
+  /**
+   * The Google Calendar legend's HIDDEN (deselected) calendar ids for THIS tab
+   * (calendar-selection-persistence). PER-TAB so each google-calendar tab keeps its own
+   * selection independent of sibling tabs. Non-secret email-like ids (never tokens). The
+   * panel seeds its persisted hidden-set from this and reports back on every legend toggle
+   * so a deselection survives a view switch, the A2UIProvider remount, and an app restart.
+   * Additive + OPTIONAL: a missing/malformed value normalizes to absent/[] at the boundary
+   * (every calendar shown), so an older snapshot restores cleanly with no version bump (see
+   * validateGenerativeTab + validateHiddenCalendars). Only google-calendar tabs ever carry
+   * it; the other generative panels never set it.
+   */
+  hiddenCalendars?: string[]
 }
 
 /**
@@ -232,6 +265,15 @@ export interface SessionSnapshot {
    * A missing/partial map normalizes each key to `false` at the boundary (FR-008/FR-018).
    */
   enabled: EnabledIntegrations
+  /**
+   * The collapsed Open-Prompt logo button's GLOBALLY-SHARED position
+   * (draggable-open-prompt-button-v1, FR-003/FR-007/FR-008) — a normalized fraction of
+   * the panel content area, origin top-left, both components in `[0,1]`. ADDITIVE +
+   * OPTIONAL (NO schema bump): absent ⇒ the centered-bottom default on restore (FR-011).
+   * NON-SECRET: two numbers only — no token/path (FR-010). A present-but-malformed value
+   * is clamped/dropped at the main boundary (validateOpenPromptPosition).
+   */
+  openPromptPosition?: { xFrac: number; yFrac: number }
 }
 
 /** The four generative render targets that own a persisted panel. */

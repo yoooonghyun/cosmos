@@ -237,6 +237,58 @@ export function shouldReleaseInFlightOnCompleted(
 }
 
 /**
+ * Whether a freshly-submitted tab should enter the per-tab `inFlight` (spinner) state at
+ * SEND time (ui-catalog-pull-spinner-signal-v1 — "spinner ON only when UI generation begins,
+ * OFF for a plain MCP run").
+ *
+ * THE EVENT MODEL (now with a TRUE early signal). The render MCP surface is split into
+ * `get_ui_catalog()` + `render_ui(spec)`: the agent MUST pull the catalog before it can
+ * author a surface, and that pull fires a non-secret `ui:generatingBegin` IPC frame the
+ * MOMENT generation begins — BEFORE the surface is composed. So the renderer no longer needs
+ * to spin optimistically at submit; it gates the spinner on that EARLY begin-signal instead.
+ *
+ * Decision: submit does NOT optimistically engage the spinner (this returns `false`). The
+ * per-tab `inFlight` is turned ON by the `ui:generatingBegin` subscription for the originating
+ * tab (see `useGenerativePanelTabs`), and turned OFF by the existing stop conditions: the
+ * `ui:render` surface land OR the `completed`/`error` run-end release
+ * ({@link shouldReleaseInFlightOnCompleted}). A plain MCP/command run never pulls the catalog,
+ * so it never emits the begin-signal and never shows the spinner — eliminating the prior
+ * residual flicker. The composer stays INTERACTIVE throughout
+ * ({@link composerInteractiveAfterSubmit}) — the spinner lives on the SURFACE, never locks input.
+ *
+ * Pure constant `false` (submit no longer optimistically spins; the begin-signal is the gate).
+ * Kept as a named, documented, node-testable helper.
+ */
+export function inFlightOnSubmit(): boolean {
+  return false
+}
+
+/**
+ * Whether the Open Prompt composer stays INTERACTIVE (typeable + sendable) immediately
+ * after an accepted submit (open-prompt-spinner-gating — "non-UI submit must not block").
+ *
+ * THE BLOCK: on submit the composer set a local `running` flag (and `agent:status`
+ * `started` keeps it set) that stays true for the ENTIRE agent run — only cleared on
+ * `completed`/`error`. While `running`, the reopened composer is dead: the textarea is
+ * `disabled`, the Send button is disabled (`canSubmit = !running && …`), and
+ * `submitDecision` rejects (`running === true`). So after a plain fire-and-forget submit the
+ * user can reopen the logo but cannot type or send again until the run ends — a long plain
+ * command effectively blocks the UI.
+ *
+ * Decision: a plain submit is fire-and-forget — the composer returns to a usable state
+ * immediately. Since there is NO early "this will generate UI" signal (the only UI signal is
+ * the `ui:render` surface landing later, which renders in the surface area and never locks
+ * the composer), default to INTERACTIVE. If a surface lands later it still renders; the
+ * composer is never locked for the run's duration.
+ *
+ * Pure constant `true` (nothing at send time should disable the composer for the run). Kept
+ * as a named, documented, node-testable helper — the dual of {@link inFlightOnSubmit}.
+ */
+export function composerInteractiveAfterSubmit(): boolean {
+  return true
+}
+
+/**
  * The "Sent" hint state (open-prompt-spinner-gating-v1, OQ-3). A transient, non-blocking
  * acknowledgement for a PLAIN (non-spinner) submit now that the "Generating…" blocking
  * spinner is suppressed for a no-surface run. It NEVER sets `busy` (the composer stays

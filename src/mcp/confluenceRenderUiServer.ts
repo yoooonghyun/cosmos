@@ -26,11 +26,13 @@ import { z } from 'zod'
 import {
   bridgeSocketPath,
   encodeBridgeMessage,
+  type BridgeGeneratingNotification,
   type BridgeRenderRequest,
   type BridgeServerMessage
 } from '../shared/bridge'
 import { validateSurfaceUpdate } from '../shared/validate'
 import { CONFLUENCE_TOOL_DESCRIPTION } from './confluenceToolDescription'
+import { registerGetUiCatalogTool } from './uiCatalog'
 import { BindingsFirstEnforcer } from '../shared/dataBearingSpec'
 import { ConfluenceAdapterSource } from '../shared/confluence'
 import type { A2uiAction } from '../shared/ipc'
@@ -151,6 +153,31 @@ class BridgeClient {
       })
     })
   }
+
+  /**
+   * Fire the EARLY "UI generation has begun" begin-signal (ui-catalog-pull-spinner-signal-v1,
+   * FR-003): a fire-and-forget `{ kind:'generating' }` frame over the SAME bridge socket when
+   * `get_ui_catalog` is called. NO waiter (main sends no result). BEST-EFFORT: a bridge-down or
+   * write failure is swallowed so the catalog still returns (FR-010/FR-012).
+   */
+  async notifyGenerating(target?: BridgeGeneratingNotification['target']): Promise<void> {
+    let socket: Socket
+    try {
+      socket = await this.ensureConnected()
+    } catch {
+      return
+    }
+    const frame: BridgeGeneratingNotification = {
+      kind: 'generating',
+      callId: randomUUID(),
+      ...(target ? { target } : {})
+    }
+    try {
+      socket.write(encodeBridgeMessage(frame))
+    } catch {
+      // swallow — the catalog must still return.
+    }
+  }
 }
 
 /** The valid Confluence `dataSource` ids (bindings-first v3): the adapter source ids, NOT the read-tool names. */
@@ -191,6 +218,12 @@ async function main(): Promise<void> {
   // (the model resubmits with a binding per container), bounded by the cap → render-anyway.
   const enforcer = new BindingsFirstEnforcer()
   const server = new McpServer({ name: 'cosmos-confluence-render-ui', version: '0.1.0' })
+
+  // ui-catalog-pull-spinner-signal-v1 (FR-001/FR-002): shared `get_ui_catalog` — pull fires the
+  // begin-signal for THIS server's target ('confluence'). Byte-identical helper; best-effort notify.
+  registerGetUiCatalogTool(server, {
+    onGenerating: () => void bridge.notifyGenerating('confluence')
+  })
 
   server.registerTool(
     'render_confluence_ui',

@@ -166,10 +166,12 @@ export function ReconnectState({
  */
 export function ConnectionStatus({
   status,
-  onDisconnect
+  onDisconnect,
+  onCancel
 }: {
   status: AtlassianStatus
   onDisconnect: () => void
+  onCancel: () => void
 }): React.JSX.Element {
   return (
     <>
@@ -182,7 +184,7 @@ export function ConnectionStatus({
             <Loader2 className="size-3 animate-spin" />
             Connecting…
           </span>
-          <Button type="button" variant="ghost" size="xs" onClick={onDisconnect}>
+          <Button type="button" variant="ghost" size="xs" onClick={onCancel}>
             Cancel
           </Button>
         </>

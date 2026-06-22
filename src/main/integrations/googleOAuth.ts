@@ -63,6 +63,8 @@ export interface RunGoogleOAuthDeps {
   fetchImpl?: FetchLike
   /** Injectable http-server factory (tests pass a fake). */
   serverFactory?: ServerFactory
+  /** Optional abort handle to cancel an in-flight connect (threaded to the loopback wait). */
+  signal?: AbortSignal
 }
 
 /** A completed Google OAuth — tokens + non-secret account identity. */
@@ -109,6 +111,7 @@ export async function runGoogleOAuth(deps: RunGoogleOAuthDeps): Promise<GoogleOA
     expectedState: state,
     timeoutMs: OAUTH_TIMEOUT_MS,
     serverFactory: deps.serverFactory,
+    ...(deps.signal ? { signal: deps.signal } : {}),
     onListening: (boundPort) => {
       const authorizeUrl = buildAuthorizeUrl({
         authorizeEndpoint: GOOGLE_AUTHORIZE_ENDPOINT,

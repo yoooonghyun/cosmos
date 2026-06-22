@@ -67,6 +67,9 @@ import { surfaceSpinnerVisible } from './promptComposerLogic'
 import { usePerTabNav } from './usePerTabNav'
 import { useTabShortcuts } from './useTabShortcuts'
 import { canSubmitSlackMessage } from './slackComposerLogic'
+import { useConfirm } from './useConfirm'
+import { ConfirmDialog } from '@/components/ui/confirm-dialog'
+import { confirmCopy } from './confirmLogic'
 import type {
   SlackChannel,
   SlackConnectionStatus,
@@ -272,10 +275,12 @@ const SLACK_NAV_DEFAULT: SlackNav = { view: { kind: 'channels' }, searchText: ''
 
 function ConnectionStatus({
   status,
-  onDisconnect
+  onDisconnect,
+  onCancel
 }: {
   status: SlackConnectionStatus
   onDisconnect: () => void
+  onCancel: () => void
 }): React.JSX.Element {
   return (
     <>
@@ -288,7 +293,7 @@ function ConnectionStatus({
             <Loader2 className="size-3 animate-spin" />
             Validating token…
           </span>
-          <Button type="button" variant="ghost" size="xs" onClick={onDisconnect}>
+          <Button type="button" variant="ghost" size="xs" onClick={onCancel}>
             Cancel
           </Button>
         </>
@@ -1190,6 +1195,18 @@ export function SlackPanel({ active }: { active: boolean }): React.JSX.Element {
     clearAllNav()
   }, [clearAllNav])
 
+  // disconnect-confirm-modal-v1: gate the footer Disconnect behind a confirm modal —
+  // clicking it OPENS the modal; the real `disconnect()` runs only on confirm.
+  const confirmDisconnect = useConfirm()
+
+  // oauth-cancel-v1: abort an in-flight connect (the user cancelled the browser consent) so
+  // the panel returns to not_connected immediately and Connect is clickable again.
+  const cancelConnect = useCallback(async () => {
+    const next = await window.cosmos.slack.cancelConnect()
+    setStatus(next)
+    setBusy(false)
+  }, [])
+
   /**
    * Re-sync the connection status (used when a read reports reconnect_needed). The
    * manager has already flipped state, so this pulls the fresh status and the panel
@@ -1493,7 +1510,29 @@ export function SlackPanel({ active }: { active: boolean }): React.JSX.Element {
         surfaceName="Slack"
         icon={MessageSquare}
         activeTab={activeStripTab}
-        right={<ConnectionStatus status={status} onDisconnect={() => void disconnect()} />}
+        right={
+          <ConnectionStatus
+            status={status}
+            onDisconnect={() =>
+              confirmDisconnect.requestConfirm({ integration: 'slack', label: 'Slack' }, () =>
+                void disconnect()
+              )
+            }
+            onCancel={() => void cancelConnect()}
+          />
+        }
+      />
+
+      <ConfirmDialog
+        open={confirmDisconnect.state.open}
+        title={confirmCopy('Slack').title}
+        description={confirmCopy('Slack').body}
+        onConfirm={confirmDisconnect.confirm}
+        onOpenChange={(next) => {
+          if (!next) {
+            confirmDisconnect.cancel()
+          }
+        }}
       />
     </section>
   )

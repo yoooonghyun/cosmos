@@ -75,3 +75,36 @@ export const CalendarNavContext = createContext<CalendarNavValue | null>(null)
 export function useCalendarNav(): CalendarNavValue | null {
   return useContext(CalendarNavContext)
 }
+
+/* ------------------------------------------------------------------------- *
+ * CalendarVisibilityContext — the panel-injected, PERSISTED hidden-calendar set
+ * (calendar-selection-persistence).
+ *
+ * The catalog's `EventList` used to own the hidden-set as per-surface `useState`. That
+ * state remounted on every view navigation (Month↔Week↔Day re-issues the default-view
+ * request → a fresh surface → a fresh `EventList` → the set re-seeded from Google's
+ * `selected`, discarding the user's toggles) AND never persisted (it reset on restart).
+ *
+ * The PANEL now owns the set (seeded from the persisted session snapshot, reported back
+ * on every toggle) and injects it here for the live default view. Non-null ⇒ `EventList`
+ * reads/writes THIS set (survives the remount, persists). Null (composed snapshot /
+ * disconnected / agent-MCP path) ⇒ `EventList` falls back to its own ephemeral local
+ * state, byte-for-byte the old behavior. Renderer-only; the set crosses IPC only as the
+ * non-secret `hiddenCalendars` string[] in the session snapshot.
+ * ------------------------------------------------------------------------- */
+
+/** The panel-injected hidden-set + its toggle, or null when not the live default view. */
+export interface CalendarVisibilityValue {
+  /** The currently HIDDEN calendar ids (a deselected calendar's events are dropped). */
+  hidden: Set<string>
+  /** Flip one calendar id between shown/hidden; the panel persists the new set. */
+  onToggle: (id: string) => void
+}
+
+/** Null when the grid is NOT the live default view (composed snapshot / disconnected). */
+export const CalendarVisibilityContext = createContext<CalendarVisibilityValue | null>(null)
+
+/** Read the panel-injected persisted hidden-set wiring, or `null` when not offered. */
+export function useCalendarVisibility(): CalendarVisibilityValue | null {
+  return useContext(CalendarVisibilityContext)
+}

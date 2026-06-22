@@ -374,6 +374,42 @@ describe('JiraClient.createIssue (Jira write-extend v1, FR-011, OQ1)', () => {
     }
   })
 
+  // jira-create-parent-v1 (FR-002, SC-001) — optional fields.parent.
+  it('includes fields.parent = { key } in the POST body when parentKey is set', async () => {
+    let capturedBody: string | undefined
+    const fetchImpl: FetchLike = async (_url, init) => {
+      capturedBody = init?.body
+      return res({ id: '10043', key: 'ABC-43' }, 201)
+    }
+    const client = new JiraClient({ fetchImpl })
+    const result = await client.createIssue(auth, {
+      projectKey: 'ABC',
+      issueType: 'Sub-task',
+      summary: 'Nested',
+      description: '',
+      parentKey: 'ABC-1'
+    })
+    expect(capturedBody).toContain('"parent":{"key":"ABC-1"}')
+    expect(result.ok).toBe(true)
+  })
+
+  it('OMITS the parent key entirely when parentKey is absent (byte-identical to today — FR-002)', async () => {
+    let capturedBody: string | undefined
+    const fetchImpl: FetchLike = async (_url, init) => {
+      capturedBody = init?.body
+      return res({ id: '10044', key: 'ABC-44' }, 201)
+    }
+    const client = new JiraClient({ fetchImpl })
+    await client.createIssue(auth, {
+      projectKey: 'ABC',
+      issueType: 'Task',
+      summary: 'Top-level',
+      description: ''
+    })
+    expect(capturedBody).not.toContain('parent')
+    expect(JSON.parse(capturedBody ?? '{}').fields).not.toHaveProperty('parent')
+  })
+
   it('returns a recoverable network error when the project needs extra required fields (HTTP 400 — FR-002, no createmeta)', async () => {
     const client = new JiraClient({ fetchImpl: async () => res({ errors: { customfield_1: 'required' } }, 400) })
     const result = await client.createIssue(auth, {

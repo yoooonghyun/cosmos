@@ -133,8 +133,23 @@ export interface BridgeResultResponse {
   action: A2uiAction
 }
 
+/**
+ * S->M. A render server signals "the agent began composing UI" — it called
+ * `get_ui_catalog` (ui-catalog-pull-spinner-signal-v1, FR-003). FIRE-AND-FORGET: main
+ * forwards a non-secret begin-signal to the renderer and sends NO `BridgeResultResponse`
+ * for it (the `get_ui_catalog` tool returns the catalog LOCALLY, not via this frame).
+ * NON-SECRET: target only — no token, transcript, spec, or surface content.
+ */
+export interface BridgeGeneratingNotification {
+  kind: 'generating'
+  /** Entry-script-side correlation id for the get_ui_catalog call (debug/trace only). */
+  callId: string
+  /** Which panel this UI generation targets; ABSENT ⇒ main defaults it to 'generated-ui'. */
+  target?: UiRenderTarget
+}
+
 /** Any message the entry script sends to main over the socket. */
-export type BridgeClientMessage = BridgeRenderRequest
+export type BridgeClientMessage = BridgeRenderRequest | BridgeGeneratingNotification
 
 /** Any message main sends back to the entry script over the socket. */
 export type BridgeServerMessage = BridgeResultResponse

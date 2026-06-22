@@ -52,6 +52,9 @@ import { useRestoredGenerativePanel } from './SessionProvider'
 import { surfaceSpinnerVisible } from './promptComposerLogic'
 import { usePerTabNav } from './usePerTabNav'
 import { useTabShortcuts } from './useTabShortcuts'
+import { useConfirm } from './useConfirm'
+import { ConfirmDialog } from '@/components/ui/confirm-dialog'
+import { confirmCopy } from './confirmLogic'
 import type {
   ConfluenceConnectionStatus,
   ConfluenceError,
@@ -477,6 +480,17 @@ export function ConfluencePanel({ active }: { active: boolean }): React.JSX.Elem
     clearAllNav()
   }, [clearAllNav])
 
+  // disconnect-confirm-modal-v1: gate the footer Disconnect behind a confirm modal.
+  const confirmDisconnect = useConfirm()
+
+  // oauth-cancel-v1: abort an in-flight connect (the user cancelled the browser consent) so
+  // the panel returns to not_connected immediately and Connect is clickable again.
+  const cancelConnect = useCallback(async () => {
+    const next = await window.cosmos.confluence.cancelConnect()
+    setStatus(next)
+    setBusy(false)
+  }, [])
+
   const refreshStatus = useCallback(async () => {
     const next = await window.cosmos.confluence.getStatus()
     setStatus(next)
@@ -749,7 +763,30 @@ export function ConfluencePanel({ active }: { active: boolean }): React.JSX.Elem
         surfaceName="Confluence"
         icon={BookText}
         activeTab={activeStripTab}
-        right={<ConnectionStatus status={status} onDisconnect={() => void disconnect()} />}
+        right={
+          <ConnectionStatus
+            status={status}
+            onDisconnect={() =>
+              confirmDisconnect.requestConfirm(
+                { integration: 'confluence', label: 'Confluence' },
+                () => void disconnect()
+              )
+            }
+            onCancel={() => void cancelConnect()}
+          />
+        }
+      />
+
+      <ConfirmDialog
+        open={confirmDisconnect.state.open}
+        title={confirmCopy('Confluence').title}
+        description={confirmCopy('Confluence').body}
+        onConfirm={confirmDisconnect.confirm}
+        onOpenChange={(next) => {
+          if (!next) {
+            confirmDisconnect.cancel()
+          }
+        }}
       />
     </section>
   )

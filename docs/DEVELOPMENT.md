@@ -56,6 +56,22 @@ catalogue of conventions and hard-won gotchas. The file-by-file source map lives
 - **Adding an MCP server** (stdio entry under `src/mcp/`) requires a matching rollup `input`
   in `electron.vite.config.ts` so it builds to `out/main/mcp/<name>.js` — the path
   `embeddedMcpConfig` registers. Without the input the server silently never gets bundled.
+- **The render surface is TWO tools: `get_ui_catalog()` + `render_*_ui(spec)`**
+  (ui-catalog-pull-spinner-signal-v1). The A2UI catalog text is single-sourced in
+  `src/mcp/uiCatalog.ts` (`A2UI_CATALOG_TEXT` + `registerGetUiCatalogTool`) and registered
+  BYTE-IDENTICALLY in all five render servers — the render tool's own description is SLIMMED so
+  the agent must pull the catalog first. **A new render server MUST also**: (1) call
+  `registerGetUiCatalogTool(server, { onGenerating: () => void bridge.notifyGenerating(<target>) })`,
+  (2) add a `BridgeClient.notifyGenerating(target?)` that writes a fire-and-forget
+  `{ kind:'generating', callId, target }` frame over the SAME `UiBridge` socket (swallow errors —
+  a missing bridge must NOT fail the catalog return), (3) grant its `get_ui_catalog` tool in
+  `allowedToolForTarget` and add the catalog-pull clause in `groundingPromptForTarget`. The
+  `get_ui_catalog` pull is the EARLY "UI generation has begun" signal: `UiBridge` forwards it as the
+  `ui:generatingBegin` IPC (target-only, non-secret) which the renderer uses to turn the originating
+  tab's spinner ON (`useGenerativePanelTabs` + `inFlightOnSubmit()` now returns `false`). No new
+  server FILE is added for get_ui_catalog (existing servers extend), so NO new rollup input is
+  needed. **`window.cosmos.ui.onGeneratingBegin` is a NEW preload method — a full `npm run dev`
+  restart is required (HMR leaves it "not a function").**
 - **Generative-UI panels are target-routed end to end.** A panel (Jira/Slack/Confluence) is
   generative when a `PromptComposer` utterance drives a headless `AgentRunner` run for that
   `target`. The per-target policy lives in `mcpConfig.ts` (`renderMcpConfigJsonForTarget`,
@@ -354,6 +370,28 @@ single new `window.cosmos.session` namespace in `src/shared/ipc.ts` (`session:lo
   plan's checklist). On `save`, an invalid/old-schema/corrupt payload → warn + ignore + KEEP the
   existing file. On `load`, a missing/corrupt/unknown-version file → warn + clean empty session
   (`emptySnapshot`). Bad individual tabs are dropped, not fatal.
+- **`validateSnapshot` is a HARD equality gate on `schemaVersion` — so a purely-ADDITIVE optional
+  field MUST NOT bump `SESSION_SCHEMA_VERSION`.** `if (value.schemaVersion !== SESSION_SCHEMA_VERSION)
+  return null` makes any version mismatch wipe the ENTIRE restored session to `emptySnapshot` (terminal
+  tabs + cwd + open files all gone — the terminal pane resets to the "Open a folder" placeholder).
+  Because every per-field validator already defaults gracefully when its field is absent
+  (`validateHiddenCalendars(undefined)`→[], `validateOpenFiles`/`validateEnabled` likewise), an
+  additive OPTIONAL field needs NO bump — an older snapshot simply restores with that field absent.
+  Mirror the established additive pattern: `openFiles` was added to `TerminalTabSnapshot` and
+  per-tab `hiddenCalendars` to `GenerativeTabSnapshot`, BOTH without a bump. ONLY bump the version for
+  a BREAKING shape change (a field whose absence/old form can't be safely defaulted). A needless bump
+  is a regression that silently discards the user's working session (calendar-selection-persistence
+  bumped 8→9 for an additive field and wiped the terminal on every refresh — reverted to 8).
+- **Per-generative-tab UI selection lives on the tab record, not a top-level snapshot field.** The
+  Google Calendar legend's hidden (deselected) calendar ids are persisted PER TAB as the additive
+  `GenerativeTabSnapshot.hiddenCalendars` (validated in `validateGenerativeTab` via the shared
+  `validateHiddenCalendars`), so each google-calendar tab keeps its own independent selection. The
+  renderer keys the set by tab id: `GoogleCalendarPanel` reads the active tab's `GenerativeTab.hiddenCalendars`,
+  injects it through `CalendarVisibilityContext`, and writes every toggle back with
+  `update(activeTabId, { hiddenCalendars })` so it round-trips through that tab's snapshot
+  (build/hydrate in `src/renderer/sessionSnapshot.ts`). There is NO global `hiddenCalendars` and NO
+  `SessionRegistry.setHiddenCalendars` — a per-tab UI preference rides the tab's own persisted record,
+  not a snapshot-wide field, so it can't leak across tabs.
 - **Main owns the terminal session id (decision D2).** The renderer never mints or sees the `claude`
   session UUID. Main keeps `terminalSessionMap` (paneId → `{sessionId, cwd}`) and `terminalResumeMap`
   (paneId → queued resume). `paneSpawnFor(paneId, sandboxDir)`: if a resume is queued (re-seeded from
@@ -578,6 +616,20 @@ single new `window.cosmos.session` namespace in `src/shared/ipc.ts` (`session:lo
   plain `logic.ts` beside `components.tsx` and test that (`logic.test.ts`). Each catalog dir is
   `components.tsx` + `logic.ts` + `logic.test.ts` + `index.ts`. The same split is why pure tab
   logic lives in `panelTabs.ts` (node-testable) separate from `PanelTabStrip.tsx`.
+
+## Terminal key bindings (macOS readline chords)
+
+xterm.js forwards raw arrow keys to the PTY but does NOT translate the macOS Cmd/Option arrow
+chords that iTerm/Terminal.app map to readline line/word motion, nor emit a soft newline for
+Shift/Option+Enter — so word/line motion + newline-without-submit don't work in the embedded
+`claude` prompt by default. The pure mapping lives in `src/renderer/terminalKeymap.ts`
+(`mapTerminalKey(e) → bytes | null`, node-tested in `terminalKeymap.test.ts`) and is wired in
+`TerminalView`'s mount effect via `term.attachCustomKeyEventHandler` — a non-null result is written
+through the existing `window.cosmos.pty.sendInput` path and returns `false` to suppress xterm's
+default; `null` returns `true` so plain typing/Enter-submit/Ctrl-C/paste are untouched. Only keydown
+is acted on (keyup would double-send). Table: Cmd+Left `\x01`, Cmd+Right `\x05`, Option+Left `\x1bb`,
+Option+Right `\x1bf`, Shift/Option+Enter `\x1b\r`. Add new chords to the pure module + its test, never
+inline in the effect.
 
 ## Terminal file explorer (terminal-file-explorer-v1)
 

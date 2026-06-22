@@ -26,9 +26,11 @@ import { z } from 'zod'
 import {
   bridgeSocketPath,
   encodeBridgeMessage,
+  type BridgeGeneratingNotification,
   type BridgeRenderRequest,
   type BridgeServerMessage
 } from '../shared/bridge'
+import { registerGetUiCatalogTool } from './uiCatalog'
 import { validateSurfaceUpdate } from '../shared/validate'
 import { AdapterFlagPath } from '../shared/adapter'
 import { BindingsFirstEnforcer } from '../shared/dataBearingSpec'
@@ -151,6 +153,31 @@ class BridgeClient {
       })
     })
   }
+
+  /**
+   * Fire the EARLY "UI generation has begun" begin-signal (ui-catalog-pull-spinner-signal-v1,
+   * FR-003): a fire-and-forget `{ kind:'generating' }` frame over the SAME bridge socket when
+   * `get_ui_catalog` is called. NO waiter (main sends no result). BEST-EFFORT: a bridge-down or
+   * write failure is swallowed so the catalog still returns (FR-010/FR-012).
+   */
+  async notifyGenerating(target?: BridgeGeneratingNotification['target']): Promise<void> {
+    let socket: Socket
+    try {
+      socket = await this.ensureConnected()
+    } catch {
+      return
+    }
+    const frame: BridgeGeneratingNotification = {
+      kind: 'generating',
+      callId: randomUUID(),
+      ...(target ? { target } : {})
+    }
+    try {
+      socket.write(encodeBridgeMessage(frame))
+    } catch {
+      // swallow — the catalog must still return.
+    }
+  }
 }
 
 /**
@@ -164,6 +191,8 @@ const SLACK_TOOL_DESCRIPTION = [
   'Render a Slack UI surface in the cosmos Slack panel using the Slack custom catalog',
   "(catalogId: 'slack'). Use this for channel lists, message history/threads, search",
   'results, and user references — it matches the native Slack panel chrome.',
+  '',
+  'ALWAYS call get_ui_catalog first to get the component catalog and authoring rules.',
   '',
   'ARGUMENT: { spec: { surfaceId: string, components: Component[] } } — A2UI 0.9.',
   'components is a FLAT array; each is { "id": "<unique>", "component": "<Type>", ...props }.',
@@ -266,6 +295,10 @@ async function main(): Promise<void> {
   // (the model resubmits with a binding per container), bounded by the cap → render-anyway.
   const enforcer = new BindingsFirstEnforcer()
   const server = new McpServer({ name: 'cosmos-slack-render-ui', version: '0.1.0' })
+
+  // ui-catalog-pull-spinner-signal-v1 (FR-001/FR-002): shared `get_ui_catalog` — pull fires the
+  // begin-signal for THIS server's target ('slack'). Byte-identical helper; notify is best-effort.
+  registerGetUiCatalogTool(server, { onGenerating: () => void bridge.notifyGenerating('slack') })
 
   server.registerTool(
     'render_slack_ui',

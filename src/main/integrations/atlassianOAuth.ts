@@ -66,6 +66,8 @@ export interface RunAtlassianOAuthDeps {
   fetchImpl?: FetchLike
   /** Injectable http-server factory (tests pass a fake). */
   serverFactory?: ServerFactory
+  /** Optional abort handle to cancel an in-flight connect (threaded to the loopback wait). */
+  signal?: AbortSignal
 }
 
 /** A completed Atlassian OAuth — tokens + non-secret site/account identity (FR-A07/A08). */
@@ -191,6 +193,7 @@ export async function runAtlassianOAuth(
     expectedState: state,
     timeoutMs: OAUTH_TIMEOUT_MS,
     serverFactory: deps.serverFactory,
+    ...(deps.signal ? { signal: deps.signal } : {}),
     onListening: (boundPort) => {
       const authorizeUrl = buildAuthorizeUrl({
         authorizeEndpoint: ATLASSIAN_AUTHORIZE_ENDPOINT,

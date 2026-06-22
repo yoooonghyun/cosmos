@@ -49,6 +49,20 @@ describe('assembleSnapshot', () => {
     expect(snap.panels.terminal.tabs[0].id).toBe('p1')
     expect(snap.panels.terminal.everOpened).toBe(1)
   })
+
+  // draggable-open-prompt-button-v1 (FR-008): the global Open-Prompt position is an
+  // additive OPTIONAL top-level field — omitted when unreported (older/clean session ⇒
+  // default), included verbatim when contributed.
+  it('OMITS openPromptPosition when none was contributed (NO schema bump)', () => {
+    const snap = assembleSnapshot({})
+    expect(snap.schemaVersion).toBe(SESSION_SCHEMA_VERSION)
+    expect(snap).not.toHaveProperty('openPromptPosition')
+  })
+
+  it('passes a contributed openPromptPosition through verbatim (two numbers only)', () => {
+    const snap = assembleSnapshot({ openPromptPosition: { xFrac: 0.2, yFrac: 0.9 } })
+    expect(snap.openPromptPosition).toEqual({ xFrac: 0.2, yFrac: 0.9 })
+  })
 })
 
 describe('SessionRegistry — debounced save (FR-007)', () => {
@@ -85,5 +99,20 @@ describe('SessionRegistry — debounced save (FR-007)', () => {
     reg.flush()
     expect(save.mock.calls[0][0].panels.terminal.tabs).toHaveLength(0)
     expect(save.mock.calls[0][0].panels.terminal.everOpened).toBe(2)
+  })
+
+  // draggable-open-prompt-button-v1 (FR-003/FR-007): the global Open-Prompt position
+  // reports through the NON-panel `setOpenPromptPosition` path (mirrors `setEnabled`) and
+  // lands in the debounced save; the latest reported value wins.
+  it('setOpenPromptPosition lands the position in the debounced save (latest wins)', () => {
+    const save = vi.fn()
+    const sched = makeScheduler()
+    const reg = new SessionRegistry(save, sched, 600)
+    reg.setOpenPromptPosition({ xFrac: 0.1, yFrac: 0.1 })
+    reg.setOpenPromptPosition({ xFrac: 0.7, yFrac: 0.7 })
+    expect(save).not.toHaveBeenCalled() // trailing debounce
+    sched.run()
+    expect(save).toHaveBeenCalledTimes(1)
+    expect(save.mock.calls[0][0].openPromptPosition).toEqual({ xFrac: 0.7, yFrac: 0.7 })
   })
 })

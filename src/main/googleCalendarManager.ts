@@ -52,8 +52,11 @@ export interface GoogleCalendarManagerDeps {
    * Run the Google desktop OAuth flow (opens the browser, captures the redirect,
    * exchanges the code, resolves identity). Injected so the state machine is
    * unit-testable (main wires this to {@link runGoogleOAuth} with the Calendar scope).
+   * The optional `signal` is threaded to the loopback wait so
+   * {@link GoogleCalendarManager.cancelConnect} can abort an in-flight connect instead of
+   * waiting out the 3-minute OAuth timeout.
    */
-  runOAuth: () => Promise<GoogleOAuthResult>
+  runOAuth: (signal?: AbortSignal) => Promise<GoogleOAuthResult>
   /** Refresh the access token; main wires {@link refreshGoogleToken}. Non-rotating. */
   refresh: GoogleRefreshFn
   /** Notify on every state change (main wires this to `googleCalendar:statusChanged`). */
@@ -64,6 +67,11 @@ export class GoogleCalendarManager {
   private readonly deps: GoogleCalendarManagerDeps
   private state: GoogleCalendarConnectionStatus['state'] = 'not_connected'
   private lastError: string | null = null
+  /**
+   * Abort handle for the in-flight connect (oauth-cancel-v1). Held only while `connecting`
+   * so {@link cancelConnect} can abort the pending loopback wait. Cleared when connect settles.
+   */
+  private connectAbort: AbortController | null = null
 
   constructor(deps: GoogleCalendarManagerDeps) {
     this.deps = deps
@@ -102,17 +110,25 @@ export class GoogleCalendarManager {
       return this.getStatus()
     }
     this.lastError = null
+    const abort = new AbortController()
+    this.connectAbort = abort
     this.setState('connecting')
 
     let oauth: GoogleOAuthResult
     try {
-      oauth = await this.deps.runOAuth()
+      oauth = await this.deps.runOAuth(abort.signal)
     } catch (err) {
-      this.lastError = 'Google Calendar connection was cancelled or failed. Click Connect to try again.'
-      console.error('[google-calendar] connect failed:', err instanceof Error ? err.message : err)
-      this.setState('not_connected')
+      // A user cancel (cancelConnect aborted the signal) already reset state with its own
+      // gentle message; the `connectAbort === abort` guard keeps this branch from clobbering it.
+      if (this.connectAbort === abort) {
+        this.lastError = 'Google Calendar connection was cancelled or failed. Click Connect to try again.'
+        this.connectAbort = null
+        console.error('[google-calendar] connect failed:', err instanceof Error ? err.message : err)
+        this.setState('not_connected')
+      }
       return this.getStatus()
     }
+    this.connectAbort = null
 
     this.deps.tokenStore.save(toStoredTokenSet(oauth))
     this.setState('connected')
@@ -123,6 +139,24 @@ export class GoogleCalendarManager {
   disconnect(): GoogleCalendarConnectionStatus {
     this.deps.tokenStore.clear()
     this.setState('not_connected')
+    return this.getStatus()
+  }
+
+  /**
+   * Abort an in-flight connect (oauth-cancel-v1). A cancelled browser consent sends no `error`
+   * redirect, so the loopback wait would hang until the 3-minute OAuth timeout. This aborts the
+   * pending wait and returns to not_connected so the user can retry. No-op when no connect is in
+   * flight; carries no token/secret.
+   */
+  cancelConnect(): GoogleCalendarConnectionStatus {
+    if (this.state !== 'connecting' || !this.connectAbort) {
+      return this.getStatus()
+    }
+    const abort = this.connectAbort
+    this.connectAbort = null
+    this.lastError = 'Connection cancelled.'
+    this.setState('not_connected')
+    abort.abort()
     return this.getStatus()
   }
 

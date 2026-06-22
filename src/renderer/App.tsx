@@ -15,6 +15,7 @@ import { GoogleCalendarPanel } from './GoogleCalendarPanel'
 import { SettingsDialog } from './SettingsDialog'
 import { CosmosSpinner } from './CosmosSpinner'
 import { SessionProvider, useEnabledIntegrations, useLoadSession } from './SessionProvider'
+import { OpenPromptPositionProvider } from './OpenPromptPositionProvider'
 import { resolveFallbackSurface, visibleSurfaceIds, type SurfaceId } from './railVisibility'
 import './App.css'
 
@@ -80,7 +81,13 @@ export function App(): React.JSX.Element {
 
   return (
     <SessionProvider snapshot={snapshot}>
-      <AppShell />
+      {/* draggable-open-prompt-button-v1 (FR-003): the global Open-Prompt button position
+          store. Inside SessionProvider so it seeds from the restored snapshot and reports
+          through the shared SessionRegistry; wraps the whole shell so every panel's
+          PromptComposer reads the one shared position. */}
+      <OpenPromptPositionProvider>
+        <AppShell />
+      </OpenPromptPositionProvider>
     </SessionProvider>
   )
 }

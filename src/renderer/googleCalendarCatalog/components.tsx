@@ -43,6 +43,7 @@ import { cn } from '@/lib/utils'
 import {
   useCalendarNav,
   useCalendarDetailSelectedId,
+  useCalendarVisibility,
   type CalendarNavValue,
   type CalendarViewKind
 } from './navContext'
@@ -71,6 +72,7 @@ import {
   eventTitle,
   isAllDay,
   seedHiddenCalendarIds,
+  visibleEvents,
   tokenColorClasses,
   type CalendarLegendData,
   type DayCellData,
@@ -132,7 +134,7 @@ function EventChip({
   // §1.2 all-day: tinted bar; timed: leading dot + time + title. The inner body is the
   // SAME markup whether inert or interactive — only the wrapping element changes.
   const body = isAllDay(event) ? (
-    <span className={cn('truncate rounded-sm px-1 py-0.5 text-[11px] leading-tight text-card-foreground', colors.bar)}>
+    <span className={cn('block w-full truncate rounded-sm px-1 py-0.5 text-[11px] leading-tight text-card-foreground', colors.bar)}>
       {title}
     </span>
   ) : (
@@ -818,23 +820,18 @@ function ScheduleView({
   onOpenDetail?: (event: EventChipData) => void
   selectedId?: string
 }): React.JSX.Element {
-  // Drop events owned by a hidden calendar BEFORE layout (parity with buildMonthGrid FR-011).
-  const visible = useMemo(() => {
-    const hidden = hiddenCalendarIds instanceof Set ? hiddenCalendarIds : undefined
-    const list = Array.isArray(events) ? events : []
-    return hidden
-      ? list.filter((ev) => !(typeof ev.calendarId === 'string' && hidden.has(ev.calendarId)))
-      : list
-  }, [events, hiddenCalendarIds])
+  // Drop events owned by a hidden calendar BEFORE layout via the SINGLE shared visibility
+  // filter (parity with the month grid; calendar-selection-persistence).
+  const visible = useMemo(() => visibleEvents(events, hiddenCalendarIds), [events, hiddenCalendarIds])
 
   const columns = useMemo(() => dayColumnsForWindow(timeMin, timeMax), [timeMin, timeMax])
   const isDay = columns.length <= 1
 
   return (
-    <div className="flex h-full min-h-0 flex-col gap-2" style={{ ['--cal-hour-h' as string]: '2.5rem' }}>
+    <div className="flex h-full min-h-0 min-w-0 flex-col gap-2" style={{ ['--cal-hour-h' as string]: '2.5rem' }}>
       {nav && <CalendarRangeNav nav={nav} />}
       <div
-        className="flex min-h-0 flex-1 overflow-auto rounded-lg border border-border"
+        className="flex w-full min-h-0 min-w-0 flex-1 overflow-auto rounded-lg border border-border"
         role="grid"
         aria-label={nav?.rangeLabel ?? 'Schedule'}
       >
@@ -927,20 +924,34 @@ export function EventList({
   // snapshot / disconnected) ⇒ the plain `<h2>` label, no controls (FR-016/FR-017).
   const nav = useCalendarNav()
 
-  // shared-calendars-v1 (FR-010): the renderer-only, EPHEMERAL hidden-set. Seeded from the
-  // legend's Google `selected` preference; NOT persisted (no session-schema bump). A new
-  // legend identity (a fresh surface) re-seeds it. Keying the seed on the joined ids keeps
-  // a re-render with the same calendars from resetting a user's in-session toggles.
+  // calendar-selection-persistence: the live default view injects a PANEL-OWNED, PERSISTED
+  // hidden-set + toggle (survives the view-nav remount AND restart). When present it WINS —
+  // the per-surface local state below is bypassed entirely, fixing both the week/day deselect
+  // bug (the old local set re-seeded on every view-nav remount) and the non-persistence bug.
+  const visibility = useCalendarVisibility()
+
+  // shared-calendars-v1 (FR-010): the renderer-only, EPHEMERAL fallback hidden-set used ONLY
+  // when no panel visibility context is injected (a composed snapshot / the agent-MCP render
+  // path). Seeded from the legend's Google `selected` preference. A new legend identity (a
+  // fresh surface) re-seeds it; keying the seed on the joined ids keeps a re-render with the
+  // same calendars from resetting in-session toggles.
   const seedKey = legend ? legend.map((c) => c.id ?? '').join('|') : ''
-  const [hidden, setHidden] = useState<Set<string>>(() => seedHiddenCalendarIds(legend))
+  const [localHidden, setLocalHidden] = useState<Set<string>>(() => seedHiddenCalendarIds(legend))
   useEffect(() => {
-    setHidden(seedHiddenCalendarIds(legend))
+    setLocalHidden(seedHiddenCalendarIds(legend))
     // Re-seed only when the SET of calendars changes (seedKey), not on every events tick.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [seedKey])
 
+  // The effective hidden-set + toggle: the persisted panel context when offered, else the
+  // ephemeral local state. Both views read the SAME `hidden` so a deselect is honored uniformly.
+  const hidden = visibility ? visibility.hidden : localHidden
   const toggle = (id: string): void => {
-    setHidden((prev) => {
+    if (visibility) {
+      visibility.onToggle(id)
+      return
+    }
+    setLocalHidden((prev) => {
       const next = new Set(prev)
       if (next.has(id)) {
         next.delete(id)
@@ -956,7 +967,7 @@ export function EventList({
   // display-only grid in DOM/tab order (FR-009); the grid column fills ALL remaining width
   // (`flex-1`, no max cap). `items-start` keeps a short rail from stretching to the grid's full height.
   return (
-    <div className="flex h-full flex-row items-stretch gap-3">
+    <div className="flex h-full w-full min-w-0 flex-row items-stretch gap-3">
       {legend && (
         <CalendarLegend calendars={legend} hidden={hidden} onToggle={toggle} />
       )}

@@ -120,6 +120,31 @@ describe('validateJiraCreate (FR-002, FR-006)', () => {
     expect(validateJiraCreate(null, warn)).toBeNull()
     expect(validateJiraCreate('x', warn)).toBeNull()
   })
+
+  // jira-create-parent-v1 (FR-003, SC-003) — optional parentKey.
+  it('carries a present parentKey, trimmed (FR-003)', () => {
+    const warn = vi.fn()
+    const out = validateJiraCreate(
+      { projectKey: 'P', issueType: 'Sub-task', summary: 'S', parentKey: '  PROJ-123  ' },
+      warn
+    )
+    expect(out).toEqual({ projectKey: 'P', issueType: 'Sub-task', summary: 'S', description: '', parentKey: 'PROJ-123' })
+    expect(warn).not.toHaveBeenCalled()
+  })
+
+  it('omits parentKey entirely when absent (no empty-string default — FR-003)', () => {
+    const out = validateJiraCreate({ projectKey: 'P', issueType: 'Task', summary: 'S' })
+    expect(out).not.toBeNull()
+    expect(out).not.toHaveProperty('parentKey')
+  })
+
+  it('rejects a present-but-empty/whitespace parentKey (warn + null — FR-003)', () => {
+    const warn = vi.fn()
+    expect(validateJiraCreate({ projectKey: 'P', issueType: 'Task', summary: 'S', parentKey: '' }, warn)).toBeNull()
+    expect(validateJiraCreate({ projectKey: 'P', issueType: 'Task', summary: 'S', parentKey: '   ' }, warn)).toBeNull()
+    expect(validateJiraCreate({ projectKey: 'P', issueType: 'Task', summary: 'S', parentKey: 5 }, warn)).toBeNull()
+    expect(warn).toHaveBeenCalled()
+  })
 })
 
 describe('validateJiraUpdate (FR-003, FR-006, OQ2)', () => {

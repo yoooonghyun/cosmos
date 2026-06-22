@@ -86,6 +86,28 @@ export function useRestoredTerminalPanel(): TerminalPanelSnapshot | undefined {
 }
 
 /**
+ * The restored GLOBAL Open-Prompt button position, or undefined for a clean / pre-feature
+ * session (draggable-open-prompt-button-v1). `OpenPromptPositionProvider` seeds its initial
+ * value from this `?? DEFAULT_OPEN_PROMPT_POSITION` (FR-011).
+ */
+export function useRestoredOpenPromptPosition():
+  | { xFrac: number; yFrac: number }
+  | undefined {
+  const { snapshot } = useSessionContext()
+  return snapshot?.openPromptPosition
+}
+
+/**
+ * The shared save coordinator (the live `SessionRegistry`). Exposed so the
+ * `OpenPromptPositionProvider` can report the global Open-Prompt position through the
+ * NON-panel `setOpenPromptPosition` path (mirrors how `useEnabledIntegrations` reports
+ * `enabled`). Stable for the app's lifetime.
+ */
+export function useSessionRegistry(): SessionRegistry {
+  return useSessionContext().registry
+}
+
+/**
  * Returns a stable `report` callback that pushes this panel's latest contribution to
  * the shared debounced save coordinator. Generative panels report a
  * `GenerativePanelSnapshot`; the terminal panel reports a `TerminalPanelDraft`.

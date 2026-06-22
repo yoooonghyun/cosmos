@@ -29,9 +29,11 @@ import {
   createState,
   exchangeCodeRaw,
   loopbackRedirectUri,
+  refreshToken as refreshTokenPkce,
   LOOPBACK_PORTS,
   type FetchLike,
-  type ServerFactory
+  type ServerFactory,
+  type TokenExchangeResult
 } from './oauthPkce'
 import {
   SLACK_AUTHORIZE_ENDPOINT,
@@ -51,14 +53,25 @@ export interface RunSlackOAuthDeps {
   fetchImpl?: FetchLike
   /** Injectable http-server factory (tests pass a fake). */
   serverFactory?: ServerFactory
+  /** Optional abort handle to cancel an in-flight connect (threaded to the loopback wait). */
+  signal?: AbortSignal
 }
 
 /** A completed Slack OAuth — the user token plus non-secret identity/capability. */
 export interface SlackOAuthResult {
-  /** User OAuth token (`xoxp-…`); the single token for every read. */
+  /** User OAuth token (`xoxp-…` / rotating `xoxe.xoxp-…`); the single token for every read. */
   userToken: string
   /** Granted user scopes (for capability checks like search availability). */
   scopes: string[]
+  /**
+   * Refresh token, present ONLY when the Slack app has token rotation enabled — the
+   * rotating user token is short-lived (slack-oauth-keeps-unlinking-v1). Absent for a
+   * classic non-expiring `xoxp` token. Persisted so the connection refreshes silently
+   * instead of expiring into reconnect_needed.
+   */
+  refreshToken?: string
+  /** Seconds until the rotating access token expires (rotation only); absent otherwise. */
+  expiresInSeconds?: number
   /** Workspace/team id (non-secret identity). */
   teamId?: string
   /** Workspace/team display name. */
@@ -83,9 +96,19 @@ export function mapSlackTokenResponse(raw: Record<string, unknown>): SlackOAuthR
   const scope = typeof authedUser?.scope === 'string' ? authedUser.scope : ''
   const scopes = scope ? scope.split(',') : []
   const team = isRecord(raw.team) ? raw.team : undefined
+  // Token rotation (slack-oauth-keeps-unlinking-v1): when the app has rotation enabled,
+  // the rotating user token carries a refresh_token + expires_in alongside it under
+  // authed_user. Capture both so the token can refresh instead of silently expiring.
+  // Absent for a classic non-expiring xoxp token — the result is byte-for-byte unchanged.
+  const refreshToken =
+    typeof authedUser?.refresh_token === 'string' ? authedUser.refresh_token : undefined
+  const expiresInSeconds =
+    typeof authedUser?.expires_in === 'number' ? authedUser.expires_in : undefined
   return {
     userToken,
     scopes,
+    ...(refreshToken ? { refreshToken } : {}),
+    ...(typeof expiresInSeconds === 'number' ? { expiresInSeconds } : {}),
     ...(typeof team?.id === 'string' ? { teamId: team.id } : {}),
     ...(typeof team?.name === 'string' ? { teamName: team.name } : {})
   }
@@ -105,6 +128,7 @@ export async function runSlackOAuth(deps: RunSlackOAuthDeps): Promise<SlackOAuth
     expectedState: state,
     timeoutMs: OAUTH_TIMEOUT_MS,
     serverFactory: deps.serverFactory,
+    ...(deps.signal ? { signal: deps.signal } : {}),
     onListening: (boundPort) => {
       const authorizeUrl = buildAuthorizeUrl({
         authorizeEndpoint: SLACK_AUTHORIZE_ENDPOINT,
@@ -128,4 +152,30 @@ export async function runSlackOAuth(deps: RunSlackOAuthDeps): Promise<SlackOAuth
     fetchImpl: deps.fetchImpl
   })
   return mapSlackTokenResponse(raw)
+}
+
+/** Inputs for a Slack rotating-token refresh (token rotation only). */
+export interface RefreshSlackOAuthDeps {
+  /** cosmos's registered public client id (from COSMOS_SLACK_CLIENT_ID). */
+  clientId: string
+  /** The refresh token persisted from a rotation-enabled connect. */
+  refreshToken: string
+  /** Injectable fetch (defaults to global). */
+  fetchImpl?: FetchLike
+}
+
+/**
+ * Refresh a rotating Slack user token (slack-oauth-keeps-unlinking-v1). PKCE public
+ * client — NO secret, exactly like connect. `oauth.v2.access` with
+ * `grant_type=refresh_token` returns the new token at the TOP level (`access_token`,
+ * `refresh_token`, `expires_in`), so the generic {@link refreshTokenPkce} maps it. Only
+ * invoked when a refresh token was persisted (classic non-expiring tokens never have one).
+ */
+export function refreshSlackToken(deps: RefreshSlackOAuthDeps): Promise<TokenExchangeResult> {
+  return refreshTokenPkce({
+    tokenEndpoint: SLACK_TOKEN_ENDPOINT,
+    clientId: deps.clientId,
+    refreshToken: deps.refreshToken,
+    fetchImpl: deps.fetchImpl
+  })
 }

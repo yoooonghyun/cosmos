@@ -58,6 +58,13 @@ function makeFakePty(command: string): FakePty {
   )
   fake.kill.mockImplementation(() => {
     fake.killed = true
+    // Real node-pty: `proc.kill()` defaults to SIGHUP and makes the PTY's
+    // `onExit` fire ASYNCHRONOUSLY with signal 1. Mirror that here so tests
+    // exercise the intentional-kill path the way the OS actually behaves
+    // (restart-pty-cwd regression). The fake fires synchronously for
+    // determinism; the manager must still suppress this exit for an intentional
+    // kill, and the timing does not change the assertions.
+    fake.exitCb?.({ exitCode: 0, signal: 1 })
   })
   fake.onData.mockImplementation((cb: (data: string) => void) => {
     fake.dataCb = cb
@@ -203,6 +210,31 @@ describe('PtyManager per-pane restart (panel-tabs v1, FR-026)', () => {
     expect(spawned[1].killed).toBe(false) // pane b untouched
     expect(manager.isRunning('a')).toBe(true)
   })
+
+  // terminal-restart-cwd-regression: a per-tab restart must respawn in the SAME
+  // working directory the pane was started in (the persisted/picked session cwd),
+  // NOT revert to the manager-default sandbox cwd. The file explorer roots on this
+  // cwd, so a regression here points a restarted/restored tab at the wrong directory.
+  it('restart respawns in the pane original cwd, not the default sandbox cwd', () => {
+    const { manager } = makeManager()
+    // Pane started in a specific directory (as a restored/picker-opened tab would be).
+    manager.start('a', { cwd: '/home/user/project' })
+    expect(lastSpawnCall().cwd).toBe('/home/user/project')
+    manager.restart('a')
+    // The respawn keeps the pane's directory; it does NOT fall back to '/tmp'.
+    expect(lastSpawnCall().cwd).toBe('/home/user/project')
+  })
+
+  // A restart is always a FRESH spawn (never `--resume`), so it must not re-arm the
+  // resume-failure window even when the pane was originally resumed.
+  it('restart does not carry the --resume flag from the original spawn', () => {
+    const { manager } = makeManager()
+    manager.start('a', { args: ['--resume', 'sess-1'], resume: true, cwd: '/work/dir' })
+    manager.restart('a')
+    const call = lastSpawnCall()
+    expect(call.cwd).toBe('/work/dir')
+    expect(call.args).not.toContain('--resume')
+  })
 })
 
 describe('PtyManager dispose isolation (panel-tabs v1, FR-023)', () => {
@@ -240,6 +272,61 @@ describe('PtyManager killAll (teardown)', () => {
     expect(manager.isRunning('b')).toBe(false)
     expect(manager.isRunning('c')).toBe(false)
     expect(exit).toEqual([])
+  })
+})
+
+/* ------------------------------------------------------------------------- *
+ * restart-pty-cwd regression — an INTENTIONAL kill must stay silent even when
+ * node-pty fires the PTY's onExit with SIGHUP (signal 1) afterward. On a
+ * renderer reload the window survives and killAll runs, so an emitted exit would
+ * reach the reloaded, restored pane and break both the claude pane and its file
+ * explorer. A genuine, self-driven abnormal exit must STILL emit.
+ * ------------------------------------------------------------------------- */
+describe('PtyManager intentional-kill is silent vs real SIGHUP (restart-pty-cwd)', () => {
+  it('kill() does not emit onExit even though the proc fires exit signal 1 on kill', () => {
+    const { manager, exit } = makeManager()
+    manager.start('a')
+    // The fake's kill() fires exitCb({ exitCode: 0, signal: 1 }) like real node-pty.
+    manager.kill('a')
+    expect(spawned[0].killed).toBe(true)
+    expect(manager.isRunning('a')).toBe(false)
+    // The SIGHUP exit from the intentional kill must NOT reach the renderer.
+    expect(exit).toEqual([])
+  })
+
+  it('killAll() does not emit onExit for any pane despite each proc firing exit signal 1', () => {
+    const { manager, exit } = makeManager()
+    manager.start('a')
+    manager.start('b')
+    manager.start('c')
+    manager.killAll()
+    expect(spawned.every((p) => p.killed)).toBe(true)
+    expect(manager.isRunning('a')).toBe(false)
+    expect(manager.isRunning('b')).toBe(false)
+    expect(manager.isRunning('c')).toBe(false)
+    // No spurious "claude exited (signal 1)" reaches a reloaded/restored pane.
+    expect(exit).toEqual([])
+  })
+
+  it('a genuine abnormal exit (NOT via kill) still emits onExit', () => {
+    const { manager, exit } = makeManager()
+    manager.start('a')
+    // claude crashes on its own — the proc's onExit fires without kill() being called.
+    spawned[0].exitCb?.({ exitCode: 1, signal: 1 })
+    expect(exit).toEqual([{ paneId: 'a', exitCode: 1, signal: 1 }])
+    expect(manager.isRunning('a')).toBe(false)
+  })
+
+  it('restart() produces a live fresh pane and emits no spurious exit from the killed proc', () => {
+    const { manager, exit } = makeManager()
+    manager.start('a', { cwd: '/home/user/project' })
+    manager.restart('a')
+    // The original proc was killed (firing signal 1) but that exit is suppressed.
+    expect(spawned[0].killed).toBe(true)
+    expect(exit).toEqual([])
+    // The fresh pane is live in the same cwd.
+    expect(manager.isRunning('a')).toBe(true)
+    expect(lastSpawnCall().cwd).toBe('/home/user/project')
   })
 })
 

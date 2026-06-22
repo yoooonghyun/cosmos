@@ -78,6 +78,22 @@ export const JIRA_RENDER_UI_TOOL = 'mcp__cosmos-jira-render-ui__render_jira_ui'
 /** The standard render tool grant for `--allowedTools` (the generated-ui target). */
 export const RENDER_UI_TOOL = 'mcp__cosmos-render-ui__render_ui'
 
+/**
+ * The per-target `get_ui_catalog` tool grants (ui-catalog-pull-spinner-signal-v1, FR-009).
+ * Each render server registers a `get_ui_catalog` tool the agent MUST pull before render —
+ * the pull is the early UI-generation spinner signal — so each target's run must ALSO grant
+ * its own server's `get_ui_catalog` tool name alongside the render tool.
+ */
+export const GET_UI_CATALOG_TOOL = 'mcp__cosmos-render-ui__get_ui_catalog'
+export const JIRA_GET_UI_CATALOG_TOOL =
+  `mcp__${JIRA_RENDER_UI_SERVER_NAME}__get_ui_catalog`
+export const SLACK_GET_UI_CATALOG_TOOL =
+  `mcp__cosmos-slack-render-ui__get_ui_catalog`
+export const CONFLUENCE_GET_UI_CATALOG_TOOL =
+  `mcp__cosmos-confluence-render-ui__get_ui_catalog`
+export const GOOGLE_CALENDAR_GET_UI_CATALOG_TOOL =
+  `mcp__cosmos-google-calendar-render-ui__get_ui_catalog`
+
 /** The MCP server name for the Jira read+write tools (used in --allowedTools). */
 export const JIRA_TOOLS_SERVER_NAME = 'cosmos-jira'
 
@@ -391,11 +407,23 @@ const BINDINGS_FIRST_STEERING = [
  * {@link BINDINGS_FIRST_STEERING} clause (v2 Fix A) so the model declares a refresh binding per
  * data container instead of rendering un-refreshable literal rows.
  */
+/**
+ * ui-catalog-pull-spinner-signal-v1 (FR-009): the uniform catalog-pull ordering clause prepended
+ * to EVERY render target's grounding prompt. The render tool's description no longer carries the
+ * full component catalog (it lives in `get_ui_catalog`), so the agent MUST pull it first to author
+ * a valid surface — and that pull is the early UI-generation spinner signal.
+ */
+const GET_UI_CATALOG_STEERING =
+  'ALWAYS call get_ui_catalog before render_ui (or render_jira_ui / render_slack_ui / ' +
+  'render_confluence_ui / render_google_calendar_ui) to get the component catalog and authoring ' +
+  'rules — you cannot author a valid surface without it.'
+
 export function groundingPromptForTarget(
   target: UiRenderTarget = DEFAULT_UI_RENDER_TARGET
 ): string | undefined {
   if (target === 'jira') {
     return [
+      GET_UI_CATALOG_STEERING,
       'You render Jira UI surfaces for the cosmos Jira panel from REAL Jira data ONLY.',
       'Before calling render_jira_ui you MUST fetch the actual tickets with jira_search_issues',
       '(and jira_get_issue for detail). Every issueKey, summary, status, assignee, and comment',
@@ -410,6 +438,7 @@ export function groundingPromptForTarget(
   if (target === 'slack') {
     // Read-only anti-fabrication grounding, mirroring the Jira one (FR-011).
     return [
+      GET_UI_CATALOG_STEERING,
       'You render Slack UI surfaces for the cosmos Slack panel from REAL Slack data ONLY.',
       'Before calling render_slack_ui you MUST fetch the actual data with the Slack read tools',
       '(slack_list_channels, slack_read_history, slack_read_thread, slack_search_messages,',
@@ -426,6 +455,7 @@ export function groundingPromptForTarget(
   if (target === 'confluence') {
     // Read-only anti-fabrication grounding, mirroring the Jira one (FR-011).
     return [
+      GET_UI_CATALOG_STEERING,
       'You render Confluence UI surfaces for the cosmos Confluence panel from REAL Confluence',
       'data ONLY. Before calling render_confluence_ui you MUST fetch the actual data with the',
       'Confluence read tools (confluence_search_content, confluence_get_page). Every page title,',
@@ -442,6 +472,7 @@ export function groundingPromptForTarget(
   if (target === 'google-calendar') {
     // Read-only anti-fabrication grounding, mirroring the others (v1).
     return [
+      GET_UI_CATALOG_STEERING,
       'You render Google Calendar UI surfaces for the cosmos Google Calendar panel from REAL',
       'calendar data ONLY. Before calling render_google_calendar_ui you MUST fetch the actual',
       'events with the Google Calendar read tool (google_calendar_list_events). Every event id,',
@@ -455,7 +486,10 @@ export function groundingPromptForTarget(
       BINDINGS_FIRST_STEERING
     ].join(' ')
   }
-  return undefined
+  // generated-ui: previously had no grounding (returned undefined). It now returns the catalog-pull
+  // ordering clause so the generic render run ALSO pulls get_ui_catalog first (FR-009). The
+  // AgentRunner only skips `--append-system-prompt` when this is undefined; a short prompt is fine.
+  return GET_UI_CATALOG_STEERING
 }
 
 /**
@@ -467,20 +501,31 @@ export function groundingPromptForTarget(
 export function allowedToolForTarget(
   target: UiRenderTarget = DEFAULT_UI_RENDER_TARGET
 ): string {
+  // ui-catalog-pull-spinner-signal-v1 (FR-009): every target ALSO grants its server's
+  // `get_ui_catalog` tool — the agent must pull the catalog (the early spinner signal) before
+  // render. The grant is paired with the matching render tool per target (least-privilege).
   if (target === 'jira') {
-    return [JIRA_RENDER_UI_TOOL, ...JIRA_TOOL_GRANTS].join(',')
+    return [JIRA_GET_UI_CATALOG_TOOL, JIRA_RENDER_UI_TOOL, ...JIRA_TOOL_GRANTS].join(',')
   }
   if (target === 'slack') {
     // Slack render tool + the five read-only Slack tools; NO writes (FR-009/FR-010/FR-012).
-    return [SLACK_RENDER_UI_TOOL, ...SLACK_TOOL_GRANTS].join(',')
+    return [SLACK_GET_UI_CATALOG_TOOL, SLACK_RENDER_UI_TOOL, ...SLACK_TOOL_GRANTS].join(',')
   }
   if (target === 'confluence') {
     // Confluence render tool + the two read-only Confluence tools; NO writes.
-    return [CONFLUENCE_RENDER_UI_TOOL, ...CONFLUENCE_TOOL_GRANTS].join(',')
+    return [
+      CONFLUENCE_GET_UI_CATALOG_TOOL,
+      CONFLUENCE_RENDER_UI_TOOL,
+      ...CONFLUENCE_TOOL_GRANTS
+    ].join(',')
   }
   if (target === 'google-calendar') {
     // Google Calendar render tool + the single read-only Calendar tool; NO writes.
-    return [GOOGLE_CALENDAR_RENDER_UI_TOOL, ...GOOGLE_CALENDAR_TOOL_GRANTS].join(',')
+    return [
+      GOOGLE_CALENDAR_GET_UI_CATALOG_TOOL,
+      GOOGLE_CALENDAR_RENDER_UI_TOOL,
+      ...GOOGLE_CALENDAR_TOOL_GRANTS
+    ].join(',')
   }
-  return RENDER_UI_TOOL
+  return [GET_UI_CATALOG_TOOL, RENDER_UI_TOOL].join(',')
 }

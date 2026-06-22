@@ -307,6 +307,14 @@ export interface JiraCreateParams {
   summary: string
   /** The issue description as plain text; `''` when omitted (FR-002). */
   description: string
+  /**
+   * OPTIONAL parent issue KEY (e.g. `PROJ-123`) — jira-create-parent-v1 (FR-001).
+   * Sets `fields.parent = { key }` in the create POST: a Sub-task's REQUIRED parent,
+   * or a team-managed Story/Task under an Epic. Non-secret content (FR-010); absent →
+   * a parent-less create byte-identical to today (FR-002). Classic company-managed
+   * Epic Link (`customfield_10014`) is deliberately OUT of scope in v1.
+   */
+  parentKey?: string
 }
 
 /**
@@ -397,7 +405,7 @@ export const JiraBoundAction = {
   Transition: 'jira.transition',
   /** Comment on an issue; context `{ issueKey, body }` (FR-005). */
   Comment: 'jira.comment',
-  /** Create an issue; context `{ projectKey, issueType, summary, description }` (FR-004/005). */
+  /** Create an issue; context `{ projectKey, issueType, summary, description, parentKey? }` (FR-004/005; optional `parentKey` — jira-create-parent-v1). */
   Create: 'jira.create',
   /** Update an issue's fields; context `{ issueKey, fields }` (FR-004/005). */
   Update: 'jira.update'

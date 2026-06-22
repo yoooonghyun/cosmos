@@ -23,12 +23,13 @@ import { z } from 'zod'
 import {
   bridgeSocketPath,
   encodeBridgeMessage,
+  type BridgeGeneratingNotification,
   type BridgeRenderRequest,
   type BridgeServerMessage
 } from '../shared/bridge'
 import { validateSurfaceUpdate } from '../shared/validate'
-import { AdapterFlagPath } from '../shared/adapter'
 import { BindingsFirstEnforcer } from '../shared/dataBearingSpec'
+import { registerGetUiCatalogTool } from './uiCatalog'
 import { JiraAdapterSource } from '../shared/jira'
 import { SlackAdapterSource } from '../shared/slack'
 import { ConfluenceAdapterSource } from '../shared/confluence'
@@ -154,106 +155,52 @@ class BridgeClient {
       })
     })
   }
+
+  /**
+   * Fire the EARLY "UI generation has begun" begin-signal (ui-catalog-pull-spinner-signal-v1,
+   * FR-003): a fire-and-forget `{ kind:'generating' }` frame over the SAME bridge socket when
+   * `get_ui_catalog` is called. NO waiter is registered (main sends no result). BEST-EFFORT:
+   * if the bridge is unreachable or the write fails, swallow the error — the catalog still
+   * returns (FR-010/FR-012). `target` omitted ⇒ main defaults to 'generated-ui'.
+   */
+  async notifyGenerating(target?: BridgeGeneratingNotification['target']): Promise<void> {
+    let socket: Socket
+    try {
+      socket = await this.ensureConnected()
+    } catch {
+      return // bridge down — swallow; the catalog still returns.
+    }
+    const frame: BridgeGeneratingNotification = {
+      kind: 'generating',
+      callId: randomUUID(),
+      ...(target ? { target } : {})
+    }
+    try {
+      socket.write(encodeBridgeMessage(frame))
+    } catch {
+      // swallow — a missing/failed begin-signal must never fail the catalog return.
+    }
+  }
 }
 
 /**
- * The render_ui tool description. It teaches the model the A2UI 0.9 component
- * format so it emits a surface the 0.9 renderer accepts — without this guidance
- * the model guesses a shape and the renderer reports "Unknown component type".
- *
- * Key 0.9 facts encoded below: components is a FLAT list (not a tree); each
- * component is `{ id, component: "<Type>", ...props }` where `component` is a
- * STRING type name (not a nested object); parents reference children by id
- * string; exactly one root (the component nothing else references, or id "root").
- *
- * CRITICAL — data binding: every interactive input's `value` MUST be a path
- * binding `{ "path": "/field" }`, NOT a literal. The SDK's form binding only
- * writes the user's input back into the surface's data model when `value` is a
- * path binding; with a literal (or omitted) `value` a dropdown/field selection
- * does not stick AND no value is returned. The submit Button then echoes those
- * same paths through `action.context` so the captured values come back.
+ * The SLIMMED render_ui tool description (ui-catalog-pull-spinner-signal-v1, FR-001, OQ-1
+ * = STRONG). The full A2UI component catalog now lives in `get_ui_catalog` (shared
+ * `uiCatalog.ts`) — this description deliberately omits it so the model CANNOT reliably
+ * author a valid surface without first PULLING the catalog (that pull is the early
+ * UI-generation spinner signal). Only a one-line pointer + the bare argument shape remain.
  */
 const A2UI_TOOL_DESCRIPTION = [
   'Render a rich, interactive UI surface in the cosmos Generated-UI panel and',
   "return the user's interaction. Use this whenever a request is best answered",
   'with a form, list, card, choices, or other interactive UI rather than text.',
   '',
-  'ARGUMENT: { spec: { surfaceId: string, components: Component[] } } — A2UI 0.9.',
+  'ARGUMENT: { spec: { surfaceId: string, components: Component[] } } — A2UI 0.9; components',
+  'is a FLAT array of { "id", "component": "<TypeName>", ...props }.',
   '',
-  'components is a FLAT array (not nested). Each Component is:',
-  '  { "id": "<unique-string>", "component": "<TypeName>", ...props }',
-  '"component" is a STRING type name (e.g. "Text"), NOT a nested object.',
-  'Parents reference children by their id string. Exactly ONE component must be',
-  'the root: either give it "id": "root", or make it the only component that no',
-  'other component references.',
-  '',
-  'DATA BINDING (important): every interactive input MUST bind its "value" to a',
-  'data-model path written as { "path": "/fieldName" } — NOT a literal. Without a',
-  'path binding the control will not capture the user input (a dropdown choice',
-  'will not even stay selected) and nothing is returned. Then set the submit',
-  "Button's action.context to echo those paths so you receive the values, e.g.",
-  '  "action": { "name": "submit", "context": { "choice": { "path": "/choice" } } }',
-  '',
-  'Available component types and their props:',
-  '  Text   { text: string, variant?: "h1"|"h2"|"h3"|"h4"|"h5"|"body"|"caption" }',
-  '  Image  { url: string }   Icon { name: string }   Divider {}',
-  '  Column { children: string[] /* child ids */, justify?, align? }',
-  '  Row    { children: string[] /* child ids */, justify?, align? }',
-  '  List   { children: string[] }   Card { child: string /* child id */ }',
-  '  Button { child: string /* id, usually a Text */, primary?: boolean,',
-  '           action: { name: string, context?: { <key>: { path: string } } } }',
-  '  TextField { label?: string, value: { path: string },',
-  '              variant?: "shortText"|"longText"|"number"|"obscured" }',
-  '  CheckBox  { label?: string, value: { path: string } }',
-  '  ChoicePicker { label?: string, value: { path: string },',
-  '                 options: [{ value: string, label: string }],',
-  '                 variant?: "multipleSelection"|"mutuallyExclusive" }',
-  '  Slider { value: { path: string } }   DateTimeInput { value: { path: string } }',
-  '',
-  'Make at least one Button so the user can submit; its action.name identifies',
-  'which control fired and is returned to you. Example (a single-choice poll):',
-  '{ "surfaceId": "s1", "components": [',
-  '  { "id": "root", "component": "Column", "children": ["title", "pick", "send"] },',
-  '  { "id": "title", "component": "Text", "text": "Pick one", "variant": "h2" },',
-  '  { "id": "pick", "component": "ChoicePicker", "variant": "mutuallyExclusive",',
-  '    "value": { "path": "/choice" },',
-  '    "options": [ { "value": "a", "label": "Option A" },',
-  '                 { "value": "b", "label": "Option B" } ] },',
-  '  { "id": "send", "component": "Button", "primary": true, "child": "sendLbl",',
-  '    "action": { "name": "submit", "context": { "choice": { "path": "/choice" } } } },',
-  '  { "id": "sendLbl", "component": "Text", "text": "Submit" } ] }',
-  '',
-  'Resolves with the user action, or an explicit cancellation if dismissed.',
-  '',
-  '════ REFRESHABLE DATA — compose the layout, declare ONE BINDING per data container ════',
-  'Whenever a container DISPLAYS live integration data you just read (a Slack/Jira/Confluence',
-  'list or detail), COMPOSE the layout you want and pass the rows you fetched as ORDINARY',
-  'LITERAL props — those literals become the first-paint SEED and the surface shows them',
-  'instantly. To make that container REFRESHABLE (the panel refresh control re-fetches +',
-  'repaints it in place, no agent round-trip), declare ONE binding for it. You do NOT author',
-  'any "{ path }" data binding yourself — cosmos rewrites each bound container\'s data prop to a',
-  'refreshable path for you, whether you passed literal rows or a path.',
-  '',
-  'BINDINGS is the primary way: pass "bindings": one entry per data-bearing container —',
-  '  { "componentId": "<the container\'s id>",',
-  '    "descriptor": { "dataSource": "<read id>", "query": { ... } } }.',
-  'A surface with a SINGLE data container declares ONE binding; a PARTITIONED layout (a kanban',
-  'with one list per status column, side-by-side feeds) declares ONE binding PER container, each',
-  'with its OWN narrowed query — so each refreshes independently and an EMPTY column (empty',
-  'literal seed) still re-fetches and can populate. dataSource is the integration read id; query',
-  'holds only NON-SECRET params (e.g. a jql, channelId, or pageId) — NEVER a token (cosmos',
-  'attaches the token only in main at refresh). dataSource is the ADAPTER SOURCE id — NOT the MCP',
-  'read-tool name ("jira_search_issues"/"slack_read_history"/"confluence_search_content"). Using a',
-  'tool name makes the surface non-refreshable. Valid dataSources:',
-  `  searchIssues, getIssue;  listChannels, getHistory, search;  defaultFeed, searchContent, getPage.`,
-  '',
-  '"descriptor": { "dataSource": ..., "query": { ... } } is the DEGENERATE single-binding form —',
-  'one surface-wide fetcher for a surface with a single data container. Use "descriptor" for one',
-  'region, "bindings" for many — NEVER pass both; if both are present bindings wins.',
-  '',
-  `You MAY still bind the shared reserved flags ("${AdapterFlagPath.loading}", "${AdapterFlagPath.hasMore}", "${AdapterFlagPath.error}") — cosmos also`,
-  'manages these for bound containers. Mint a UNIQUE surfaceId per surface. Omit all bindings',
-  'ONLY for a purely static/composed surface that shows no live integration data.'
+  'ALWAYS call get_ui_catalog FIRST to get the component catalog and authoring rules',
+  '(component types, props, data-binding, and the refreshable-bindings rules) before',
+  'calling render_ui — you cannot author a valid surface without it.'
 ].join('\n')
 
 /**
@@ -311,6 +258,12 @@ async function main(): Promise<void> {
   // (the model resubmits with a binding per container), bounded by the cap → render-anyway.
   const enforcer = new BindingsFirstEnforcer()
   const server = new McpServer({ name: 'cosmos-render-ui', version: '0.1.0' })
+
+  // ui-catalog-pull-spinner-signal-v1 (FR-001/FR-002): the `get_ui_catalog` tool the agent must
+  // pull before render_ui. Registered via the SHARED helper so all five servers are byte-
+  // identical. On each pull it fires the fire-and-forget begin-signal for THIS server's target
+  // (omitted ⇒ 'generated-ui'); a notify failure never blocks the catalog return (FR-010/FR-012).
+  registerGetUiCatalogTool(server, { onGenerating: () => void bridge.notifyGenerating() })
 
   server.registerTool(
     'render_ui',

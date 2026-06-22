@@ -504,7 +504,7 @@ export interface JiraCreateSurfaceOpts {
   /** Optional project keys → render the project field as a Select (design §2 note A). */
   projectKeys?: string[]
   /** Re-seed the form's entered values on a failed re-push so it never re-appears blank (design §5). */
-  seed?: { projectKey?: string; issueType?: string; summary?: string; description?: string }
+  seed?: { projectKey?: string; issueType?: string; summary?: string; description?: string; parentKey?: string }
 }
 
 /**
@@ -546,7 +546,10 @@ export function buildCreateIssueSurface(opts?: JiraCreateSurfaceOpts): A2uiSurfa
     ...(seed?.projectKey ? { seededProjectKey: seed.projectKey } : {}),
     ...(seed?.issueType ? { seededIssueType: seed.issueType } : {}),
     ...(seed?.summary ? { seededSummary: seed.summary } : {}),
-    ...(seed?.description ? { seededDescription: seed.description } : {})
+    ...(seed?.description ? { seededDescription: seed.description } : {}),
+    // jira-create-parent-v1 (FR-007): re-seed the optional Parent field on a failed-create
+    // re-push so it never re-appears blank, mirroring the other seeded fields.
+    ...(seed?.parentKey ? { seededParentKey: seed.parentKey } : {})
   })
   rootChildren.push(form)
 

@@ -27,6 +27,7 @@ import {
   realpathSync,
   renameSync,
   rmSync,
+  statSync,
   watch as fsWatch,
   writeFileSync
 } from 'node:fs'
@@ -49,7 +50,8 @@ import {
   type PtyPickDirectoryResult,
   type SessionSnapshot,
   type UiDataModelPayload,
-  type UiRenderPayload
+  type UiRenderPayload,
+  type UiRenderTarget
 } from '../shared/ipc'
 import { matchShortcut } from './shortcutMatch'
 import { resolvePaneSpawn, type ResolvedPaneSpawn } from './paneSpawn'
@@ -93,7 +95,8 @@ import {
   validateAdapterAction,
   validateClientConfigClear,
   validateClientConfigSave,
-  validateUiAction
+  validateUiAction,
+  validateUiGeneratingBeginPayload
 } from '../shared/validate'
 import { PtyManager } from './ptyManager'
 import { SessionStore } from './sessionStore'
@@ -129,7 +132,8 @@ import {
   type ClientConfigEnv,
   type EffectiveClientConfig
 } from './clientConfigResolver'
-import { runSlackOAuth } from './integrations/slackOAuth'
+import { mergeClientConfigSave, clearClientConfigField } from './clientConfigMutate'
+import { runSlackOAuth, refreshSlackToken } from './integrations/slackOAuth'
 import { JiraBridge } from './jiraBridge'
 import { JiraManager } from './jiraManager'
 import { JiraActionDispatcher } from './jiraActionDispatcher'
@@ -394,8 +398,24 @@ function paneSpawnFor(
     terminalResumeMap,
     terminalSessionMap,
     randomUUID,
-    overrideCwd
+    overrideCwd,
+    dirExistsOnDisk
   )
+}
+
+/**
+ * restart-pty-cwd-v1: does `absDir` resolve to an existing directory on disk? Used by
+ * `resolvePaneSpawn` to reject a stale persisted resume cwd (a deleted/renamed/moved repo)
+ * before it reaches node-pty — resuming into a non-existent dir kills `claude` on spawn
+ * (SIGHUP / exit 0) AND makes the file explorer deny every read (same cwd as its root).
+ * Total: any stat error (missing / permission) is treated as "not a directory" (false).
+ */
+function dirExistsOnDisk(absDir: string): boolean {
+  try {
+    return statSync(absDir).isDirectory()
+  } catch {
+    return false
+  }
 }
 
 /**
@@ -539,6 +559,18 @@ function createSlackManager(window: BrowserWindow): SlackManager {
           void shell.openExternal(url)
         }
       })
+    },
+    // slack-oauth-keeps-unlinking-v1: refresh a rotating user token via the same effective
+    // public client id (Settings-over-env). PKCE — no secret. Only invoked when a refresh
+    // token was persisted (rotation-enabled apps); a classic xoxp token never has one.
+    refresh: (refreshTok: string) => {
+      const clientId = effectiveClientConfig().slackClientId
+      if (!clientId) {
+        return Promise.reject(
+          new Error('No Slack client ID is configured — cannot refresh the Slack token.')
+        )
+      }
+      return refreshSlackToken({ clientId, refreshToken: refreshTok })
     },
     onStatusChanged: (status: SlackConnectionStatus) => {
       if (!window.isDestroyed()) {
@@ -724,9 +756,12 @@ function createPtyManager(window: BrowserWindow, sandboxDir: string): PtyManager
       },
       // FR-007: signal exit/error to the renderer.
       onExit: (payload) => {
-        // The pane is gone (or about to be re-minted) — drop its session mapping so a
-        // stale id is never persisted (FR-018/FR-019).
-        terminalSessionMap.delete(payload.paneId)
+        // terminal-cwd-persist-v1: do NOT delete from terminalSessionMap on exit.
+        // The cwd must survive the PTY's lifetime so (a) enrichSnapshotForSave can
+        // persist the tab across exits (the tab reappears on next restart with the
+        // correct cwd) and (b) pty:restart can re-spawn in the same folder. The
+        // session entry is removed only on explicit tab DISPOSE (FR-018/FR-019 —
+        // that handler already calls terminalSessionMap.delete).
         // terminal-file-explorer-v1 (FR-006/FR-016): the pane's root is no longer live; release
         // its fs watcher so it never fires against a dead root.
         fsExplorer?.stopWatch(payload.paneId)
@@ -815,12 +850,20 @@ function registerIpcHandlers(): void {
   })
 
   // FR-008 (panel-tabs v1 FR-026): restart the addressed pane's session only.
+  // terminal-cwd-persist-v1: pass the recorded cwd from terminalSessionMap so a
+  // restart after exit re-spawns in the correct folder (not the sandbox default).
+  // ptyManager.restart reads from its own dead session map after an exit and would
+  // fall back to sandbox; paneSpawnFor reads terminalSessionMap which survives exits.
   ipcMain.on(PtyChannel.Restart, (_event: IpcMainEvent, raw: unknown) => {
     const payload = validateRestart(raw)
     if (!payload) {
       return // invalid -> warned + ignored (SC-005)
     }
-    ptyManager?.restart(payload.paneId)
+    const recorded = terminalSessionMap.get(payload.paneId)
+    const cwd = recorded?.cwd ?? sandboxDirCached
+    const sessionId = randomUUID()
+    terminalSessionMap.set(payload.paneId, { sessionId, cwd })
+    ptyManager?.start(payload.paneId, { args: ['--session-id', sessionId], resume: false, cwd })
   })
 
   // panel-tabs v1 FR-023: dispose/kill the addressed pane's PTY on tab close. No
@@ -1047,6 +1090,9 @@ function registerSlackIpcHandlers(): void {
   ipcMain.handle(SlackChannelName.GetStatus, () => slackManager?.getStatus() ?? notReady)
   ipcMain.handle(SlackChannelName.Connect, () => slackManager?.connect() ?? notReady)
   ipcMain.handle(SlackChannelName.Disconnect, () => slackManager?.disconnect() ?? notReady)
+  // oauth-cancel-v1: abort an in-flight connect so a cancelled browser consent returns to
+  // not_connected immediately (no 3-minute timeout wait). No payload, no token.
+  ipcMain.handle(SlackChannelName.CancelConnect, () => slackManager?.cancelConnect() ?? notReady)
 
   ipcMain.handle(SlackChannelName.ListChannels, (_e: IpcMainInvokeEvent, raw: unknown) => {
     const params = validateSlackListChannels(raw)
@@ -1108,6 +1154,8 @@ function registerJiraIpcHandlers(): void {
   ipcMain.handle(JiraChannelName.GetStatus, () => jiraManager?.getStatus() ?? notReady)
   ipcMain.handle(JiraChannelName.Connect, () => jiraManager?.connect() ?? notReady)
   ipcMain.handle(JiraChannelName.Disconnect, () => jiraManager?.disconnect() ?? notReady)
+  // oauth-cancel-v1: abort an in-flight connect (cancelled browser consent) → not_connected.
+  ipcMain.handle(JiraChannelName.CancelConnect, () => jiraManager?.cancelConnect() ?? notReady)
 
   ipcMain.handle(JiraChannelName.SearchIssues, (_e: IpcMainInvokeEvent, raw: unknown) => {
     const params = validateJiraSearch(raw)
@@ -1311,6 +1359,8 @@ function registerGoogleCalendarIpcHandlers(): void {
   ipcMain.handle(GoogleCalendarChannelName.GetStatus, () => googleCalendarManager?.getStatus() ?? notReady)
   ipcMain.handle(GoogleCalendarChannelName.Connect, () => googleCalendarManager?.connect() ?? notReady)
   ipcMain.handle(GoogleCalendarChannelName.Disconnect, () => googleCalendarManager?.disconnect() ?? notReady)
+  // oauth-cancel-v1: abort an in-flight connect (cancelled browser consent) → not_connected.
+  ipcMain.handle(GoogleCalendarChannelName.CancelConnect, () => googleCalendarManager?.cancelConnect() ?? notReady)
 
   ipcMain.handle(GoogleCalendarChannelName.ListEvents, (_e: IpcMainInvokeEvent, raw: unknown) => {
     const params = validateGoogleCalendarListEvents(raw)
@@ -1424,6 +1474,8 @@ function registerConfluenceIpcHandlers(): void {
   ipcMain.handle(ConfluenceChannelName.GetStatus, () => confluenceManager?.getStatus() ?? notReady)
   ipcMain.handle(ConfluenceChannelName.Connect, () => confluenceManager?.connect() ?? notReady)
   ipcMain.handle(ConfluenceChannelName.Disconnect, () => confluenceManager?.disconnect() ?? notReady)
+  // oauth-cancel-v1: abort an in-flight connect (cancelled browser consent) → not_connected.
+  ipcMain.handle(ConfluenceChannelName.CancelConnect, () => confluenceManager?.cancelConnect() ?? notReady)
 
   ipcMain.handle(ConfluenceChannelName.SearchContent, (_e: IpcMainInvokeEvent, raw: unknown) => {
     const params = validateConfluenceSearch(raw)
@@ -1466,16 +1518,7 @@ function registerSettingsIpcHandlers(): void {
     if (!payload) {
       return invalidSaveResult()
     }
-    return applyClientConfigMutation((current) => {
-      const next: ClientConfig = { ...current }
-      if (payload.slack) {
-        next.slack = { ...next.slack, ...payload.slack }
-      }
-      if (payload.atlassian) {
-        next.atlassian = { ...next.atlassian, ...payload.atlassian }
-      }
-      return next
-    })
+    return applyClientConfigMutation((current) => mergeClientConfigSave(current, payload))
   })
 
   ipcMain.handle(SettingsChannelName.ClearField, (_e: IpcMainInvokeEvent, raw: unknown) => {
@@ -1496,25 +1539,6 @@ function invalidSaveResult(): ClientConfigSaveResult {
     status: toStatus(clientConfigStore?.load() ?? {}, clientConfigEnv()),
     disconnected: { slack: false, jira: false, confluence: false, 'google-calendar': false }
   }
-}
-
-/** Drop one stored field; empty sub-objects are pruned so the field reverts to env. */
-function clearClientConfigField(current: ClientConfig, field: string): ClientConfig {
-  const next: ClientConfig = {
-    ...(current.slack ? { slack: { ...current.slack } } : {}),
-    ...(current.atlassian ? { atlassian: { ...current.atlassian } } : {})
-  }
-  if (field === 'slack.clientId' && next.slack) {
-    delete next.slack.clientId
-    if (Object.keys(next.slack).length === 0) delete next.slack
-  } else if (field === 'atlassian.clientId' && next.atlassian) {
-    delete next.atlassian.clientId
-    if (Object.keys(next.atlassian).length === 0) delete next.atlassian
-  } else if (field === 'atlassian.clientSecret' && next.atlassian) {
-    delete next.atlassian.clientSecret
-    if (Object.keys(next.atlassian).length === 0) delete next.atlassian
-  }
-  return next
 }
 
 /**
@@ -1608,6 +1632,23 @@ function pushRenderToRenderer(payload: UiRenderPayload): void {
 function pushDataModelToRenderer(payload: UiDataModelPayload): void {
   if (mainWindow && !mainWindow.isDestroyed()) {
     mainWindow.webContents.send(UiChannel.DataModel, payload)
+  }
+}
+
+/**
+ * Push the EARLY "UI generation has begun" begin-signal to the renderer (ui-catalog-pull-
+ * spinner-signal-v1, FR-004). The UiBridge's `pushGeneratingBegin` sink — fired when a render
+ * run pulls the component catalog. VALIDATE at the boundary (target-only, warn-and-ignore an
+ * invalid one — FR-012) and guard a destroyed window, exactly like `pushRenderToRenderer`.
+ * NON-SECRET: carries only the render `target` (no token/transcript/surface — FR-011).
+ */
+function pushGeneratingBeginToRenderer(payload: { target: UiRenderTarget }): void {
+  const validated = validateUiGeneratingBeginPayload(payload)
+  if (!validated) {
+    return
+  }
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send(UiChannel.GeneratingBegin, validated)
   }
 }
 
@@ -1759,7 +1800,11 @@ function createWindow(): void {
       }
       return { spec: result.spec, dataModel: result.dataModel }
     },
-    pushDataModel: pushDataModelToRenderer
+    pushDataModel: pushDataModelToRenderer,
+    // ui-catalog-pull-spinner-signal-v1 (FR-003/FR-004): forward the EARLY begin-signal
+    // (a `get_ui_catalog` pull) to the renderer so the originating tab's spinner turns ON
+    // before the surface is composed. Validated + secret-free (target only) at the sink.
+    pushGeneratingBegin: pushGeneratingBeginToRenderer
   })
   uiBridge.start()
 

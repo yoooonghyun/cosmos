@@ -1,14 +1,18 @@
 import { describe, it, expect } from 'vitest'
 import {
+  CONFLUENCE_GET_UI_CATALOG_TOOL,
   CONFLUENCE_RENDER_UI_SERVER_NAME,
   CONFLUENCE_RENDER_UI_TOOL,
   CONFLUENCE_TOOLS_SERVER_NAME,
   CONFLUENCE_TOOL_GRANTS,
+  GET_UI_CATALOG_TOOL,
+  JIRA_GET_UI_CATALOG_TOOL,
   JIRA_RENDER_UI_SERVER_NAME,
   JIRA_RENDER_UI_TOOL,
   JIRA_TOOLS_SERVER_NAME,
   JIRA_TOOL_GRANTS,
   RENDER_UI_TOOL,
+  SLACK_GET_UI_CATALOG_TOOL,
   SLACK_RENDER_UI_SERVER_NAME,
   SLACK_RENDER_UI_TOOL,
   SLACK_TOOLS_SERVER_NAME,
@@ -90,19 +94,25 @@ describe('renderMcpConfigJsonForTarget (Jira generative-UI v2, D2 least-privileg
 })
 
 describe('allowedToolForTarget (Jira generative-UI v2, D2 grants)', () => {
-  it("grants render_jira_ui PLUS the jira read+write tools for the 'jira' target", () => {
+  it("grants get_ui_catalog + render_jira_ui PLUS the jira read+write tools for the 'jira' target", () => {
     const grant = allowedToolForTarget('jira')
-    expect(grant).toBe([JIRA_RENDER_UI_TOOL, ...JIRA_TOOL_GRANTS].join(','))
-    // The render tool is first; the jira tool grants follow.
-    expect(grant.split(',')[0]).toBe(JIRA_RENDER_UI_TOOL)
+    expect(grant).toBe(
+      [JIRA_GET_UI_CATALOG_TOOL, JIRA_RENDER_UI_TOOL, ...JIRA_TOOL_GRANTS].join(',')
+    )
+    // ui-catalog-pull-spinner-signal-v1 (FR-009): the catalog tool is granted first.
+    const tools = grant.split(',')
+    expect(tools[0]).toBe(JIRA_GET_UI_CATALOG_TOOL)
+    expect(tools).toContain(JIRA_RENDER_UI_TOOL)
   })
 
-  it("grants ONLY render_ui for the 'generated-ui' target", () => {
-    expect(allowedToolForTarget('generated-ui')).toBe(RENDER_UI_TOOL)
+  it("grants get_ui_catalog + render_ui for the 'generated-ui' target (FR-009)", () => {
+    expect(allowedToolForTarget('generated-ui')).toBe(
+      [GET_UI_CATALOG_TOOL, RENDER_UI_TOOL].join(',')
+    )
   })
 
-  it('defaults to render_ui when target is omitted', () => {
-    expect(allowedToolForTarget()).toBe(RENDER_UI_TOOL)
+  it('defaults to get_ui_catalog + render_ui when target is omitted', () => {
+    expect(allowedToolForTarget()).toBe([GET_UI_CATALOG_TOOL, RENDER_UI_TOOL].join(','))
   })
 })
 
@@ -165,11 +175,14 @@ describe('renderMcpConfigJsonForTarget — slack/confluence (least-privilege, FR
 })
 
 describe('allowedToolForTarget — slack/confluence (read-only, FR-009/FR-010/FR-012)', () => {
-  it("grants render_slack_ui PLUS the read-only slack tools and NOTHING else", () => {
+  it("grants get_ui_catalog + render_slack_ui PLUS the read-only slack tools and NOTHING else", () => {
     const grant = allowedToolForTarget('slack')
-    expect(grant).toBe([SLACK_RENDER_UI_TOOL, ...SLACK_TOOL_GRANTS].join(','))
+    expect(grant).toBe(
+      [SLACK_GET_UI_CATALOG_TOOL, SLACK_RENDER_UI_TOOL, ...SLACK_TOOL_GRANTS].join(',')
+    )
     const tools = grant.split(',')
-    expect(tools[0]).toBe(SLACK_RENDER_UI_TOOL)
+    expect(tools[0]).toBe(SLACK_GET_UI_CATALOG_TOOL)
+    expect(tools).toContain(SLACK_RENDER_UI_TOOL)
     // Read-only: no write tool, no jira/confluence/generic tool reachable.
     expect(tools).not.toContain(RENDER_UI_TOOL)
     expect(tools).not.toContain(JIRA_RENDER_UI_TOOL)
@@ -178,11 +191,14 @@ describe('allowedToolForTarget — slack/confluence (read-only, FR-009/FR-010/FR
     expect(tools.some((t) => t.includes('cosmos-confluence'))).toBe(false)
   })
 
-  it("grants render_confluence_ui PLUS the read-only confluence tools and NOTHING else", () => {
+  it("grants get_ui_catalog + render_confluence_ui PLUS the read-only confluence tools and NOTHING else", () => {
     const grant = allowedToolForTarget('confluence')
-    expect(grant).toBe([CONFLUENCE_RENDER_UI_TOOL, ...CONFLUENCE_TOOL_GRANTS].join(','))
+    expect(grant).toBe(
+      [CONFLUENCE_GET_UI_CATALOG_TOOL, CONFLUENCE_RENDER_UI_TOOL, ...CONFLUENCE_TOOL_GRANTS].join(',')
+    )
     const tools = grant.split(',')
-    expect(tools[0]).toBe(CONFLUENCE_RENDER_UI_TOOL)
+    expect(tools[0]).toBe(CONFLUENCE_GET_UI_CATALOG_TOOL)
+    expect(tools).toContain(CONFLUENCE_RENDER_UI_TOOL)
     expect(tools).not.toContain(RENDER_UI_TOOL)
     expect(tools).not.toContain(JIRA_RENDER_UI_TOOL)
     expect(tools).not.toContain(SLACK_RENDER_UI_TOOL)
@@ -209,8 +225,27 @@ describe('groundingPromptForTarget — slack/confluence anti-fabrication (FR-011
     expect(prompt).toContain('confluence_search_content')
   })
 
-  it('returns undefined for the generated-ui target (no grounding needed)', () => {
-    expect(groundingPromptForTarget('generated-ui')).toBeUndefined()
+  it('returns the catalog-pull steering for the generated-ui target (ui-catalog-pull-spinner-signal-v1 FR-009)', () => {
+    // Previously undefined; now the generic run also pulls get_ui_catalog first.
+    const prompt = groundingPromptForTarget('generated-ui')
+    expect(prompt).toBeTruthy()
+    expect(prompt).toContain('get_ui_catalog')
+  })
+})
+
+describe('groundingPromptForTarget — get_ui_catalog ordering clause (ui-catalog-pull-spinner-signal-v1, FR-009)', () => {
+  it('every render target instructs ALWAYS call get_ui_catalog before render', () => {
+    for (const target of [
+      'generated-ui',
+      'jira',
+      'slack',
+      'confluence',
+      'google-calendar'
+    ] as const) {
+      const prompt = groundingPromptForTarget(target)
+      expect(prompt).toBeTruthy()
+      expect(prompt).toContain('get_ui_catalog')
+    }
   })
 })
 

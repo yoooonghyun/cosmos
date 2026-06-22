@@ -59,6 +59,12 @@ export function assembleSnapshot(contributions: {
   confluence?: GenerativePanelSnapshot
   'google-calendar'?: GenerativePanelSnapshot
   enabled?: EnabledIntegrations
+  /**
+   * draggable-open-prompt-button-v1: the global Open-Prompt button position. A
+   * NON-panel contribution (mirrors `enabled`). Omitted when unreported so the restore
+   * default applies; present once a drag has reported one.
+   */
+  openPromptPosition?: { xFrac: number; yFrac: number }
 }): SessionSnapshot {
   const terminalDraft = contributions.terminal
   const terminal = (terminalDraft
@@ -74,7 +80,9 @@ export function assembleSnapshot(contributions: {
       confluence: contributions.confluence ?? emptyGenerative(),
       'google-calendar': contributions['google-calendar'] ?? emptyGenerative()
     },
-    enabled: contributions.enabled ?? emptyEnabled()
+    enabled: contributions.enabled ?? emptyEnabled(),
+    // Additive OPTIONAL top-level field: only present when the registry holds one.
+    ...(contributions.openPromptPosition ? { openPromptPosition: contributions.openPromptPosition } : {})
   }
 }
 
@@ -129,6 +137,17 @@ export class SessionRegistry {
    */
   setEnabled(enabled: EnabledIntegrations): void {
     this.contributions.enabled = enabled
+    this.schedule()
+  }
+
+  /**
+   * Record the latest global Open-Prompt button position (draggable-open-prompt-button-v1,
+   * FR-003/FR-007). The NON-panel contribution path (mirrors {@link setEnabled}): a drag in
+   * any panel reports through here, the value merges into the assembled snapshot and
+   * trailing-debounces a save like any other change.
+   */
+  setOpenPromptPosition(position: { xFrac: number; yFrac: number }): void {
+    this.contributions.openPromptPosition = position
     this.schedule()
   }
 

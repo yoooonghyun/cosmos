@@ -1,0 +1,100 @@
+/**
+ * terminalKeymap — macOS-style readline key bindings for the embedded `claude` TUI.
+ *
+ * xterm.js forwards raw arrow keys to the PTY but does NOT translate the Cmd/Option
+ * arrow chords that iTerm/Terminal.app map to readline line/word motion, nor does it
+ * emit a soft newline for Shift/Option+Enter — so word/line motion and newline-without
+ * submit don't work in the embedded prompt. `mapTerminalKey` is the pure key→bytes
+ * mapping wired via `term.attachCustomKeyEventHandler`: a non-null result is the byte
+ * sequence to write to the PTY (and xterm's default is suppressed); null means "not
+ * ours — let xterm handle it" so plain typing, Enter-submit, Ctrl-C and paste are
+ * untouched (we only intercept the specific chords below).
+ *
+ * ## Interception note — keypress leak
+ * xterm's `_keyDown` early-returns when the custom handler returns false, so no `\r`
+ * leaks from that path. However xterm also calls the custom handler from `_keyPress`,
+ * and the `_keyDownHandled` guard that would suppress `_keyPress` is only set when
+ * `_keyDown` reaches its bottom (after the handler gate). For Shift+Enter the handler
+ * returns false in `_keyDown` causing early return, so `_keyDownHandled` stays false
+ * and `_keyPress` fires — calling this handler again with type `'keypress'`. We return
+ * `''` (empty string, not null) for that case so `TerminalPanel` can see it, suppress
+ * the send (nothing to write), and return false to xterm — blocking the leaked `\r`.
+ */
+
+/** The minimal slice of a KeyboardEvent the mapping needs (so it is node-testable). */
+export interface TerminalKeyEvent {
+  key: string
+  metaKey: boolean
+  altKey: boolean
+  shiftKey: boolean
+  ctrlKey: boolean
+  type: string
+}
+
+export const TERMINAL_KEY_SEQUENCES = {
+  /** Cmd+Left → readline beginning-of-line (Ctrl-A). */
+  lineStart: '\x01',
+  /** Cmd+Right → readline end-of-line (Ctrl-E). */
+  lineEnd: '\x05',
+  /** Option+Left → readline backward-word (Meta-b). */
+  wordLeft: '\x1bb',
+  /** Option+Right → readline forward-word (Meta-f). */
+  wordRight: '\x1bf',
+  /**
+   * Shift+Enter → soft newline without submitting. Claude Code runs in kitty keyboard
+   * protocol / CSI-u mode (`\x1b[>1u` sent on startup). In that mode Shift+Enter is
+   * `CSI 13 ; 2 u`. The legacy `\x1b\r` (ESC+CR) is not recognised in CSI-u mode:
+   * the bare ESC leaks into claude's readline and explains symptom #4 ("all but last
+   * char submits").
+   */
+  newline: '\x1b[13;2u',
+  /**
+   * Alt/Option+Enter → same intent, CSI-u modifier bit 3.
+   */
+  altNewline: '\x1b[13;3u',
+} as const
+
+/**
+ * Map a keyboard event to the PTY byte sequence to send, or null to defer to xterm.
+ *
+ * Return values:
+ *  - non-empty string  → send this to the PTY; return false to xterm (suppress default)
+ *  - ''  (empty string) → suppress xterm default but send nothing (used to block the
+ *                          xterm keypress-leak for Enter chords; see module doc above)
+ *  - null               → defer to xterm entirely (return true to xterm)
+ *
+ * Only the specific macOS chords are intercepted; everything else returns null so
+ * existing terminal input behavior is preserved.
+ */
+export function mapTerminalKey(e: TerminalKeyEvent): string | null {
+  // Newline-without-submit: Shift+Enter or Option+Enter.
+  // We intercept both keydown (to send the CSI-u sequence) AND keypress (to suppress
+  // xterm's leaked \r — see module doc). Plain Enter (no modifier) is left to xterm.
+  if (e.key === 'Enter' && (e.shiftKey || e.altKey)) {
+    if (e.type === 'keydown') {
+      return e.shiftKey ? TERMINAL_KEY_SEQUENCES.newline : TERMINAL_KEY_SEQUENCES.altNewline
+    }
+    // keypress or keyup: suppress xterm's \r leak but send nothing
+    return ''
+  }
+
+  // Only act on keydown for everything below — keyup/keypress for the same chord
+  // would double-send.
+  if (e.type !== 'keydown') {
+    return null
+  }
+
+  // Cmd+Arrow → line motion. Ignore if Option is also held (ambiguous chord).
+  if (e.metaKey && !e.altKey) {
+    if (e.key === 'ArrowLeft') return TERMINAL_KEY_SEQUENCES.lineStart
+    if (e.key === 'ArrowRight') return TERMINAL_KEY_SEQUENCES.lineEnd
+  }
+
+  // Option+Arrow → word motion. Ignore if Cmd is also held.
+  if (e.altKey && !e.metaKey) {
+    if (e.key === 'ArrowLeft') return TERMINAL_KEY_SEQUENCES.wordLeft
+    if (e.key === 'ArrowRight') return TERMINAL_KEY_SEQUENCES.wordRight
+  }
+
+  return null
+}

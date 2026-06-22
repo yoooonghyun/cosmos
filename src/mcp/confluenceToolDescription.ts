@@ -19,6 +19,8 @@ export const CONFLUENCE_TOOL_DESCRIPTION = [
   "custom catalog (catalogId: 'confluence'). Use this for content search results and",
   'page detail — it matches the native Confluence panel chrome.',
   '',
+  'ALWAYS call get_ui_catalog first to get the component catalog and authoring rules.',
+  '',
   'ARGUMENT: { spec: { surfaceId: string, components: Component[] } } — A2UI 0.9.',
   'components is a FLAT array; each is { "id": "<unique>", "component": "<Type>", ...props }.',
   'Parents reference children by id string. Exactly ONE root (id "root" or the',

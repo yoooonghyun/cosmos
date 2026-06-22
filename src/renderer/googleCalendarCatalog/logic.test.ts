@@ -13,6 +13,7 @@ import {
   isAllDay,
   monthFromWindow,
   seedHiddenCalendarIds,
+  visibleEvents,
   tokenColorClasses,
   tokenColorName,
   type CalendarLegendData,
@@ -288,6 +289,40 @@ describe('seedHiddenCalendarIds (FR-010 — seed from Google selected===false)',
   it('degrades a non-array / id-less entry to an empty set (never throws)', () => {
     expect(seedHiddenCalendarIds(undefined).size).toBe(0)
     expect(seedHiddenCalendarIds([{ selected: false } as CalendarLegendData]).size).toBe(0)
+  })
+})
+
+describe('visibleEvents (calendar-selection-persistence — the single visibility filter all three views apply)', () => {
+  const a: EventChipData = { id: 'a1', start: '2026-06-16T09:00:00-07:00', calendarId: 'team@x' }
+  const b: EventChipData = { id: 'b1', start: '2026-06-16T10:00:00-07:00', calendarId: 'holidays@x' }
+  const noCal: EventChipData = { id: 'c1', start: '2026-06-16T11:00:00-07:00' } // single-primary path
+  const events = [a, b, noCal]
+
+  it('drops events owned by a HIDDEN calendar, keeps the rest', () => {
+    const out = visibleEvents(events, new Set(['holidays@x']))
+    expect(out.map((e) => e.id)).toEqual(['a1', 'c1'])
+  })
+
+  it('honors a MULTI-id hidden set (a deselected calendar disappears uniformly)', () => {
+    const out = visibleEvents(events, new Set(['team@x', 'holidays@x']))
+    // Only the calendar-less event survives; both tagged calendars are hidden.
+    expect(out.map((e) => e.id)).toEqual(['c1'])
+  })
+
+  it('an EMPTY selection (no calendars hidden) is a pass-through — every event visible', () => {
+    expect(visibleEvents(events, new Set()).map((e) => e.id)).toEqual(['a1', 'b1', 'c1'])
+  })
+
+  it('an ABSENT hidden set passes every event through (the single-primary / no-legend path)', () => {
+    expect(visibleEvents(events, undefined).map((e) => e.id)).toEqual(['a1', 'b1', 'c1'])
+  })
+
+  it('an event with NO calendarId is always visible (it has no calendar to hide against)', () => {
+    expect(visibleEvents([noCal], new Set(['anything'])).map((e) => e.id)).toEqual(['c1'])
+  })
+
+  it('degrades a non-array events input to [] (never throws)', () => {
+    expect(visibleEvents(undefined, new Set(['team@x']))).toEqual([])
   })
 })
 

@@ -75,8 +75,11 @@ describe('AgentRunner.run — happy path (SC-001, FR-005, FR-007, FR-011, FR-013
     expect(args).toContain('--strict-mcp-config')
     // --permission-mode dontAsk (flag immediately followed by value).
     expect(args[args.indexOf('--permission-mode') + 1]).toBe('dontAsk')
-    // --allowedTools scoped to ONLY render_ui (least-privilege — FR-013).
-    expect(args[args.indexOf('--allowedTools') + 1]).toBe('mcp__cosmos-render-ui__render_ui')
+    // --allowedTools scoped to get_ui_catalog + render_ui (least-privilege — FR-013;
+    // ui-catalog-pull-spinner-signal-v1 FR-009 adds the catalog tool grant).
+    expect(args[args.indexOf('--allowedTools') + 1]).toBe(
+      'mcp__cosmos-render-ui__get_ui_catalog,mcp__cosmos-render-ui__render_ui'
+    )
     // --output-format json so completion/error are detectable.
     expect(args[args.indexOf('--output-format') + 1]).toBe('json')
 
@@ -104,10 +107,11 @@ describe('AgentRunner.run — happy path (SC-001, FR-005, FR-007, FR-011, FR-013
     h.runner.run('show my issues', 'jira')
 
     const [, args] = h.spawn.mock.calls[0]
-    // least-privilege: the jira render tool first (NOT the generic render_ui), FR-013.
-    expect(args[args.indexOf('--allowedTools') + 1].split(',')[0]).toBe(
-      'mcp__cosmos-jira-render-ui__render_jira_ui'
-    )
+    const allowed = args[args.indexOf('--allowedTools') + 1].split(',')
+    // ui-catalog-pull-spinner-signal-v1 (FR-009): the jira get_ui_catalog grant is first, the
+    // jira render tool follows (NOT the generic render_ui); least-privilege, FR-013.
+    expect(allowed[0]).toBe('mcp__cosmos-jira-render-ui__get_ui_catalog')
+    expect(allowed).toContain('mcp__cosmos-jira-render-ui__render_jira_ui')
     const mcpConfig = JSON.parse(args[args.indexOf('--mcp-config') + 1])
     expect(Object.keys(mcpConfig.mcpServers)).toEqual(['cosmos-jira-render-ui', 'cosmos-jira'])
   })
@@ -118,8 +122,10 @@ describe('AgentRunner.run — happy path (SC-001, FR-005, FR-007, FR-011, FR-013
 
     const [, args] = h.spawn.mock.calls[0]
     const allowed = args[args.indexOf('--allowedTools') + 1].split(',')
-    // Render tool first; read-only slack tools follow; NO generic/jira/confluence render.
-    expect(allowed[0]).toBe('mcp__cosmos-slack-render-ui__render_slack_ui')
+    // Catalog tool first (FR-009), then the render tool; read-only slack tools follow; NO
+    // generic/jira/confluence render.
+    expect(allowed[0]).toBe('mcp__cosmos-slack-render-ui__get_ui_catalog')
+    expect(allowed).toContain('mcp__cosmos-slack-render-ui__render_slack_ui')
     expect(allowed).not.toContain('mcp__cosmos-render-ui__render_ui')
     expect(allowed.some((t: string) => t.includes('cosmos-jira'))).toBe(false)
     const mcpConfig = JSON.parse(args[args.indexOf('--mcp-config') + 1])
@@ -135,7 +141,8 @@ describe('AgentRunner.run — happy path (SC-001, FR-005, FR-007, FR-011, FR-013
 
     const [, args] = h.spawn.mock.calls[0]
     const allowed = args[args.indexOf('--allowedTools') + 1].split(',')
-    expect(allowed[0]).toBe('mcp__cosmos-confluence-render-ui__render_confluence_ui')
+    expect(allowed[0]).toBe('mcp__cosmos-confluence-render-ui__get_ui_catalog')
+    expect(allowed).toContain('mcp__cosmos-confluence-render-ui__render_confluence_ui')
     expect(allowed).not.toContain('mcp__cosmos-render-ui__render_ui')
     expect(allowed.some((t: string) => t.includes('cosmos-slack'))).toBe(false)
     const mcpConfig = JSON.parse(args[args.indexOf('--mcp-config') + 1])
@@ -151,7 +158,11 @@ describe('AgentRunner.run — happy path (SC-001, FR-005, FR-007, FR-011, FR-013
     const h = makeRunner()
     h.runner.run('build a form')
     const [, args] = h.spawn.mock.calls[0]
-    expect(args[args.indexOf('--allowedTools') + 1]).toBe('mcp__cosmos-render-ui__render_ui')
+    // ui-catalog-pull-spinner-signal-v1 (FR-009): the default grant now pairs get_ui_catalog
+    // with the generic render tool.
+    expect(args[args.indexOf('--allowedTools') + 1]).toBe(
+      'mcp__cosmos-render-ui__get_ui_catalog,mcp__cosmos-render-ui__render_ui'
+    )
     const mcpConfig = JSON.parse(args[args.indexOf('--mcp-config') + 1])
     expect(Object.keys(mcpConfig.mcpServers)).toEqual(['cosmos-render-ui'])
   })
@@ -211,14 +222,17 @@ describe('AgentRunner.run — view-context grounding (open-prompt-view-context-v
     expect(prompt).not.toContain('currently viewing')
   })
 
-  it('appends the view-context clause even when the target has NO per-target grounding (generated-ui has none, so no clause either since target carries no selection)', () => {
-    // generated-ui never carries a viewContext (FR-003), so verify the run is unchanged.
+  it('generated-ui carries the catalog-pull grounding (ui-catalog-pull-spinner-signal-v1 FR-009) but no view-context clause', () => {
+    // generated-ui never carries a viewContext (FR-003). It DOES now carry the catalog-pull
+    // ordering steering (previously it had no grounding at all), so --append-system-prompt is
+    // present and contains the get_ui_catalog instruction but not a view-context clause.
     const h = makeRunner()
     h.runner.run('build a form', 'generated-ui', { selectedIssueKey: 'PROJ-1' })
     const [, args] = h.spawn.mock.calls[0]
-    // No per-target grounding for generated-ui, and the clause is empty for this target →
-    // no --append-system-prompt at all (baseline).
-    expect(args).not.toContain('--append-system-prompt')
+    expect(args).toContain('--append-system-prompt')
+    const prompt = args[args.indexOf('--append-system-prompt') + 1]
+    expect(prompt).toContain('get_ui_catalog')
+    expect(prompt).not.toContain('currently viewing')
   })
 })
 

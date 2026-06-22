@@ -86,6 +86,51 @@ function validateEnabled(value: unknown): EnabledIntegrations {
   return out
 }
 
+/**
+ * Normalize the inbound `hiddenCalendars` list (calendar-selection-persistence). The
+ * Google Calendar legend's deselected calendar ids. Defensive + total: a non-array, or
+ * any non-string / empty entry, is dropped; duplicates are collapsed. An absent/malformed
+ * value yields `[]` (the safe default — every calendar shown). This is the in-version
+ * migration for a present-but-malformed field within v9.
+ */
+function validateHiddenCalendars(value: unknown): string[] {
+  if (!Array.isArray(value)) {
+    return []
+  }
+  const seen = new Set<string>()
+  for (const entry of value) {
+    if (isNonEmptyString(entry)) {
+      seen.add(entry)
+    }
+  }
+  return [...seen]
+}
+
+/**
+ * Normalize the inbound `openPromptPosition` (draggable-open-prompt-button-v1,
+ * FR-008/FR-009). The persisted Open-Prompt button position is a normalized fraction
+ * `{ xFrac, yFrac }` in `[0,1]`. A present, well-formed value has each component
+ * CLAMPED into `[0,1]` (an out-of-range or off-screen-after-resize value never crashes
+ * and never lands off-panel — FR-005/FR-012). A non-object, a missing / non-finite
+ * component, or any other malformed value yields `undefined` ⇒ the field is omitted and
+ * restore falls back to the centered-bottom default (FR-011). NON-SECRET: two numbers
+ * only, never a token/path (FR-010).
+ */
+function validateOpenPromptPosition(value: unknown): { xFrac: number; yFrac: number } | undefined {
+  if (!isObject(value)) {
+    return undefined
+  }
+  const { xFrac, yFrac } = value as { xFrac?: unknown; yFrac?: unknown }
+  if (typeof xFrac !== 'number' || !Number.isFinite(xFrac)) {
+    return undefined
+  }
+  if (typeof yFrac !== 'number' || !Number.isFinite(yFrac)) {
+    return undefined
+  }
+  const clamp = (n: number): number => (n < 0 ? 0 : n > 1 ? 1 : n)
+  return { xFrac: clamp(xFrac), yFrac: clamp(yFrac) }
+}
+
 /** A clean, empty session snapshot — the FR-005 fallback when no/bad snapshot exists. */
 export function emptySnapshot(): SessionSnapshot {
   return {
@@ -209,6 +254,15 @@ function validateGenerativeTab(value: unknown, warn: WarnFn): GenerativeTabSnaps
       }
     }
   }
+  // calendar-selection-persistence: the PER-TAB Google Calendar hidden-set. Purely additive
+  // + OPTIONAL (mirrors openFiles on validateTerminalTab) — an absent/malformed value
+  // normalizes to [] (the field is omitted when empty), so an older snapshot lacking it
+  // restores cleanly with no version bump. Reuses validateHiddenCalendars (drops
+  // non-string/empty entries, dedupes). Only google-calendar tabs ever carry one.
+  const hiddenCalendars = validateHiddenCalendars(value.hiddenCalendars)
+  if (hiddenCalendars.length > 0) {
+    tab.hiddenCalendars = hiddenCalendars
+  }
   return tab
 }
 
@@ -310,6 +364,9 @@ export function validateSnapshot(value: unknown, warn: WarnFn = defaultWarn): Se
   for (const key of GENERATIVE_KEYS) {
     generative[key] = validateGenerativePanel(panels[key], warn)
   }
+  // draggable-open-prompt-button-v1 (FR-008): additive OPTIONAL global field. Set only
+  // when present + well-formed; absent/malformed ⇒ omit so restore uses the default.
+  const openPromptPosition = validateOpenPromptPosition(value.openPromptPosition)
   return {
     schemaVersion: SESSION_SCHEMA_VERSION,
     panels: {
@@ -320,6 +377,7 @@ export function validateSnapshot(value: unknown, warn: WarnFn = defaultWarn): Se
       confluence: generative.confluence,
       'google-calendar': generative['google-calendar']
     },
-    enabled: validateEnabled(value.enabled)
+    enabled: validateEnabled(value.enabled),
+    ...(openPromptPosition ? { openPromptPosition } : {})
   }
 }

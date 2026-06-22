@@ -423,12 +423,18 @@ export class JiraClient {
     params: JiraCreateParams
   ): Promise<JiraResult<JiraCreateResult>> {
     const url = `${this.base(auth.cloudId)}/rest/api/3/issue`
+    // jira-create-parent-v1 (FR-002): the Atlassian REST v3 create contract sets the
+    // parent as a SIBLING field — `fields.parent = { key: "PROJ-123" }` (user-facing key
+    // form, matching `project: { key }`). Spread-when-present so an ABSENT parent yields a
+    // body byte-identical to today (no `parent` key). Sub-tasks require it; team-managed
+    // Story/Task may parent under an Epic. Classic Epic-Link (customfield_10014) is out of scope.
     const body = JSON.stringify({
       fields: {
         project: { key: params.projectKey },
         issuetype: { name: params.issueType },
         summary: params.summary,
-        description: plainTextToAdf(params.description)
+        description: plainTextToAdf(params.description),
+        ...(params.parentKey ? { parent: { key: params.parentKey } } : {})
       }
     })
     const r = await this.call(url, auth.token, { method: 'POST', body })

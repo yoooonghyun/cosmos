@@ -40,6 +40,12 @@ export const SlackChannelName = {
   Connect: 'slack:connect',
   /** R->M (invoke): delete the stored token; resolves with not-connected status. FR-009. */
   Disconnect: 'slack:disconnect',
+  /**
+   * R->M (invoke): abort an in-flight connect (the user cancelled the browser consent);
+   * resolves with the resulting not-connected status so the panel can retry immediately
+   * (oauth-cancel-v1). Carries no payload and no token/secret.
+   */
+  CancelConnect: 'slack:cancelConnect',
   /** R->M (invoke): list public channels (paginated). FR-013. */
   ListChannels: 'slack:listChannels',
   /** R->M (invoke): read a channel's recent history (paginated). FR-013. */
@@ -78,6 +84,11 @@ export interface SlackApi {
   connect(): Promise<SlackConnectionStatus>
   /** R->M. Delete the stored token; resolves with not-connected status. FR-009. */
   disconnect(): Promise<SlackConnectionStatus>
+  /**
+   * R->M. Abort an in-flight connect (the user cancelled the browser consent); resolves with
+   * the resulting not-connected status so the panel can retry immediately (oauth-cancel-v1).
+   */
+  cancelConnect(): Promise<SlackConnectionStatus>
   /** R->M. List public channels (paginated). FR-013. */
   listChannels(params: SlackListChannelsParams): Promise<SlackResult<SlackPage<SlackChannel>>>
   /** R->M. Read a channel's recent history (paginated). FR-013. */

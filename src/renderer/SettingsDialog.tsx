@@ -28,6 +28,9 @@ import { Switch } from '@/components/ui/switch'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { cn } from '@/lib/utils'
 import { shouldShowStatusDot, type ConnectionState } from './settingsStatusDot'
+import { useConfirm } from './useConfirm'
+import { ConfirmDialog } from '@/components/ui/confirm-dialog'
+import { confirmCopy } from './confirmLogic'
 
 /** A live per-integration connection status (non-secret identity only). */
 interface LiveStatus {
@@ -86,6 +89,12 @@ export function SettingsDialog({
   const [saving, setSaving] = useState(false)
   const [result, setResult] = useState<ClientConfigSaveResult | null>(null)
   const [confirming, setConfirming] = useState(false)
+
+  // disconnect-confirm-modal-v1: gate each per-integration Disconnect row behind the
+  // shared confirm modal. This is its OWN flow, independent of the Save-confirm
+  // (`confirming` above), which stays as-is (a multi-integration force-disconnect-on-Save
+  // warning). The two confirm surfaces never act on the same action simultaneously.
+  const confirmDisconnect = useConfirm()
 
   // Live per-integration connection status, for the status dot + connect/disconnect
   // block in each tab. Subscribes only while the dialog is open (design §4.3).
@@ -266,7 +275,13 @@ export function SettingsDialog({
     [saving, confirming, onOpenChange]
   )
 
+  // The disconnect-confirm copy is driven by the open target's label (or empty when
+  // closed). Rendered as a sibling of the Settings Dialog so it portals ABOVE it.
+  const confirmLabel = confirmDisconnect.state.target?.label ?? ''
+  const disconnectCopy = confirmCopy(confirmLabel)
+
   return (
+    <>
     <Dialog open={open} onOpenChange={handleOpenChange}>
       <DialogContent className="flex h-[600px] max-w-[860px] flex-col gap-0 overflow-hidden bg-popover p-0 sm:max-w-[860px]">
         <DialogHeader className="border-b border-border px-6 pt-6 pb-4">
@@ -359,7 +374,13 @@ export function SettingsDialog({
                 onEnabledChange={(on) => onEnabledChange('slack', on)}
                 live={liveStatus.slack}
                 onConnect={() => void window.cosmos.slack.connect()}
-                onDisconnect={() => void window.cosmos.slack.disconnect()}
+                onDisconnect={() =>
+                  confirmDisconnect.requestConfirm(
+                    { integration: 'slack', label: 'Slack' },
+                    () => void window.cosmos.slack.disconnect()
+                  )
+                }
+                onCancel={() => void window.cosmos.slack.cancelConnect()}
               >
                 {loading || !status ? (
                   <LoadingBody />
@@ -398,7 +419,13 @@ export function SettingsDialog({
                 onEnabledChange={(on) => onEnabledChange('jira', on)}
                 live={liveStatus.jira}
                 onConnect={() => void window.cosmos.jira.connect()}
-                onDisconnect={() => void window.cosmos.jira.disconnect()}
+                onDisconnect={() =>
+                  confirmDisconnect.requestConfirm(
+                    { integration: 'jira', label: 'Jira' },
+                    () => void window.cosmos.jira.disconnect()
+                  )
+                }
+                onCancel={() => void window.cosmos.jira.cancelConnect()}
               >
                 <SharedAtlassianBanner thisProduct="Jira" otherProduct="Confluence" />
                 {loading || !status ? (
@@ -434,7 +461,13 @@ export function SettingsDialog({
                 onEnabledChange={(on) => onEnabledChange('confluence', on)}
                 live={liveStatus.confluence}
                 onConnect={() => void window.cosmos.confluence.connect()}
-                onDisconnect={() => void window.cosmos.confluence.disconnect()}
+                onDisconnect={() =>
+                  confirmDisconnect.requestConfirm(
+                    { integration: 'confluence', label: 'Confluence' },
+                    () => void window.cosmos.confluence.disconnect()
+                  )
+                }
+                onCancel={() => void window.cosmos.confluence.cancelConnect()}
               >
                 <SharedAtlassianBanner thisProduct="Confluence" otherProduct="Jira" />
                 {loading || !status ? (
@@ -470,7 +503,13 @@ export function SettingsDialog({
                 onEnabledChange={(on) => onEnabledChange('google-calendar', on)}
                 live={liveStatus['google-calendar']}
                 onConnect={() => void window.cosmos.googleCalendar.connect()}
-                onDisconnect={() => void window.cosmos.googleCalendar.disconnect()}
+                onDisconnect={() =>
+                  confirmDisconnect.requestConfirm(
+                    { integration: 'google-calendar', label: 'Google Calendar' },
+                    () => void window.cosmos.googleCalendar.disconnect()
+                  )
+                }
+                onCancel={() => void window.cosmos.googleCalendar.cancelConnect()}
               >
                 {loading || !status ? (
                   <LoadingBody />
@@ -488,7 +527,7 @@ export function SettingsDialog({
                       resetLabel="Reset Google Client ID to .env default"
                       consequence={
                         googleIdChanged && connected.google
-                          ? 'Saving will sign out Google Calendar — you’ll need to reconnect.'
+                          ? 'Saving will sign out Google Cal — you’ll need to reconnect.'
                           : null
                       }
                     />
@@ -503,7 +542,7 @@ export function SettingsDialog({
                       onClear={() => void clearField('google.clientSecret')}
                       consequence={
                         googleSecretChanged && connected.google
-                          ? 'Saving will sign out Google Calendar — you’ll need to reconnect.'
+                          ? 'Saving will sign out Google Cal — you’ll need to reconnect.'
                           : null
                       }
                     />
@@ -563,6 +602,19 @@ export function SettingsDialog({
         </DialogFooter>
       </DialogContent>
     </Dialog>
+
+      <ConfirmDialog
+        open={confirmDisconnect.state.open}
+        title={disconnectCopy.title}
+        description={disconnectCopy.body}
+        onConfirm={confirmDisconnect.confirm}
+        onOpenChange={(next) => {
+          if (!next) {
+            confirmDisconnect.cancel()
+          }
+        }}
+      />
+    </>
   )
 }
 
@@ -844,7 +896,7 @@ function FeedbackSlot({
   if (result.disconnected.slack) signedOut.push('Slack')
   if (result.disconnected.jira) signedOut.push('Jira')
   if (result.disconnected.confluence) signedOut.push('Confluence')
-  if (result.disconnected['google-calendar']) signedOut.push('Google Calendar')
+  if (result.disconnected['google-calendar']) signedOut.push('Google Cal')
   return (
     <div className="px-6 pb-1" aria-live="polite">
       <p className="flex items-center gap-1.5 text-xs text-primary">
@@ -973,6 +1025,7 @@ function IntegrationTab({
   live,
   onConnect,
   onDisconnect,
+  onCancel,
   children
 }: {
   icon: React.ReactNode
@@ -984,6 +1037,7 @@ function IntegrationTab({
   live: LiveStatus
   onConnect: () => void
   onDisconnect: () => void
+  onCancel: () => void
   children: React.ReactNode
 }): React.JSX.Element {
   const switchId = `enable-${integration}`
@@ -1015,7 +1069,7 @@ function IntegrationTab({
       <div className="border-t border-border" />
 
       {/* ③ Connection block */}
-      <ConnectionBlock live={live} onConnect={onConnect} onDisconnect={onDisconnect} />
+      <ConnectionBlock live={live} onConnect={onConnect} onDisconnect={onDisconnect} onCancel={onCancel} />
 
       <div className="border-t border-border" />
 
@@ -1032,11 +1086,13 @@ function IntegrationTab({
 function ConnectionBlock({
   live,
   onConnect,
-  onDisconnect
+  onDisconnect,
+  onCancel
 }: {
   live: LiveStatus
   onConnect: () => void
   onDisconnect: () => void
+  onCancel: () => void
 }): React.JSX.Element {
   const { state } = live
   return (
@@ -1064,10 +1120,18 @@ function ConnectionBlock({
           Disconnect
         </Button>
       ) : state === 'connecting' ? (
-        <Button size="sm" disabled>
-          <Loader2 className="size-3.5 animate-spin" />
-          Connecting…
-        </Button>
+        // oauth-cancel-v1: a Cancel affordance aborts an in-flight connect (cancelled browser
+        // consent) so the row returns to not_connected immediately instead of staying stuck
+        // on "Connecting…" for the full OAuth timeout.
+        <div className="flex items-center gap-2">
+          <span className="flex items-center gap-1.5 text-sm text-muted-foreground">
+            <Loader2 className="size-3.5 animate-spin" />
+            Connecting…
+          </span>
+          <Button size="sm" variant="ghost" onClick={onCancel}>
+            Cancel
+          </Button>
+        </div>
       ) : (
         <Button size="sm" onClick={onConnect}>
           {state === 'reconnect_needed' ? 'Reconnect' : 'Connect'}
@@ -1179,7 +1243,7 @@ function GeneralTab({
     { id: 'slack', label: 'Slack', icon: <SiSlack className="size-4" /> },
     { id: 'jira', label: 'Jira', icon: <SiJira className="size-4" /> },
     { id: 'confluence', label: 'Confluence', icon: <SiConfluence className="size-4" /> },
-    { id: 'google-calendar', label: 'Google Calendar', icon: <CalendarDays className="size-4" /> }
+    { id: 'google-calendar', label: 'Google Cal', icon: <CalendarDays className="size-4" /> }
   ]
   return (
     <div className="space-y-5">

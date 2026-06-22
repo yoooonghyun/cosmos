@@ -91,6 +91,8 @@ export const PATH_CREATE_PROJECT_KEY = '/createProjectKey'
 export const PATH_CREATE_ISSUE_TYPE = '/createIssueType'
 export const PATH_CREATE_SUMMARY = '/createSummary'
 export const PATH_CREATE_DESCRIPTION = '/createDescription'
+/** Optional parent issue key (jira-create-parent-v1, FR-007). */
+export const PATH_CREATE_PARENT_KEY = '/createParentKey'
 
 /** EditIssueForm data-model paths (Jira write-extend v1, design §4). */
 export const PATH_EDIT_SUMMARY = '/editSummary'
@@ -621,6 +623,8 @@ export interface CreateIssueFormNode extends SdkProps {
   seededIssueType?: string
   seededSummary?: string
   seededDescription?: string
+  /** Re-seed the optional Parent field on a failed-create re-push (jira-create-parent-v1, FR-007). */
+  seededParentKey?: string
 }
 
 export function CreateIssueForm({
@@ -632,7 +636,8 @@ export function CreateIssueForm({
   seededProjectKey,
   seededIssueType,
   seededSummary,
-  seededDescription
+  seededDescription,
+  seededParentKey
 }: CreateIssueFormNode): React.JSX.Element {
   const dispatch = useDispatchAction()
   const [projectKey, setProjectKey] = useFormBinding<string>(
@@ -655,6 +660,13 @@ export function CreateIssueForm({
     { path: PATH_CREATE_DESCRIPTION },
     seededDescription ?? ''
   )
+  // jira-create-parent-v1 (FR-007): OPTIONAL parent key. Seeded on a failed-create re-push;
+  // empty/whitespace omits `parentKey` from the dispatch context (main re-validates).
+  const [parentKey, setParentKey] = useFormBinding<string>(
+    surfaceId,
+    { path: PATH_CREATE_PARENT_KEY },
+    seededParentKey ?? ''
+  )
 
   const typeOptions = Array.isArray(issueTypes) ? issueTypes : []
   const projectOptions = Array.isArray(projectKeys) ? projectKeys : []
@@ -670,7 +682,11 @@ export function CreateIssueForm({
         projectKey: { path: PATH_CREATE_PROJECT_KEY },
         issueType: { path: PATH_CREATE_ISSUE_TYPE },
         summary: { path: PATH_CREATE_SUMMARY },
-        description: { path: PATH_CREATE_DESCRIPTION }
+        description: { path: PATH_CREATE_DESCRIPTION },
+        // jira-create-parent-v1 (FR-007): bind the optional Parent ONLY when the field is
+        // non-empty so an empty/whitespace value omits `parentKey` entirely (main re-validates
+        // a present value as non-empty + trims it). Parent never gates submit (stays optional).
+        ...(parentKey.trim().length > 0 ? { parentKey: { path: PATH_CREATE_PARENT_KEY } } : {})
       }
     })
   }
@@ -736,6 +752,19 @@ export function CreateIssueForm({
             placeholder="Task"
           />
         )}
+      </div>
+
+      <div className="flex flex-col gap-1.5">
+        <label htmlFor="create-parent" className="text-xs font-medium text-muted-foreground">
+          Parent (optional)
+        </label>
+        <Input
+          id="create-parent"
+          value={parentKey}
+          onChange={(e) => setParentKey(e.target.value)}
+          placeholder="PROJ-123"
+          className="font-mono"
+        />
       </div>
 
       <div className="flex flex-col gap-1.5">

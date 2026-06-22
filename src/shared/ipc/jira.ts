@@ -32,6 +32,12 @@ export const JiraChannelName = {
   Connect: 'jira:connect',
   /** R->M (invoke): delete the stored token; resolves with not-connected status. FR-A14. */
   Disconnect: 'jira:disconnect',
+  /**
+   * R->M (invoke): abort an in-flight connect (the user cancelled the browser consent);
+   * resolves with the resulting not-connected status so the panel can retry immediately
+   * (oauth-cancel-v1). Carries no payload and no token/secret.
+   */
+  CancelConnect: 'jira:cancelConnect',
   /** R->M (invoke): search issues by JQL (paginated). FR-J04. */
   SearchIssues: 'jira:searchIssues',
   /** R->M (invoke): read one issue's detail. FR-J04. */
@@ -113,6 +119,11 @@ export interface JiraApi {
   connect(): Promise<JiraConnectionStatus>
   /** R->M. Delete the stored token; resolves with not-connected status. FR-A14. */
   disconnect(): Promise<JiraConnectionStatus>
+  /**
+   * R->M. Abort an in-flight connect (the user cancelled the browser consent); resolves with
+   * the resulting not-connected status so the panel can retry immediately (oauth-cancel-v1).
+   */
+  cancelConnect(): Promise<JiraConnectionStatus>
   /** R->M. Search issues by JQL (paginated). FR-J04. */
   searchIssues(params: JiraSearchParams): Promise<JiraResult<JiraPage<JiraIssueSummary>>>
   /** R->M. Read one issue's detail. FR-J04. */

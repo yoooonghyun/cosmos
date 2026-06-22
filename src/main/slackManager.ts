@@ -11,10 +11,13 @@
  *
  * Connecting runs the Slack desktop PKCE OAuth flow (no client secret, no per-user
  * bot install): the user clicks Connect, consents in the browser, and the manager
- * persists the resulting USER token (`xoxp-…`) that drives every read including
- * search. Pasted/granted user tokens are long-lived with no refresh token, so there
- * is no silent refresh. A reconnect_needed result from any read flips connection
- * state so both surfaces reflect it (SC-007).
+ * persists the resulting USER token that drives every read including search. A classic
+ * `xoxp-…` token is long-lived with no refresh token, so there is no silent refresh.
+ * When the Slack app has TOKEN ROTATION enabled, connect persists the rotating token's
+ * refresh token + expiry, and the manager refreshes it on expiry/401 — otherwise the
+ * short-lived rotating token would expire and the connection would keep dropping into
+ * reconnect_needed (slack-oauth-keeps-unlinking-v1). A reconnect_needed result from any
+ * read flips connection state so both surfaces reflect it (SC-007).
  *
  * The token store, client, and OAuth runner are injected so the state machine is
  * unit-testable without Electron, the browser, or the network.
@@ -39,9 +42,14 @@ import type {
 import { SLACK_WRITE_NOT_AUTHORIZED_MESSAGE, SLACK_WRITE_SCOPE } from '../shared/slack'
 import type { MessageResolvers, SlackCallAuth, SlackClient } from './integrations/slackClient'
 import type { StoredTokenSet, TokenStore } from './integrations/tokenStore'
+import { expiryFromSeconds } from './integrations/tokenStore'
 import type { SlackOAuthResult } from './integrations/slackOAuth'
+import type { TokenExchangeResult } from './integrations/oauthPkce'
 import { SLACK_SEARCH_SCOPE } from './integrations/slackConfig'
 import { SlackCustomEmojiResolver } from './integrations/slackEmojiList'
+
+/** Refresh a rotating Slack user token; main wires {@link refreshSlackToken}. */
+export type SlackRefreshFn = (refreshToken: string) => Promise<TokenExchangeResult>
 
 export interface SlackManagerDeps {
   client: SlackClient
@@ -50,9 +58,19 @@ export interface SlackManagerDeps {
    * Run the Slack desktop PKCE OAuth flow (opens the browser, captures the
    * redirect, exchanges the code) and resolve the user token + identity. Injected
    * so the state machine is unit-testable without Electron, the browser, or a
-   * network (main wires this to {@link runSlackOAuth}).
+   * network (main wires this to {@link runSlackOAuth}). The optional `signal` is
+   * threaded to the loopback wait so {@link SlackManager.cancelConnect} can abort an
+   * in-flight connect (the user closed the browser tab) instead of waiting out the
+   * 3-minute timeout.
    */
-  runOAuth: () => Promise<SlackOAuthResult>
+  runOAuth: (signal?: AbortSignal) => Promise<SlackOAuthResult>
+  /**
+   * Refresh a rotating user token (slack-oauth-keeps-unlinking-v1). Invoked ONLY when
+   * a refresh token was persisted (rotation-enabled apps); a classic non-expiring token
+   * never has one, so this is never called for it. Optional so existing call sites /
+   * tests that never rotate need not provide it.
+   */
+  refresh?: SlackRefreshFn
   /** Notify on every state change (main wires this to `slack:statusChanged`). */
   onStatusChanged?: (status: SlackConnectionStatus) => void
 }
@@ -68,6 +86,24 @@ export class SlackManager {
    * lookup is then resolved at most once per session. Rebuilt lazily by {@link resolvers}.
    */
   private resolverCache: { token: string; resolvers: MessageResolvers } | null = null
+  /**
+   * Single-flight guard for token refresh (slack-oauth-keeps-unlinking-v2). Slack
+   * rotating refresh tokens are SINGLE-USE: each refresh call invalidates the token
+   * used and issues a new one. Without this guard, two concurrent expired-token reads
+   * each call tryRefresh with the same stored refresh token; the first rotates it, the
+   * second posts the now-invalid token → Slack returns invalid_refresh_token → the
+   * connection flips to reconnect_needed. Coalescing concurrent callers onto the same
+   * in-flight promise means exactly one POST is issued per expiry event.
+   */
+  private refreshInFlight: Promise<StoredTokenSet | null> | null = null
+  /**
+   * The abort handle for the in-flight connect (slack-oauth-cancel-v1). Held only while
+   * `state === 'connecting'` so {@link cancelConnect} can abort the pending loopback wait
+   * and immediately return to not_connected (the user closed the browser tab — no `error`
+   * redirect arrives, so the flow would otherwise hang for the full OAuth timeout). Cleared
+   * when connect settles.
+   */
+  private connectAbort: AbortController | null = null
 
   constructor(deps: SlackManagerDeps) {
     this.deps = deps
@@ -138,24 +174,39 @@ export class SlackManager {
       return this.getStatus()
     }
     this.lastError = null
+    const abort = new AbortController()
+    this.connectAbort = abort
     this.setState('connecting')
 
     let oauth: SlackOAuthResult
     try {
-      oauth = await this.deps.runOAuth()
+      oauth = await this.deps.runOAuth(abort.signal)
     } catch (err) {
-      // SC-002: deny/timeout/unreachable -> back to not_connected with a clear
-      // reason. Log the failure, NEVER a token.
-      this.lastError =
-        'Slack connection was cancelled or failed. Click Connect to try again.'
-      console.error('[slack] connect failed:', err instanceof Error ? err.message : err)
-      this.setState('not_connected')
+      // SC-002: deny/timeout/cancel/unreachable -> back to not_connected with a clear
+      // reason. Log the failure, NEVER a token. A user cancel (cancelConnect aborted the
+      // signal) already reset the state to not_connected with its own gentle message; don't
+      // clobber it with the generic failure message.
+      if (this.connectAbort === abort) {
+        this.lastError =
+          'Slack connection was cancelled or failed. Click Connect to try again.'
+        this.connectAbort = null
+        console.error('[slack] connect failed:', err instanceof Error ? err.message : err)
+        this.setState('not_connected')
+      }
       return this.getStatus()
     }
+    this.connectAbort = null
 
     const tokens: StoredTokenSet = {
       accessToken: oauth.userToken,
       scopes: oauth.scopes,
+      // Token rotation (slack-oauth-keeps-unlinking-v1): persist the refresh token + expiry
+      // when the app rotates tokens, so the short-lived token can refresh instead of expiring
+      // into reconnect_needed. Absent for a classic non-expiring xoxp token (no-op).
+      ...(oauth.refreshToken ? { refreshToken: oauth.refreshToken } : {}),
+      ...(typeof oauth.expiresInSeconds === 'number'
+        ? { expiresAtMs: expiryFromSeconds(oauth.expiresInSeconds) }
+        : {}),
       ...(oauth.teamId ? { accountId: oauth.teamId } : {}),
       ...(oauth.teamName ? { accountName: oauth.teamName } : {})
     }
@@ -173,10 +224,32 @@ export class SlackManager {
   }
 
   /**
-   * Load the stored user token. The granted `xoxp` token is long-lived with no
-   * refresh token, so there is no silent refresh: either a token is present or the
-   * read returns a `not_connected` SlackError. A token later rejected by Slack
-   * flips to reconnect_needed via {@link run} (SC-007).
+   * Abort an in-flight connect (slack-oauth-cancel-v1). When the user cancels the browser
+   * consent (closes/cancels the tab) NO `error` redirect is sent, so the loopback wait would
+   * otherwise hang until the 3-minute OAuth timeout — leaving the panel stuck on "Connecting…"
+   * and a re-click of Connect a no-op (connect early-returns while connecting). This aborts the
+   * pending loopback wait (closing its http server) and immediately returns to not_connected so
+   * the user can retry. A no-op when no connect is in flight. Carries NO token/secret.
+   */
+  cancelConnect(): SlackConnectionStatus {
+    if (this.state !== 'connecting' || !this.connectAbort) {
+      return this.getStatus()
+    }
+    const abort = this.connectAbort
+    // Reset state BEFORE aborting so the rejected connect()'s `connectAbort === abort` guard
+    // is false and it won't re-emit not_connected / overwrite this gentle message.
+    this.connectAbort = null
+    this.lastError = 'Connection cancelled.'
+    this.setState('not_connected')
+    abort.abort()
+    return this.getStatus()
+  }
+
+  /**
+   * Ensure a usable access token. A classic `xoxp` token has no refresh token/expiry, so
+   * it is returned as-is (no silent refresh). A rotating token (slack-oauth-keeps-unlinking-v1)
+   * is refreshed PROACTIVELY when expired so it never lapses into reconnect_needed; a refresh
+   * failure flips to reconnect_needed. Returns a structured `not_connected` when no token is stored.
    */
   private async ensureToken(): Promise<StoredTokenSet | SlackResult<never>> {
     const tokens = this.deps.tokenStore.load()
@@ -184,7 +257,62 @@ export class SlackManager {
       this.setState('not_connected')
       return { ok: false, kind: 'not_connected', message: 'Connect Slack in cosmos first.' }
     }
+    if (tokens.refreshToken && this.deps.tokenStore.isExpired()) {
+      const refreshed = await this.tryRefresh(tokens)
+      if (!refreshed) {
+        return {
+          ok: false,
+          kind: 'reconnect_needed',
+          message: 'Your Slack connection expired. Reconnect to continue.'
+        }
+      }
+      return refreshed
+    }
     return tokens
+  }
+
+  /**
+   * Refresh + persist a rotating user token (slack-oauth-keeps-unlinking-v1), preserving the
+   * non-secret identity + scopes. Slack rotates the refresh token, so the new one replaces the
+   * old (falling back to the existing one if the response omits it). Returns the new set, or
+   * null on failure (after flipping to reconnect_needed). NEVER logs the token.
+   *
+   * Single-flight (slack-oauth-keeps-unlinking-v2): concurrent callers share the same
+   * in-flight promise so exactly ONE refresh POST is issued per expiry event — posting the
+   * same single-use refresh token twice would invalidate it and force a reconnect.
+   */
+  private tryRefresh(tokens: StoredTokenSet): Promise<StoredTokenSet | null> {
+    if (!tokens.refreshToken || !this.deps.refresh) {
+      this.setState('reconnect_needed')
+      return Promise.resolve(null)
+    }
+    if (this.refreshInFlight) {
+      return this.refreshInFlight
+    }
+    this.refreshInFlight = (async () => {
+      try {
+        const result = await this.deps.refresh!(tokens.refreshToken!)
+        const refreshedSet: StoredTokenSet = {
+          ...tokens,
+          accessToken: result.accessToken,
+          refreshToken: result.refreshToken ?? tokens.refreshToken,
+          ...(typeof result.expiresInSeconds === 'number'
+            ? { expiresAtMs: expiryFromSeconds(result.expiresInSeconds) }
+            : {})
+        }
+        this.deps.tokenStore.save(refreshedSet)
+        // A reconnect made the cached resolvers stale (keyed by the old token); drop them.
+        this.resolverCache = null
+        return refreshedSet
+      } catch (err) {
+        console.error('[slack] token refresh failed:', err instanceof Error ? err.message : err)
+        this.setState('reconnect_needed')
+        return null
+      } finally {
+        this.refreshInFlight = null
+      }
+    })()
+    return this.refreshInFlight
   }
 
   private auth(tokens: StoredTokenSet): SlackCallAuth {
@@ -249,7 +377,17 @@ export class SlackManager {
     if ('ok' in ensured) {
       return ensured as SlackResult<T>
     }
-    const result = await fn(ensured)
+    let tokens = ensured
+    let result = await fn(tokens)
+    // Rotating token (slack-oauth-keeps-unlinking-v1): a reconnect_needed the proactive refresh
+    // did not pre-empt (e.g. early revocation) gets ONE reactive refresh + retry before surfacing.
+    if (!result.ok && result.kind === 'reconnect_needed' && tokens.refreshToken && this.deps.refresh) {
+      const refreshed = await this.tryRefresh(tokens)
+      if (refreshed) {
+        tokens = refreshed
+        result = await fn(tokens)
+      }
+    }
     if (!result.ok && result.kind === 'reconnect_needed' && this.state !== 'reconnect_needed') {
       this.setState('reconnect_needed')
     }

@@ -24,6 +24,7 @@ import { z } from 'zod'
 import {
   bridgeSocketPath,
   encodeBridgeMessage,
+  type BridgeGeneratingNotification,
   type BridgeRenderRequest,
   type BridgeServerMessage
 } from '../shared/bridge'
@@ -31,6 +32,7 @@ import { validateSurfaceUpdate } from '../shared/validate'
 import { AdapterFlagPath } from '../shared/adapter'
 import { BindingsFirstEnforcer } from '../shared/dataBearingSpec'
 import { JiraAdapterSource } from '../shared/jira'
+import { registerGetUiCatalogTool } from './uiCatalog'
 import type { A2uiAction } from '../shared/ipc'
 
 /** Where the bridge socket lives. Claude Code sets CLAUDE_PROJECT_DIR. */
@@ -147,6 +149,31 @@ class BridgeClient {
       })
     })
   }
+
+  /**
+   * Fire the EARLY "UI generation has begun" begin-signal (ui-catalog-pull-spinner-signal-v1,
+   * FR-003): a fire-and-forget `{ kind:'generating' }` frame over the SAME bridge socket when
+   * `get_ui_catalog` is called. NO waiter (main sends no result). BEST-EFFORT: a bridge-down or
+   * write failure is swallowed so the catalog still returns (FR-010/FR-012).
+   */
+  async notifyGenerating(target?: BridgeGeneratingNotification['target']): Promise<void> {
+    let socket: Socket
+    try {
+      socket = await this.ensureConnected()
+    } catch {
+      return
+    }
+    const frame: BridgeGeneratingNotification = {
+      kind: 'generating',
+      callId: randomUUID(),
+      ...(target ? { target } : {})
+    }
+    try {
+      socket.write(encodeBridgeMessage(frame))
+    } catch {
+      // swallow — the catalog must still return.
+    }
+  }
 }
 
 /**
@@ -161,6 +188,8 @@ const JIRA_TOOL_DESCRIPTION = [
   "(catalogId: 'jira') and return the user's interaction. Use this for Jira issue",
   'lists, ticket detail, transitions, and comments — it renders status with color',
   'parity to the native panel.',
+  '',
+  'ALWAYS call get_ui_catalog first to get the component catalog and authoring rules.',
   '',
   'ARGUMENT: { spec: { surfaceId: string, components: Component[] } } — A2UI 0.9.',
   'components is a FLAT array; each is { "id": "<unique>", "component": "<Type>", ...props }.',
@@ -292,6 +321,11 @@ async function main(): Promise<void> {
   // (the model resubmits with a binding per container), bounded by the cap → render-anyway.
   const enforcer = new BindingsFirstEnforcer()
   const server = new McpServer({ name: 'cosmos-jira-render-ui', version: '0.1.0' })
+
+  // ui-catalog-pull-spinner-signal-v1 (FR-001/FR-002): the shared `get_ui_catalog` tool — the
+  // catalog pull fires the begin-signal for THIS server's target ('jira'). Byte-identical helper
+  // across all five servers; a notify failure never blocks the catalog return (FR-010/FR-012).
+  registerGetUiCatalogTool(server, { onGenerating: () => void bridge.notifyGenerating('jira') })
 
   server.registerTool(
     'render_jira_ui',

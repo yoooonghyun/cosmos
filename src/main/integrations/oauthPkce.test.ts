@@ -213,6 +213,59 @@ describe('awaitLoopbackCallback (FR-003, FR-004, SC-002)', () => {
     await expect(promise).resolves.toEqual({ code: 'C', port: 7422 })
   })
 
+  it('rejects cancelled + closes the server when the signal aborts before a callback (oauth-cancel-v1)', async () => {
+    const servers: FakeServer[] = []
+    const controller = new AbortController()
+    const promise = awaitLoopbackCallback({
+      ports: [7421],
+      expectedState: 'st',
+      timeoutMs: 60_000, // long: the cancel must win, NOT the timeout
+      serverFactory: fakeFactory(servers),
+      signal: controller.signal
+    })
+    // let listen() bind the port
+    await Promise.resolve()
+    await Promise.resolve()
+    controller.abort()
+    await expect(promise).rejects.toMatchObject({ kind: 'cancelled' })
+    // the abort must close the loopback http server (free the port)
+    expect(servers[0].closed).toBe(true)
+  })
+
+  it('rejects cancelled immediately when the signal is already aborted (binds no port)', async () => {
+    const servers: FakeServer[] = []
+    const controller = new AbortController()
+    controller.abort()
+    const promise = awaitLoopbackCallback({
+      ports: [7421],
+      expectedState: 'st',
+      timeoutMs: 60_000,
+      serverFactory: fakeFactory(servers),
+      signal: controller.signal
+    })
+    await expect(promise).rejects.toMatchObject({ kind: 'cancelled' })
+    // never bound a port (no listen callback ran)
+    expect(servers[0].boundPort).toBe(0)
+  })
+
+  it('a post-settle abort is a safe no-op (does not reject an already-resolved flow)', async () => {
+    const servers: FakeServer[] = []
+    const controller = new AbortController()
+    const promise = awaitLoopbackCallback({
+      ports: [7421],
+      expectedState: 'st',
+      timeoutMs: 1000,
+      serverFactory: fakeFactory(servers),
+      signal: controller.signal
+    })
+    await Promise.resolve()
+    await Promise.resolve()
+    servers[0].deliver('code=C&state=st')
+    await expect(promise).resolves.toEqual({ code: 'C', port: 7421 })
+    // aborting after settle must not throw or change the resolved value
+    expect(() => controller.abort()).not.toThrow()
+  })
+
   it('exports a LoopbackCallbackError class with a kind', () => {
     const e = new LoopbackCallbackError('timeout', 'x')
     expect(e).toBeInstanceOf(Error)

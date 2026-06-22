@@ -259,6 +259,27 @@ export function seedHiddenCalendarIds(calendars: CalendarLegendData[] | undefine
   return hidden
 }
 
+/**
+ * The SINGLE visibility filter every view (month / week / day) applies before layout
+ * (calendar-selection-persistence). Drops events owned by a HIDDEN calendar so a
+ * deselected calendar disappears identically in all three layouts (the bug: week/day
+ * remounted a fresh per-surface hidden-set and so re-showed a deselected calendar).
+ *
+ * Defensive + total: a non-array `events` yields `[]`; an absent/empty `hidden` is a
+ * no-op pass-through (every event visible); an event with no `calendarId` is ALWAYS
+ * visible (the single-primary path has no legend to hide against). Pure/node-testable.
+ */
+export function visibleEvents(
+  events: EventChipData[] | undefined,
+  hidden: Set<string> | undefined
+): EventChipData[] {
+  const list = Array.isArray(events) ? events : []
+  if (!(hidden instanceof Set) || hidden.size === 0) {
+    return list
+  }
+  return list.filter((ev) => !(typeof ev.calendarId === 'string' && hidden.has(ev.calendarId)))
+}
+
 /* ------------------------------------------------------------------------- *
  * Timed vs all-day + label formatting (FR-016)
  * ------------------------------------------------------------------------- */
@@ -407,15 +428,12 @@ export function buildMonthGrid(
 ): MonthGrid {
   const { year, month } = monthFromWindow(timeMin, now)
   const todayKey = localDateKey(now)
-  const hidden = hiddenCalendarIds instanceof Set ? hiddenCalendarIds : undefined
 
-  // Bucket events by local day key once (design §1.1 — bucketing is pure here).
+  // shared-calendars-v1 (FR-011): drop events owned by a hidden calendar via the SINGLE
+  // shared visibility filter (parity with the week/day schedule; calendar-selection-persistence).
+  // Bucket the visible events by local day key once (design §1.1 — bucketing is pure here).
   const byDay = new Map<string, EventChipData[]>()
-  for (const ev of Array.isArray(events) ? events : []) {
-    // shared-calendars-v1 (FR-011): drop events owned by a hidden calendar.
-    if (hidden && typeof ev.calendarId === 'string' && hidden.has(ev.calendarId)) {
-      continue
-    }
+  for (const ev of visibleEvents(events, hiddenCalendarIds)) {
     const key = eventDayKey(ev)
     if (key.length === 0) {
       continue
