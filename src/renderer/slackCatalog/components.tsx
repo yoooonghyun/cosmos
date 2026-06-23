@@ -45,6 +45,7 @@ import {
   showEmptyState,
   showErrorNotice,
   showSkeletonState,
+  SLACK_LIST_SCROLL_CLASS,
   SLACK_OPEN_CHANNEL_ACTION,
   SLACK_OPEN_THREAD_ACTION
 } from './logic'
@@ -320,7 +321,12 @@ export function MessageList({
     )
   }
   return (
-    <div className="flex w-full max-w-full min-w-0 flex-col" aria-busy={isLoading}>
+    // slack-list-scroll-fill-v2 (FR-001/FR-002/FR-006): the message list consumes the v2 fill
+    // chain (SLACK_LIST_SCROLL_CLASS: min-h-0 flex-1 overflow-y-auto, threaded from the host
+    // through the layout.tsx wrapper) so a LONE list fills to the panel bottom (no dead gap) and
+    // N lists equal-split + each scroll independently. The count label, top load-more, and rows
+    // stay inside the region (FR-005); a short list shows no inner scrollbar (FR-004).
+    <div className={cn('flex w-full flex-col', SLACK_LIST_SCROLL_CLASS)} aria-busy={isLoading}>
       <BoundListError message={errorMessage} />
       <div className="flex items-center justify-between gap-2 px-3 py-1.5">
         <p className="text-xs text-muted-foreground" aria-live="polite">
@@ -431,7 +437,11 @@ export function SearchResultList({
     )
   }
   return (
-    <div className="flex w-full max-w-full min-w-0 flex-col" aria-busy={isLoading}>
+    // slack-list-scroll-fill-v2 (FR-001/FR-002/FR-006): the search-result list consumes the
+    // same v2 fill chain (SLACK_LIST_SCROLL_CLASS as MessageList — it renders the same shared
+    // SlackMessageRow), so a lone list fills the panel and N lists equal-split + each scroll
+    // independently. Count label, rows, and the bottom load-more stay inside the region (FR-005).
+    <div className={cn('flex w-full flex-col', SLACK_LIST_SCROLL_CLASS)} aria-busy={isLoading}>
       <BoundListError message={errorMessage} />
       <div className="flex items-center justify-between gap-2 px-3 py-2">
         <p className="text-xs text-muted-foreground" aria-live="polite">

@@ -118,6 +118,100 @@ export function pxToFraction(
   })
 }
 
+/** The card's measured rendered size in px (the expanded composer `<form>` box). */
+export interface CardSize {
+  width: number
+  height: number
+}
+
+/**
+ * open-prompt-open-at-position-v1 — compute the expanded composer card's clamped top-left
+ * in panel-box-relative px (same frame as the logo's `logoPx`), given the button's anchor,
+ * the button size, the card's REAL measured size, and the panel content box. Pure + DOM-free
+ * (the `.ts`/`.test.ts` split) so the anchor+clamp is node-tested.
+ *
+ * FR-002 (OQ-2 = CENTERED-ON-BUTTON) — the card is CENTERED over the button on BOTH axes, so the
+ * button sits at the card's CENTER (not its bottom edge); the card's center coincides with the
+ * button's center pre-clamp:
+ *   `cardLeftRaw = anchor.x + buttonSize/2 - card.width/2`   (card center x over button center x)
+ *   `cardTopRaw  = anchor.y + buttonSize/2 - card.height/2`  (card center y over button center y)
+ * The transform-origin in the view is `center` to match, so the launch/dismiss morph emanates
+ * from the button's center.
+ *
+ * FR-003/FR-004 — clamp PER AXIS into the panel box: shift inward by exactly the overflow
+ * when the centered anchor pushes the card past the right/bottom wall, pin to `0` when it
+ * would cross the left/top wall.
+ *
+ * FR-005 — when the panel is SMALLER than the card on an axis (degenerate), `max(0, panel -
+ * card) = 0`, so that axis pins to `0` (panel origin): the card's origin-side edge stays
+ * visible and the overflow spills off the FAR (bottom/right) wall only — mirrors
+ * {@link fractionToPx}'s pin-at-0 behavior on a panel ≤ the button size.
+ *
+ * FR-006 — non-finite inputs flow through {@link clampNumber} (non-finite → `lo` = 0), so the
+ * helper never returns NaN/Infinity.
+ */
+export function clampCardWithinPanel(
+  anchor: PixelPoint,
+  buttonSize: number,
+  card: CardSize,
+  panel: PanelBox
+): PixelPoint {
+  // CENTERED-ON-BUTTON (OQ-2): the card's center coincides with the button's center on both axes.
+  const cardLeftRaw = anchor.x + buttonSize / 2 - card.width / 2
+  const cardTopRaw = anchor.y + buttonSize / 2 - card.height / 2
+  const maxLeft = Math.max(0, panel.width - card.width)
+  const maxTop = Math.max(0, panel.height - card.height)
+  return {
+    x: clampNumber(cardLeftRaw, 0, maxLeft),
+    y: clampNumber(cardTopRaw, 0, maxTop)
+  }
+}
+
+/**
+ * open-prompt-open-at-position-v1 (mid-settle open fix) — resolve the button's LIVE pixel
+ * anchor at an interaction (a re-grab OR a click-to-open), choosing between the animated
+ * follow position and the resting position derived from the committed fraction.
+ *
+ * While the eased release-settle is in flight, the committed `position` fraction is STALE
+ * (it commits only ONCE the spring settles), so `restingPx` points at where the button will
+ * END UP — not where it visually IS this frame. The live animated `currentPx` is the truth.
+ * So: when a settle is in flight (`settleInFlight`), seed from `currentPx`; otherwise seed
+ * from the resting anchor. This is the SAME decision `onLogoPointerDown` already used to
+ * re-grab mid-settle, extracted here so the click-to-open path reuses it (and it is
+ * node-tested). Pure.
+ */
+export function resolveLiveAnchor(
+  settleInFlight: boolean,
+  currentPx: PixelPoint,
+  restingPx: PixelPoint
+): PixelPoint {
+  return settleInFlight ? { ...currentPx } : { ...restingPx }
+}
+
+/**
+ * open-prompt-open-at-position-v1 (mid-settle open fix) — select the anchor the EXPANDED card
+ * opens at, with the correct PRECEDENCE for a click-to-open that may follow a settle-interrupting
+ * pointerdown.
+ *
+ * THE PROBLEM this encodes: a click is pointerdown→pointerup→click. When the user clicks the logo
+ * mid-glide, pointerdown cancels the settle rAF and pointerup clears the painted `dragPx`, so by
+ * the time the click fires the `settleInFlight` heuristic (`rafId != null || dragPx != null`) is
+ * already FALSE and `restingPx` may still be the OLD end-target (the commit hasn't re-rendered).
+ * To survive that, pointerdown SYNCHRONOUSLY stashes the live grab point; this helper PREFERS it.
+ *
+ * Precedence: `stashed` (the gesture-captured live grab point, ref state immune to render timing)
+ * wins; otherwise fall back to {@link resolveLiveAnchor} (animated `currentPx` while a settle is
+ * still in flight, else the resting anchor for a true at-rest open). Returns a COPY. Pure.
+ */
+export function resolveOpenAnchor(
+  stashed: PixelPoint | null,
+  settleInFlight: boolean,
+  currentPx: PixelPoint,
+  restingPx: PixelPoint
+): PixelPoint {
+  return stashed ? { ...stashed } : resolveLiveAnchor(settleInFlight, currentPx, restingPx)
+}
+
 /**
  * Whether pointer travel from `start` to `current` has reached the drag threshold
  * (FR-002). Uses squared distance to avoid a sqrt. Below threshold ⇒ false (a click,

@@ -369,6 +369,112 @@ export function shouldOpenThreadOnRowClick(
 export const SLACK_LAYOUT_CLAMP_CLASS = 'w-full min-w-0 max-w-full'
 
 /* ------------------------------------------------------------------------- *
+ * Per-list independent-scroll AND fill — v2 height-chain repair
+ * (slack-list-scroll-fill-v2, supersedes slack-independent-list-scroll-v1)
+ *
+ * GOAL (two requirements that were mutually exclusive in practice):
+ *   R1 — 2+ message lists each scroll INDEPENDENTLY (no shared scrollbar).
+ *   R2 — a LONE list FILLS down to the panel bottom (no dead gap).
+ *
+ * WHY the two prior leaf-only attempts each failed (must NOT be repeated):
+ *   - Attempt 1, `max-h-[70vh]` per list root: gave R1 but BROKE R2 — a fixed viewport
+ *     fraction is SHORTER than the panel body, so a lone tall list stopped at 70vh and left
+ *     ~30vh of dead space below it. The cap is decoupled from the actual panel height.
+ *   - Attempt 2, `max-h-full` per list root: gave R2 but BROKE R1 — `max-height: 100%`
+ *     resolves against the list's containing block, which is the SDK `Column`/`Row` flex div
+ *     (`flex flex-col gap-4`, AUTO height, no `min-h-0`/`flex-1`/definite height). A percentage
+ *     `max-height` against an indefinite-height parent computes to effectively `none`, so the
+ *     bound never engaged — every list flowed back into the ONE panel `overflow-auto` scroller
+ *     and N lists shared one scrollbar (the regression).
+ *
+ * ROOT CAUSE (both attempts): the height chain from the tabpanel scroller down to a list root
+ * is BROKEN at the SDK `Column`/`Row` flex div — it is neither a definite-height ancestor (so
+ * `%`/`max-h-full` can't resolve) nor a `flex-1 min-h-0` link (so a flex-fill chain can't
+ * thread through). A leaf class alone can NEVER fix this: the break is ABOVE the leaf and the
+ * leaf cannot see sibling count or whether a definite-height ancestor exists.
+ *
+ * v2 MECHANISM — repair the chain at the FIRST-PARTY DOM seam, not the leaf:
+ *   The Slack catalog does NOT register the raw SDK `Column`/`Row`; it registers its OWN
+ *   `slackCatalog/layout.tsx` wrappers (`<div className={…}><SdkColumn/></div>`). That wrapper
+ *   div is renderer-owned, and the SDK flex div is ALWAYS its only child. So we thread a
+ *   definite-height / flex-fill chain from the host all the way down WITHOUT depending on any
+ *   SDK attribute:
+ *     1. HOST  (SlackPanel.tsx tabpanel) carries {@link SLACK_SURFACE_HOST_CLASS}
+ *        (`flex flex-col min-h-0`) on top of its existing `flex-1 overflow-auto` — its parent
+ *        `@container/slackbody relative flex min-h-0 flex-1` gives it a resolved height, so the
+ *        host becomes the definite-height TOP of a flex column.
+ *     2. WRAPPER (layout.tsx Column/Row) carries {@link SLACK_LAYOUT_FILL_CLASS}
+ *        (width clamp + `flex flex-col min-h-0 flex-1` + a POSITIONAL `[&>*]` descendant repair
+ *        of the auto-height SDK flex child). `[&>*]` keys off DOM POSITION (direct child), not
+ *        any SDK class, so the SDK flex div participates in the chain regardless of its classes.
+ *     3. LIST ROOT (MessageList/SearchResultList) carries {@link SLACK_LIST_SCROLL_CLASS}
+ *        (`min-h-0 flex-1 overflow-y-auto` — definite FLEX sizing, NOT a `%` max-height).
+ *
+ *   Result: a LONE list is the only flex child of its parent → consumes `flex-1` → FILLS to the
+ *   panel bottom (R2, no dead gap). N lists are SIBLING flex children → equal-split the available
+ *   height and EACH scrolls internally past its share (R1). R1 and R2 are now the SAME mechanism
+ *   (N=1 is the degenerate split). No fixed `vh`, no `%` against an indefinite parent.
+ *
+ * SDK-markup robustness (FR-012): nothing keys off the SDK div's classes — the anchor is the
+ * first-party wrapper + the positional `[&>*]`. If a future `@a2ui-sdk` upgrade inserts an EXTRA
+ * wrapper layer, the worst case is one un-filled auto-height layer → degrades to "lone list still
+ * fills, multi-list may share" — NEVER horizontal overflow (`min-w-0 max-w-full` untouched) and
+ * never a white-screen.
+ *
+ * cqh hardening (Story 5) — SKIPPED: `100cqh` against `@container/slackbody` fills the lone list
+ * but has NO divide-by-N, so applied to every list root it re-breaks multi-list (each becomes
+ * full-panel-tall → shared scroll, the Attempt-2 failure). The catalog leaf can't see sibling
+ * count to make it single-list-only, so cqh is not used; the flex chain is the load-bearing
+ * mechanism.
+ *
+ * Scrollbar visibility: the list root keeps `scrollbar-hover-only` (a Tailwind `@utility` in
+ * `index.css`) — the inner scrollbar is HIDDEN by default and revealed ONLY while the pointer is
+ * over THAT list; `scrollbar-gutter: stable` reserves the track so hover causes no content shift.
+ *
+ * SCOPE: presentational containment only — no row, ordering (`orderBoundMessages`), load-more,
+ * data-model, or read-only behavior changes (FR-010). `ChannelList` is repaired uniformly via the
+ * wrapper fill chain (FR-009 default = include); the per-list scroll class applies to the
+ * MESSAGE-bearing lists (`MessageList`/`SearchResultList`) as before.
+ *
+ * The three class strings live here (not the `.tsx`) so the chain is assertable in a node
+ * (no-jsdom) unit test — mirroring `SLACK_LAYOUT_CLAMP_CLASS` + `components/ui/scroll-area.classes.ts`.
+ * ------------------------------------------------------------------------- */
+
+/**
+ * Per-list scroll bound for a MESSAGE-bearing catalog list root: it CONSUMES the v2 flex-fill
+ * chain — `min-h-0 flex-1 overflow-y-auto` (definite flex sizing, NOT a `%`/`vh` max-height, so a
+ * lone list fills and N siblings equal-split + each scroll), preserving the `min-w-0 max-w-full`
+ * wrap-safety and the hover-only inner scrollbar. (Dropped the Attempt-1/2 `max-h-*` cap — the
+ * bound is now flex sizing against the repaired chain, not a percentage max-height.)
+ */
+export const SLACK_LIST_SCROLL_CLASS =
+  'min-h-0 flex-1 overflow-y-auto min-w-0 max-w-full scrollbar-hover-only'
+
+/**
+ * Fill-chain class for the FIRST-PARTY `Column`/`Row` wrapper (layout.tsx): extends the existing
+ * width clamp (`w-full min-w-0 max-w-full`) with the flex-fill chain (`flex min-h-0 flex-1`) AND a
+ * POSITIONAL `[&>*]` descendant repair of the auto-height SDK flex child. The SDK child holds the
+ * sibling lists; it is forced to `!flex-row` (overriding the SDK's own `flex-col`) so MULTIPLE
+ * lists lay out SIDE-BY-SIDE (vertical dividers — "세로 분할"), each a full-height column that
+ * scrolls independently, instead of stacking top/bottom (horizontal dividers) which read poorly.
+ * A lone list is the only flex child → it fills the full width. The `[&>*]` keys off DOM position
+ * (the wrapper's only child is always the SDK `Column`/`Row` div), not any SDK class — so the chain
+ * threads through regardless of SDK markup (FR-005/FR-012). Replaces {@link SLACK_LAYOUT_CLAMP_CLASS}.
+ */
+export const SLACK_LAYOUT_FILL_CLASS =
+  'w-full min-w-0 max-w-full flex flex-col min-h-0 flex-1 ' +
+  '[&>*]:flex [&>*]:!flex-row [&>*]:min-h-0 [&>*]:min-w-0 [&>*]:flex-1'
+
+/**
+ * Chain-fill class the SlackPanel tabpanel HOST adds so its surface child participates in the
+ * v2 fill chain: `flex flex-col min-h-0` (combined at the call site with the host's existing
+ * `min-w-0 flex-1 overflow-auto p-3 …`). Its parent `@container/slackbody relative flex min-h-0
+ * flex-1` gives the host a resolved height, so the host is the definite-height TOP of the column.
+ * Exported as a string so the node test asserts the host carries these chain tokens.
+ */
+export const SLACK_SURFACE_HOST_CLASS = 'flex flex-col min-h-0'
+
+/* ------------------------------------------------------------------------- *
  * Bound-list display gating (slack-generative-adapter-v1, FR-004)
  *
  * The bound Slack lists (ChannelList/MessageList/SearchResultList) read their rows +

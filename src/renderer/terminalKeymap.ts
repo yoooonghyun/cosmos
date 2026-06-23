@@ -78,8 +78,27 @@ export interface TerminalKeyEvent {
    *
    * Pass `compositionActiveRef.current` from TerminalPanel. Omitting / undefined is
    * treated the same as false (no active composition, proceed normally).
+   *
+   * USED FOR: the Enter chords (Shift/Option+Enter) — they defer ONLY while composition is
+   * active (this, non-sticky), so Shift+Enter works the instant composition ends.
    */
   composing?: boolean
+  /**
+   * The current value of xterm's hidden textarea (`term.textarea.value`), passed as
+   * `term.textarea?.value ?? ''`.
+   *
+   * USED FOR: the cursor-MOTION chords (Cmd/Option+Arrow). A live IME trace proved that by
+   * the Option+Left keydown that interrupts Korean input, `compositionend` has ALREADY fired
+   * (so `composing`/`isComposing` are false and keyCode is 37) — yet xterm's textarea STILL
+   * holds the composed line ("테스트  테스트 "), because xterm clears it only on blur or CR/ETX.
+   * If we intercepted the motion there (return false), xterm's textarea/cursor desyncs from the
+   * PTY and the next composition diff re-emits/reorders the syllables ("테스트"→"트테스"→"스").
+   * So motions defer whenever the textarea is non-empty. It is EMPTY for a pure-ASCII line
+   * (xterm preventDefaults ordinary keys before they reach the textarea), so ASCII word/line
+   * motion still works. This sticky signal must NOT gate the Enter chords (it would block
+   * Shift+Enter until the next blur) — that is why motions use this and Enter uses `composing`.
+   */
+  textareaValue?: string
 }
 
 export const TERMINAL_KEY_SEQUENCES = {
@@ -124,44 +143,44 @@ export const TERMINAL_KEY_SEQUENCES = {
  * existing terminal input behavior is preserved.
  */
 export function mapTerminalKey(e: TerminalKeyEvent): string | null {
-  // IME guard: defer to xterm whenever a DOM composition session is active.
-  //
-  // Primary signal:
-  //   composing — set true on compositionstart, false on compositionend (tracked in
-  //   TerminalPanel via a ref on term.textarea). This is the only signal that is both
-  //   non-sticky (clears as soon as compositionend fires, unlike textarea.value which
-  //   xterm only clears on blur/CR/ETX) AND present during the interrupt-keydown (unlike
-  //   DOM isComposing, which macOS/Electron clears before the Option+Left keydown fires).
-  //   See TerminalKeyEvent.composing JSDoc for the full xterm source trace.
-  //
-  // Belt-and-suspenders:
-  //   isComposing — catches mid-composition character keydowns on non-macOS paths where
-  //   the browser still reports true.
-  //   keyCode === 229 — catches character IME commit-keydowns where isComposing already
-  //   flipped false but 229 is still emitted (non-navigation IME entry).
-  //
-  // Without deferring, returning false causes CoreBrowserTerminal._keyDown to early-return
-  // at lines 1025-1027, skipping _compositionHelper.keydown() at line 1032. That prevents
-  // _finalizeComposition(false) from running, leaving the textarea stale and causing
-  // compositionend to re-emit only the last syllable ("트" corruption).
-  if (e.composing || e.isComposing || e.keyCode === 229) {
-    return null
-  }
-
-  // Newline-without-submit: Shift+Enter or Option+Enter.
-  // We intercept both keydown (to send the CSI-u sequence) AND keypress (to suppress
-  // xterm's leaked \r — see module doc). Plain Enter (no modifier) is left to xterm.
+  // Newline-without-submit: Shift+Enter or Option+Enter. Defer ONLY while a composition is
+  // ACTIVE (composing/isComposing/229) so the IME commits the pending syllable. Do NOT gate
+  // this on `textareaValue` — xterm clears term.textarea only on blur/CR, so after a Korean
+  // composition ends the textarea still holds the line; a textarea check would wrongly block
+  // Shift+Enter until the next blur (an observed regression). Once compositionend fires,
+  // `composing` flips false and the soft newline works again. Handles keydown (send the CSI-u
+  // sequence), and keypress/keyup ('' = suppress xterm's leaked \r — see module doc). Plain
+  // Enter (no modifier) is left to xterm.
   if (e.key === 'Enter' && (e.shiftKey || e.altKey)) {
+    if (e.composing || e.isComposing || e.keyCode === 229) {
+      return null
+    }
     if (e.type === 'keydown') {
       return e.shiftKey ? TERMINAL_KEY_SEQUENCES.newline : TERMINAL_KEY_SEQUENCES.altNewline
     }
-    // keypress or keyup: suppress xterm's \r leak but send nothing
     return ''
   }
 
-  // Only act on keydown for everything below — keyup/keypress for the same chord
-  // would double-send.
+  // Only act on keydown for the motion chords below — keyup/keypress would double-send.
   if (e.type !== 'keydown') {
+    return null
+  }
+
+  // Cursor-MOTION guard (Cmd/Option+Arrow): defer to xterm whenever its hidden textarea holds
+  // ANY content. Proven from a live IME trace: by the Option+Left keydown, compositionend has
+  // already fired (composing=false, isComposing=false, keyCode=37) yet term.textarea still holds
+  // the composed Korean ("테스트  테스트 " — xterm clears it only on blur/CR). Intercepting and
+  // sending the CSI motion there (return false) desyncs xterm's textarea/cursor from the PTY and
+  // the next composition diff re-emits/reorders the syllables ("테스트"→"트테스"→"스" corruption).
+  // Deferring (null) keeps xterm authoritative over its composed line. The textarea is EMPTY for
+  // a pure-ASCII line (xterm preventDefaults ordinary keys before they reach it), so ASCII word/
+  // line motion below still works. composing/isComposing/229 are kept as belt-and-suspenders.
+  const textareaBusy =
+    (e.textareaValue !== undefined && e.textareaValue !== '') ||
+    e.composing ||
+    e.isComposing ||
+    e.keyCode === 229
+  if (textareaBusy) {
     return null
   }
 

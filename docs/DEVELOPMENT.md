@@ -84,13 +84,22 @@ catalogue of conventions and hard-won gotchas. The file-by-file source map lives
   give the panel a composer + target-filtered `SurfaceBridge`. **The Slack and Confluence generative
   panels are READ-ONLY** — their generative runs grant only read tools and have no deterministic
   action dispatcher (only Jira's panel writes). Confluence is read-only *as a generative panel* but
-  the `cosmos-confluence` MCP server still exposes one **model-mediated write tool**,
-  `confluence_create_page` (interactive-TUI-only: registered via `embeddedMcpConfig` but deliberately
-  NOT in `CONFLUENCE_TOOL_GRANTS`, so the panel never gets it), gated by the `write:confluence-content`
-  scope — the agent calls the tool directly and main attaches the token; there is no Confluence
-  surface form or dispatcher. Two write patterns therefore coexist: Jira's deterministic action
-  dispatch (UI control → main re-composes) and Confluence's model-mediated MCP write (agent calls a
-  tool).
+  the `cosmos-confluence` MCP server exposes **model-mediated write tools** (interactive-TUI-only:
+  registered via `embeddedMcpConfig` but deliberately NOT in `CONFLUENCE_TOOL_GRANTS`, so the panel
+  never gets them) — the agent calls them directly and main attaches the token; there is no Confluence
+  surface form or dispatcher. The write set (confluence-mcp-write-v1) is `confluence_create_page`
+  (POST `/wiki/api/v2/pages`), `confluence_update_page` (PUT `/wiki/api/v2/pages/{id}`), and
+  `confluence_create_comment` (POST `/wiki/api/v2/footer-comments`). Page create/update are gated by
+  `write:page:confluence`; the comment tool is gated by a SEPARATE `write:comment:confluence` scope
+  (added to `CONFLUENCE_OAUTH_SCOPES` — existing users must disconnect + reconnect to grant it, else
+  the tool short-circuits to `write_not_authorized`). **Gotcha — v2 update is optimistic-locked:**
+  `ConfluenceClient.updatePage` first reads the page with `body-format=storage&version=true` (NOT the
+  public `getPage`, which requests `view` HTML that is not a re-submittable storage body and drops the
+  version), then PUTs `version.number + 1`. An omitted/empty body re-sends the read storage body
+  (never wipes); a stale-version 409 (or 400 with a version-mismatch body) maps to the new
+  `version_conflict` `ConfluenceErrorKind` (recoverable "re-read and retry"). Two write patterns
+  therefore coexist: Jira's deterministic action dispatch (UI control → main re-composes) and
+  Confluence's model-mediated MCP writes (agent calls a tool).
 - **A composer run also carries the active panel's view context (open-prompt-view-context-v1).**
   When a `PromptComposer` utterance is sent, the panel's CURRENT non-secret selection (open Jira
   ticket / Slack channel+thread / Confluence page / Calendar event) rides along as an optional
@@ -602,7 +611,64 @@ single new `window.cosmos.session` namespace in `src/shared/ipc.ts` (`session:lo
   'w-full min-w-0 max-w-full'` in each `logic.ts`; each `index.ts` registers the wrapped
   `./layout` Column/Row instead of the raw `standardCatalog.components.Column/Row`, with a node
   test asserting the raw SDK containers are not registered). Mirror the same wrapper into any new
-  catalog that groups data-bearing containers.
+  catalog that groups data-bearing containers. NOTE: the Slack catalog folded its width clamp into
+  `SLACK_LAYOUT_FILL_CLASS` (which still carries the `w-full min-w-0 max-w-full` clamp tokens) as
+  part of the v2 height-chain repair below; `SLACK_LAYOUT_CLAMP_CLASS` is retained as an exported
+  constant but the wrapper now applies the fill class.
+- **Slack catalog MESSAGE lists fill AND scroll independently — repair the height chain at the
+  FIRST-PARTY wrapper, not the leaf (`slack-list-scroll-fill-v2`).** When the agent emits one OR
+  MORE message lists in a Slack surface, two requirements were mutually exclusive at the leaf: (R2)
+  a LONE list must fill to the panel bottom with no dead gap, and (R1) N lists must each scroll
+  independently (no shared scrollbar). Two prior leaf-only attempts each failed: `max-h-[70vh]` gave
+  R1 but left ~30vh dead gap (fixed `vh` shorter than the panel — R2 broken); `max-h-full` gave R2
+  but regressed to shared scroll (R1 broken) because `max-height:100%` resolves against the
+  AUTO-height SDK `Column`/`Row` flex div (`flex flex-col gap-4`, no `min-h-0`/`flex-1`/definite
+  height) → effectively `none` → every list flows into the ONE panel `overflow-auto` scroller. ROOT
+  CAUSE: the height chain from the tabpanel host down to a list root is BROKEN at that SDK flex div
+  — neither a definite-height ancestor nor a `flex-1 min-h-0` link, so neither `%` nor a flex-fill
+  chain threads through; a leaf class can't fix a break ABOVE it. **v2 fix — repair the chain at the
+  one renderer-owned DOM seam**: the Slack catalog does NOT register the raw SDK `Column`/`Row`, it
+  registers its OWN `slackCatalog/layout.tsx` wrappers (`<div className={…}><SdkColumn/></div>`,
+  the SDK flex div is ALWAYS the wrapper's only child). Thread a definite-height / flex-fill chain
+  host → wrapper → list root, all via pure class strings in `slackCatalog/logic.ts` (node-tested):
+  (1) HOST — the `SlackPanel.tsx` generative tabpanel `<div role="tabpanel">` carries
+  `SLACK_SURFACE_HOST_CLASS = 'flex flex-col min-h-0'` on top of its existing `min-w-0 flex-1
+  overflow-auto p-3` (its parent `@container/slackbody relative flex min-h-0 flex-1` gives it a
+  resolved height → the host is the definite-height TOP of a flex column). (2) WRAPPER — `layout.tsx`
+  `Column`/`Row` carry `SLACK_LAYOUT_FILL_CLASS = 'w-full min-w-0 max-w-full flex flex-col min-h-0
+  flex-1 [&>*]:flex [&>*]:flex-col [&>*]:min-h-0 [&>*]:flex-1'` (replaces the old width-only
+  `SLACK_LAYOUT_CLAMP_CLASS`). The `[&>*]` POSITIONAL selector repairs the auto-height SDK flex
+  child by DOM position (the wrapper's only child), NOT by any SDK class — so an SDK markup change
+  can't silently re-break it (FR-005/FR-012; worst-case degrade = lone-fills/multi-may-share, never
+  horizontal overflow or white-screen). (3) LIST ROOT — `MessageList`/`SearchResultList` roots
+  consume `SLACK_LIST_SCROLL_CLASS = 'min-h-0 flex-1 overflow-y-auto min-w-0 max-w-full
+  scrollbar-hover-only'` (definite FLEX sizing, NOT a `%`/`vh` max-height — the `max-h-*` cap is
+  GONE). Result: a LONE list is the only flex child → fills (R2); N lists are sibling flex children
+  → equal-split the panel height + each scroll internally (R1). R1 and R2 are now the SAME mechanism
+  (N=1 is the degenerate split). `cqh` hardening was rejected: `100cqh` has no divide-by-N, so on
+  every list root it re-breaks multi-list. Scrollbar visibility unchanged: `scrollbar-hover-only` (a
+  Tailwind `@utility` in `index.css`) hides each list's scrollbar by default, reveals it ONLY while
+  the pointer is over THAT list, with `scrollbar-gutter: stable` reserving the track so hover causes
+  NO horizontal content shift (Electron/Chromium renders `::-webkit-scrollbar`). The `min-w-0
+  max-w-full` wrap-safety is preserved across the host/wrapper/list so the vertical chain never
+  reintroduces horizontal overflow. The fill chain is applied uniformly (via the wrapper, so
+  `ChannelList` benefits too); the per-list scroll class is on the message-bearing lists.
+  Presentational containment only — no change to `orderBoundMessages`, load-more placement, the
+  shared `SlackMessageRow`, or read-only behavior. All three class strings live in `logic.ts`
+  (node-tested in `logic.test.ts`: chain tokens present, `max-h-*`/`70vh` ABSENT) because the
+  `.tsx` can't mount in node/no-jsdom to observe computed layout. The SAME SDK-wrapper break
+  affects the Jira/Confluence catalogs — applying this chain repair there is future-work parity.
+- **Slack thread/detail dock is an ALWAYS-overlay floating drawer (matches Jira/Confluence/Calendar
+  detail docks).** Both `SlackPanel.tsx` thread-dock regions (the native history dock and the
+  generative-surface dock, each driven by the single `openThread` state) render as an absolute
+  right-drawer that floats OVER the still-full-width list at EVERY panel width — scrim
+  `absolute inset-0 z-10 bg-black/40` (always present, closes on click) + drawer
+  `absolute inset-y-0 right-0 z-20 w-full max-w-[28rem] border-l border-border bg-card shadow-lg`
+  (plus the entry transition). There is NO `@[32rem]/slackbody` side-by-side branch any more — the
+  earlier container-query layout flipped the dock to `relative shrink-0` above 32rem and SQUEEZED
+  the list, which diverged from the other panels; the overlay keeps the list full-width and never
+  squeezes it. Keep both Slack dock blocks in sync, and match this shape when adding a detail dock
+  to any panel.
 - **Loading skeletons must match the width-fill of the surface they replace.** When the rendered
   surface fills the panel (e.g. via the `*_LAYOUT_CLAMP_CLASS` wrapper above), a fixed-width
   skeleton placeholder becomes a visible horizontal jump on the skeleton→content swap. Bug

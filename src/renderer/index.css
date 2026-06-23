@@ -156,6 +156,46 @@
   }
 }
 
+/*
+ * scrollbar-hover-only — hide a scroll region's scrollbar until the pointer is over
+ * that specific region (Slack per-list scroll, slack-independent-list-scroll-v1 defect 2).
+ *
+ * Default: the WebKit scrollbar is collapsed to 0 width/height (Electron/Chromium renders
+ * `::-webkit-scrollbar`, so this reliably hides it) AND `scrollbar-width: none` covers the
+ * non-WebKit fallback. On `:hover` the bar is revealed (a thin themed overlay). `scrollbar-
+ * gutter: stable` reserves the track space in BOTH states so revealing the bar on hover does
+ * NOT shift the list content sideways (no layout jump). Defined as a Tailwind v4 `@utility`
+ * so it composes in the SAME layered cascade as Tailwind utilities and can be applied via a
+ * single class token kept node-testable in `slackCatalog/logic.ts` (mirrors the
+ * `SLACK_LAYOUT_CLAMP_CLASS` / `SLACK_LIST_SCROLL_CLASS` pattern).
+ */
+@utility scrollbar-hover-only {
+  scrollbar-width: none;
+  scrollbar-gutter: stable;
+
+  &::-webkit-scrollbar {
+    width: 0;
+    height: 0;
+  }
+  &:hover {
+    scrollbar-width: thin;
+  }
+  &:hover::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+  }
+  &::-webkit-scrollbar-thumb {
+    border-radius: 9999px;
+    background: color-mix(in oklab, var(--muted-foreground) 45%, transparent);
+  }
+  &::-webkit-scrollbar-thumb:hover {
+    background: color-mix(in oklab, var(--muted-foreground) 70%, transparent);
+  }
+  &::-webkit-scrollbar-track {
+    background: transparent;
+  }
+}
+
 :root {
   --radius: 0.5rem;
 

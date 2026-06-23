@@ -64,9 +64,13 @@ import {
   isDrag,
   stepFollow,
   isSettled,
+  clampCardWithinPanel,
+  resolveLiveAnchor,
+  resolveOpenAnchor,
   OPEN_PROMPT_BUTTON_SIZE_PX,
   type PixelPoint,
-  type OpenPromptPosition
+  type OpenPromptPosition,
+  type CardSize
 } from './openPromptPosition'
 import { useOpenPromptPosition } from './OpenPromptPositionProvider'
 
@@ -156,6 +160,21 @@ export function PromptComposer({
   // true UI-generation run hides it (the surface spinner is the feedback while `busy`).
   const [sentHint, setSentHint] = useState(false)
 
+  // open-prompt-open-at-position-v1 (FR-009): the expanded card's REAL measured rendered size,
+  // fed into `clampCardWithinPanel` so the clamp uses the actual box (not a hard-coded constant).
+  // `null` until the `<form>` is first measured — while null the card is kept invisible
+  // (hide-until-measured, like the logo's `panelRect.width === 0` gate) so it never flashes at
+  // the wrong spot before the size is known. Re-measured on content change via a ResizeObserver.
+  const [cardSize, setCardSize] = useState<CardSize | null>(null)
+
+  // open-prompt-open-at-position-v1 (OQ-1 FREEZE + mid-settle open fix): the button anchor
+  // FROZEN at open-time, used to position the expanded card. Captured the moment the composer
+  // opens (collapsed→expanded) — from the LIVE animated position when opening mid-settle (the
+  // committed fraction is still gliding to its end target then), else the resting anchor — so
+  // the card opens where the logo VISUALLY is at click, not where it started or will end up.
+  // `null` while collapsed; the card reads `logoPx` (live) only as a fallback before capture.
+  const [openAnchor, setOpenAnchor] = useState<PixelPoint | null>(null)
+
   // open-prompt-spinner-gating ("non-UI submit must not block"): whether the composer is
   // LOCKED (textarea disabled, Send disabled, submit rejected) — the single gate that replaces
   // the old `running` gating. Constant false (`composerInteractiveAfterSubmit()` ⇒ interactive),
@@ -189,6 +208,13 @@ export function PromptComposer({
   // While true, the next `click` on the logo is a DRAG-END, not an open (FR-002). A ref
   // (not state) so the click handler reads the latest value synchronously.
   const draggingRef = useRef(false)
+  // open-prompt-open-at-position-v1 (mid-settle open fix): the LIVE button anchor captured the
+  // instant a pointerdown INTERRUPTED an in-flight settle. The click that follows (pointerdown→
+  // up→click with no move past threshold) reads this SYNCHRONOUSLY in `openComposer`, so the card
+  // anchors at the logo's live glide position regardless of whether the `dragPx`/`restingPx`
+  // re-render has flushed yet. A ref (not state) — set in `onLogoPointerDown`, consumed + cleared
+  // in `openComposer`; null on a plain at-rest click (no settle was interrupted).
+  const pendingOpenAnchorRef = useRef<PixelPoint | null>(null)
   // Drive a re-render of the logo wrapper while dragging so it follows the pointer live. This
   // is the ANIMATED ("current") position the eased rAF follow writes each frame — NOT the raw
   // cursor — so the button eases toward the cursor with natural accel/decel (motion refinement).
@@ -316,7 +342,11 @@ export function PromptComposer({
       // grab from the LIVE animated position (`f.currentPx`) so the new drag continues from where
       // the button visibly is. Otherwise (at rest) seed from the committed fraction.
       const settleInFlight = f.rafId != null || dragPx != null
-      const anchor = settleInFlight ? { ...f.currentPx } : fractionToPx(position, box, OPEN_PROMPT_BUTTON_SIZE_PX)
+      const anchor = resolveLiveAnchor(
+        settleInFlight,
+        f.currentPx,
+        fractionToPx(position, box, OPEN_PROMPT_BUTTON_SIZE_PX)
+      )
       // The grab offset within the button so the cursor stays on the same spot mid-drag.
       const pointer: PixelPoint = { x: event.clientX - box.left, y: event.clientY - box.top }
       dragStart.current = {
@@ -337,9 +367,24 @@ export function PromptComposer({
       f.lastTs = null
       f.releasing = false
       f.pendingCommit = null
+      // open-prompt-open-at-position-v1 (mid-settle open fix): if this pointerdown INTERRUPTED an
+      // in-flight settle, COMMIT the live grab point to the shared fraction NOW. The interrupted
+      // settle would otherwise never commit (it commits only on natural settle), leaving `position`
+      // / `restingPx` stale at the OLD end-target. A plain click (pointerdown→up→click with no move)
+      // then opens via `openComposer`, which by that time sees `settleInFlight === false` (the rAF
+      // is cancelled here and `dragPx` is cleared on pointerup) and would resolve the STALE resting
+      // anchor — opening the card at the pre-move position (the reported bug). Committing here makes
+      // `restingPx` reflect the live grab point, so the subsequent open anchors correctly even
+      // though the drag turned out to be a click.
+      if (settleInFlight) {
+        setPosition(pxToFraction(anchor, box, OPEN_PROMPT_BUTTON_SIZE_PX))
+        // Stash the live grab point so a click-to-open on THIS gesture anchors the card here
+        // (the `restingPx` re-render from the commit above may not have flushed by the click).
+        pendingOpenAnchorRef.current = { ...anchor }
+      }
       event.currentTarget.setPointerCapture(event.pointerId)
     },
-    [expanded, busy, position, slotBox, dragPx]
+    [expanded, busy, position, slotBox, dragPx, setPosition]
   )
 
   const onLogoPointerMove = useCallback(
@@ -353,6 +398,9 @@ export function PromptComposer({
       // Past the threshold this becomes a drag (suppresses the click-to-open — FR-002).
       if (!draggingRef.current && isDrag(start.origin, pointer)) {
         draggingRef.current = true
+        // This gesture is a real DRAG, not a click-to-open — drop any stashed open anchor so a
+        // later legitimate open does not reuse this drag's grab point.
+        pendingOpenAnchorRef.current = null
       }
       if (draggingRef.current) {
         // The cursor TARGET: button top-left at pointer minus the grab offset, clamped fully
@@ -471,6 +519,100 @@ export function PromptComposer({
   // drag px while dragging, else the resting (clamped) anchor from the shared fraction.
   const logoPx = dragPx ?? restingPx
 
+  // open-prompt-open-at-position-v1 (OQ-1 FREEZE + mid-settle open fix): open the composer,
+  // FREEZING the logo (and the card's anchor) at the button's LIVE position this instant.
+  //
+  // THE EVENT SEQUENCE (why a naive read is stale). A click is pointerdown→pointerup→click.
+  // When the user clicks the logo WHILE it is gliding mid-settle, `onLogoPointerDown` runs FIRST:
+  // it cancels the settle rAF (`f.rafId = null`) and stashes the live grab point in
+  // `pendingOpenAnchorRef`; `onLogoPointerUp` then clears `dragPx` (it was a click, no move). So
+  // by the time THIS `onClick` handler runs, `f.rafId == null` AND `dragPx == null` — the
+  // `settleInFlight` heuristic is already FALSE and `restingPx` may still hold the OLD end-target
+  // (the commit from pointerdown may not have re-rendered yet). Reading `restingPx` here opened
+  // the card at the PRE-MOVE position (the reported bug).
+  //
+  // FIX: prefer the synchronously-stashed `pendingOpenAnchorRef` (the live grab point captured in
+  // pointerdown) — it is ref state, immune to render timing — falling back to the settle/resting
+  // resolution only for a true at-rest click (no gesture interrupted a settle). The live source is
+  // `f.currentPx`, the SAME value painted into the logo's `translate3d`, so card and logo agree.
+  const openComposer = useCallback((): void => {
+    const f = followRef.current
+    const stashed = pendingOpenAnchorRef.current
+    const settleInFlight = f.rafId != null || dragPx != null
+    // Live anchor: the gesture-stashed grab point if a settle was just interrupted by this click's
+    // pointerdown; else the in-flight animated px; else the resting anchor (true at-rest open).
+    const live = resolveOpenAnchor(stashed, settleInFlight, f.currentPx, restingPx)
+    if (stashed || settleInFlight) {
+      // Stop any still-running settle so the logo does not keep easing to its old end target after
+      // the card opens (else the inert logo + frozen card would disagree / drift).
+      if (f.rafId != null) {
+        cancelAnimationFrame(f.rafId)
+        f.rafId = null
+      }
+      f.releasing = false
+      f.pendingCommit = null
+      f.lastTs = null
+      f.currentPx = { ...live }
+      f.targetPx = { ...live }
+      // Freeze the shared fraction at the live point so `restingPx` agrees once `dragPx` clears.
+      setPosition(pxToFraction(live, slotBox(), OPEN_PROMPT_BUTTON_SIZE_PX))
+      setDragPx(null)
+    }
+    pendingOpenAnchorRef.current = null
+    setOpenAnchor(live)
+    setLaunching(false)
+    setExpanded(true)
+  }, [dragPx, restingPx, setPosition, slotBox])
+
+  // open-prompt-open-at-position-v1 (FR-009): measure the expanded card's real rendered size
+  // (the `<form>` box) so the clamp below uses the actual width/height of the `max-w-2xl` card,
+  // not a hard-coded constant. A ResizeObserver re-measures when the content height changes
+  // (chip shown/hidden, textarea grows). The form is ALWAYS mounted (both states render), so the
+  // ref is available even while collapsed; we measure its natural box (it is only scaled by the
+  // CSS transform, which a `getBoundingClientRect` would include — so we read `offsetWidth/Height`,
+  // the un-transformed layout box, to keep the clamp stable across the open/close scale morph).
+  useLayoutEffect(() => {
+    const el = formRef.current
+    if (!el) {
+      return
+    }
+    const measure = (): void => {
+      setCardSize((prev) => {
+        const next = { width: el.offsetWidth, height: el.offsetHeight }
+        // Skip the state churn (and re-render) when the box is unchanged.
+        if (prev && prev.width === next.width && prev.height === next.height) {
+          return prev
+        }
+        return next
+      })
+    }
+    measure()
+    if (typeof ResizeObserver === 'undefined') {
+      return
+    }
+    const ro = new ResizeObserver(measure)
+    ro.observe(el)
+    return () => ro.disconnect()
+    // Re-measure when content that changes the card height toggles: the context chip's presence
+    // and the dismiss state both alter the rendered height.
+  }, [contextChip, contextDismiss])
+
+  // open-prompt-open-at-position-v1 (FR-001/FR-002/FR-007): the expanded card's clamped top-left
+  // in the SAME panel-box px frame as the logo. Anchored bottom-LEFT at the live button anchor
+  // (`logoPx`, frozen at open since the logo is `inert` while expanded — OQ-1 FREEZE), grown UP,
+  // then clamped so the full card box stays inside `panelRect`. Falls back to a 0-box until the
+  // card is measured; the render keeps the card invisible until `cardSize` exists so the
+  // pre-measure frame never flashes off-anchor (hide-until-measured, FR-009).
+  const cardPx = clampCardWithinPanel(
+    openAnchor ?? logoPx,
+    OPEN_PROMPT_BUTTON_SIZE_PX,
+    cardSize ?? { width: 0, height: 0 },
+    { width: panelRect.width, height: panelRect.height }
+  )
+  // Hide the card until both the panel AND the card are measured (mirrors the logo's
+  // `panelRect.width === 0` gate) so it fades in at the correct anchor instead of at top-left.
+  const cardReady = panelRect.width > 0 && cardSize != null
+
   // Keep the run-status subscription (OQ-1): it now drives the collapsed-logo error ring ONLY
   // (`hasError`). open-prompt-spinner-gating ("non-UI submit must not block"): `running` no
   // longer gates interactivity — the composer stays typeable/sendable for the run's duration —
@@ -513,6 +655,8 @@ export function PromptComposer({
     // Chip dismiss is per-compose (design §5): collapsing (submit/Esc/outside-click) resets
     // it so re-opening restores the full chip.
     setContextDismiss('none')
+    // Release the frozen open-time anchor so the NEXT open recaptures the logo's live position.
+    setOpenAnchor(null)
   }, [])
 
   // FR-005/FR-006: send only on a non-empty, non-running submit, then auto-collapse +
@@ -695,8 +839,9 @@ export function PromptComposer({
                     draggingRef.current = false
                     return
                   }
-                  setLaunching(false)
-                  setExpanded(true)
+                  // open-prompt-open-at-position-v1: freeze the logo + capture the card anchor at
+                  // the button's LIVE position (handles click-to-open mid-settle, OQ-1 FREEZE).
+                  openComposer()
                 }}
                 className={[
                   'relative size-12 rounded-xl border border-border bg-popover p-0 shadow-md',
@@ -723,19 +868,23 @@ export function PromptComposer({
             <TooltipContent side="top">Open prompt</TooltipContent>
           </Tooltip>
         </div>
-      </div>
 
-      {/* The EXPANDED card + the "Sent" hint keep their own bottom-anchored overlay slot —
-          the expanded composer stays CENTERED-bottom (OQ-4), independent of the logo. */}
-      <div className="pointer-events-none absolute inset-x-0 bottom-0 flex min-h-[4.5rem] items-end justify-center px-3 pb-3 pt-2">
+        {/* open-prompt-open-at-position-v1: the EXPANDED card + the "Sent" hint now live in the
+            SAME `fixed` panel-box layer (`slotRef`) as the logo, positioned by a `translate3d`
+            transform in the SAME px frame so the anchor+clamp is exact (FR-007/SC-004). The card
+            opens at the button's clamped anchor (bottom-left co-located with the logo, grows UP),
+            replacing the old centered-bottom overlay (supersedes draggable-open-prompt-button-v1
+            OQ-4). The "Sent" hint rides just above the logo at its live position. */}
+
         {/* open-prompt-spinner-gating-v1 (OQ-3): the transient, non-blocking "Sent" hint for a
             plain command. Decorative + pointer-events-none (it never blocks the logo beneath),
-            reusing the existing muted-foreground token (same as the composer hint copy). Sits
-            just above the collapsed logo and fades out on auto-dismiss. */}
+            reusing the existing muted-foreground token (same as the composer hint copy). Anchored
+            just above the LOGO at its live position and fades out on auto-dismiss. */}
         <span
           aria-hidden="true"
+          style={{ transform: `translate3d(${logoPx.x}px, ${logoPx.y - 20}px, 0)` }}
           className={[
-            'pointer-events-none absolute bottom-[3.75rem] left-1/2 -translate-x-1/2',
+            'pointer-events-none absolute left-0 top-0 w-12 text-center',
             'text-[11px] text-muted-foreground',
             'transition-opacity duration-200 ease-out motion-reduce:transition-none',
             showSentHint ? 'opacity-100' : 'opacity-0'
@@ -744,14 +893,31 @@ export function PromptComposer({
           Sent
         </span>
 
-        {/* EXPANDED: centered, constrained-width composer card (FR-010). Opaque
-            (bg-popover) so tickets do not bleed through the card itself. */}
+        {/* EXPANDED: constrained-width composer card (FR-010), positioned at the button's clamped
+            anchor (FR-001/FR-002, OQ-2 = CENTERED-ON-BUTTON → the button sits at the card's CENTER
+            on both axes). Opaque (bg-popover) so tickets do not bleed through the card. The
+            positioning wrapper carries the `translate3d(cardPx)` + `center` transform-origin so the
+            open/close morph + launch grow-fade emanate from the button's center (FR-002/SC-006); the
+            scale/opacity/blur animation classes are UNCHANGED on the form. Kept invisible until both
+            the panel and the card are measured (`cardReady`) so it never flashes off-anchor (FR-009). */}
+        <div
+          style={{
+            transform: `translate3d(${cardPx.x}px, ${cardPx.y}px, 0)`,
+            transformOrigin: 'center'
+          }}
+          className={[
+            // Width is the card width: `max-w-2xl` capped to the panel width so a card wider
+            // than a narrow panel shrinks to fit (and the clamp's degenerate pin stays sane).
+            'absolute left-0 top-0 w-full max-w-2xl',
+            cardReady ? '' : 'invisible'
+          ].join(' ')}
+        >
         <form
           ref={formRef}
           inert={!expanded}
           aria-hidden={!expanded}
           className={[
-            'w-full max-w-2xl rounded-lg border border-input bg-popover p-2 shadow-md',
+            'w-full rounded-lg border border-input bg-popover p-2 shadow-md',
             // Submit exit is a GROW-TO-FILL-AND-VANISH "launch" (composer-send-animation-v1
             // FR-001, design §3): on submit the card scales UP well past full size while
             // fading + softening to nothing, as if the prompt is launched into the surface —
@@ -759,8 +925,9 @@ export function PromptComposer({
             // uses a gentle shrink-fade instead, so only a real send reads as the big expand.
             // `transition-[opacity,scale,filter]` MUST name `scale`/`filter` (Tailwind v4:
             // `scale-*` compiles to a standalone `scale:` prop). Both states stay mounted so
-            // the exit fires; reduced motion is an instant swap.
-            'origin-bottom transition-[opacity,scale,filter] duration-[450ms] ease-[cubic-bezier(0.16,1,0.3,1)]',
+            // the exit fires; reduced motion is an instant swap. Transform-origin is the anchor
+            // (`center`, OQ-2/FR-002/SC-006) so the morph emanates from the button's center.
+            'origin-center transition-[opacity,scale,filter] duration-[450ms] ease-[cubic-bezier(0.16,1,0.3,1)]',
             'motion-reduce:transition-none motion-reduce:transform-none',
             expanded
               ? 'pointer-events-auto scale-100 opacity-100 blur-0'
@@ -820,6 +987,7 @@ export function PromptComposer({
             </Button>
           </div>
         </form>
+        </div>
       </div>
     </div>
   )

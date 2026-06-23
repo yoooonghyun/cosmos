@@ -1412,6 +1412,10 @@ export function SlackPanel({ active }: { active: boolean }): React.JSX.Element {
                             key={mode}
                             value={mode}
                             disabled={mode === 'messages' && status.canSearch === false}
+                            // No selected-check here: it forces the shared SelectItem's pr-8
+                            // reserve, widening items past the compact scope trigger. Drop the
+                            // indicator + its padding so items size to the label.
+                            className="pr-2 [&>[data-slot=select-item-indicator]]:hidden"
                           >
                             {searchModeLabel(mode)}
                           </SelectItem>
@@ -1521,19 +1525,20 @@ export function SlackPanel({ active }: { active: boolean }): React.JSX.Element {
                     )}
                   </div>
 
-                  {/* Right-docked thread region (design §1.3 side-by-side / §1.4 drawer overlay).
-                      Below 32rem it is an absolute right-drawer overlaying the list (does not
-                      squeeze it); at/above 32rem it docks side-by-side. Driven by the single
-                      open-thread state, so both native + generative surfaces feed it. */}
+                  {/* Right-docked thread region — ALWAYS-overlay floating drawer (matches the
+                      Jira/Confluence/Calendar detail docks): the scrim + absolute right-drawer
+                      float OVER the still-full-width list at EVERY panel width and never squeeze
+                      it (no `@[32rem]/slackbody` side-by-side branch). Driven by the single
+                      open-thread state, so both native + generative surfaces feed it. The scrim
+                      is always present and closes the thread on click. */}
                   {openThread && (
                     <>
-                      {/* Narrow-mode scrim: closes the thread on click; hidden side-by-side. */}
                       <div
-                        className="absolute inset-0 z-10 bg-black/40 transition-opacity duration-200 @[32rem]/slackbody:hidden"
+                        className="absolute inset-0 z-10 bg-black/40 transition-opacity duration-200"
                         aria-hidden="true"
                         onClick={closeThread}
                       />
-                      <div className="absolute inset-y-0 right-0 z-20 w-full max-w-[22rem] translate-x-0 border-l border-border bg-card shadow-lg transition-transform duration-200 ease-out motion-reduce:transition-none @[32rem]/slackbody:relative @[32rem]/slackbody:w-[clamp(18rem,42%,28rem)] @[32rem]/slackbody:max-w-none @[32rem]/slackbody:shrink-0 @[32rem]/slackbody:shadow-none">
+                      <div className="absolute inset-y-0 right-0 z-20 w-full max-w-[28rem] translate-x-0 border-l border-border bg-card shadow-lg transition-transform duration-200 ease-out motion-reduce:transition-none">
                         <SlackThreadPanel
                           context={openThread}
                           canSend={status.canSend === true}
@@ -1568,7 +1573,15 @@ export function SlackPanel({ active }: { active: boolean }): React.JSX.Element {
               // `@container/slackbody` two-pane parent so the SAME open-thread state (fed by
               // the generative SLACK_OPEN_THREAD_ACTION) docks the thread panel beside / over it.
               <div className="@container/slackbody relative flex min-h-0 flex-1">
-                <div className="min-w-0 flex-1 overflow-auto p-3 text-card-foreground" role="tabpanel">
+                {/* slack-list-scroll-fill-v2 (Story 3): the tabpanel host is a definite-height
+                    flex column (SLACK_SURFACE_HOST_CLASS = `flex flex-col min-h-0`) on top of its
+                    `flex-1 overflow-auto` — the TOP of the fill chain so its A2UI surface child
+                    participates (a lone list fills, N lists equal-split + each scroll). Its parent
+                    `@container/slackbody … flex min-h-0 flex-1` gives it a resolved height. */}
+                <div
+                  className="flex min-w-0 flex-1 flex-col overflow-auto p-3 text-card-foreground min-h-0"
+                  role="tabpanel"
+                >
                   {activeTab.error && (
                     <p
                       className="rounded-md border border-destructive/40 bg-destructive/15 px-2.5 py-2 text-[13px] text-destructive"
@@ -1588,12 +1601,15 @@ export function SlackPanel({ active }: { active: boolean }): React.JSX.Element {
                 </div>
                 {openThread && (
                   <>
+                    {/* ALWAYS-overlay floating drawer (matches Jira/Confluence/Calendar docks):
+                        scrim + absolute right-drawer float OVER the full-width generative surface
+                        at every width and never squeeze it. Scrim always present, closes on click. */}
                     <div
-                      className="absolute inset-0 z-10 bg-black/40 transition-opacity duration-200 @[32rem]/slackbody:hidden"
+                      className="absolute inset-0 z-10 bg-black/40 transition-opacity duration-200"
                       aria-hidden="true"
                       onClick={closeThread}
                     />
-                    <div className="absolute inset-y-0 right-0 z-20 w-full max-w-[22rem] translate-x-0 border-l border-border bg-card shadow-lg transition-transform duration-200 ease-out motion-reduce:transition-none @[32rem]/slackbody:relative @[32rem]/slackbody:w-[clamp(18rem,42%,28rem)] @[32rem]/slackbody:max-w-none @[32rem]/slackbody:shrink-0 @[32rem]/slackbody:shadow-none">
+                    <div className="absolute inset-y-0 right-0 z-20 w-full max-w-[28rem] translate-x-0 border-l border-border bg-card shadow-lg transition-transform duration-200 ease-out motion-reduce:transition-none">
                       <SlackThreadPanel
                         context={openThread}
                         canSend={status.canSend === true}

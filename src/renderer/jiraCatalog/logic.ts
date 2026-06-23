@@ -153,6 +153,59 @@ export function isTransitionSubmittable(
 }
 
 /**
+ * The resolved action context the TransitionPicker dispatches for `jira.transition`
+ * (bug jira-status-transition-applying-hang-v1). Carries the LITERAL `issueKey` +
+ * `transitionId` strings the user just selected — NOT a `{ path: '/transitionId' }`
+ * binding.
+ *
+ * WHY a literal, not a binding: the SDK's `useDispatchAction` resolves a `{ path }`
+ * action-context binding against the surface data model AT DISPATCH TIME by reading
+ * the SDK's React-`useState`-backed store (`getDataModel`). The picker selects-AND-
+ * dispatches in ONE event tick, so the `setTransitionId(next)` form-binding write
+ * (which only queues a React state update) has NOT flushed when dispatch reads the
+ * model — `resolveContext` would resolve `/transitionId` to its STALE/empty value,
+ * sending `transitionId: undefined` to main. Main's `validateJiraTransition` then
+ * rejects it (no write), the dispatcher returns false (no `cancelActive`, no surface
+ * re-push), and the picker's "Applying…" optimistic state never clears → the UI hangs
+ * forever. Passing the just-selected literal `transitionId` here sidesteps the
+ * not-yet-flushed model entirely so the write always carries the chosen id.
+ *
+ * Pure/node-testable; the component leans on this so the literal-vs-binding decision
+ * is asserted off-React. The shape mirrors the SDK action contract
+ * (`{ issueKey, transitionId }` — `JiraBoundAction.Transition`, FR-005).
+ */
+export function transitionActionContext(
+  issueKey: string,
+  transitionId: string
+): { issueKey: string; transitionId: string } {
+  return { issueKey, transitionId }
+}
+
+/**
+ * The "Applying…" watchdog window, in ms (bug jira-status-transition-applying-hang-v1).
+ *
+ * On the normal path a transition write makes main re-read + re-push a FRESH detail
+ * frame, which REMOUNTS the TransitionPicker idle — so its in-flight "Applying…" lock
+ * clears by remount, not by a callback. But if a write ever fails WITHOUT a re-push
+ * reaching this instance (a dropped/never-arriving frame), the lock would otherwise
+ * hang forever. The picker arms a timer for this long when it dispatches; if no
+ * remount has cleared it by then, the picker self-recovers (clears "Applying…" +
+ * surfaces a recoverable inline error) so a failed transition can NEVER hang the UI.
+ * Generous so the deterministic main round-trip (write + re-read + re-push) virtually
+ * always wins the race on the happy path; the watchdog is a last-resort safety net.
+ */
+export const TRANSITION_APPLYING_TIMEOUT_MS = 15_000
+
+/**
+ * The recoverable inline message the TransitionPicker shows when its "Applying…"
+ * watchdog fires (the write produced no fresh frame in time). Non-secret, non-alarming,
+ * and actionable — mirrors the FR-017 notice tone. Centralized here so it is asserted in
+ * a node test rather than scraped from JSX.
+ */
+export const TRANSITION_APPLYING_TIMEOUT_MESSAGE =
+  'Could not confirm the status change. Please try again.'
+
+/**
  * Whether a bound issue `webUrl` is a live, openable external link
  * (jira-dock-autoapply-weblink-v1, FR-014). The main-side assembler already enforces
  * `http(s)`, but the bound/native value re-validates here so a malformed value can NEVER

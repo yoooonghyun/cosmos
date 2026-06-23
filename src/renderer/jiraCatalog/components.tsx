@@ -18,7 +18,7 @@
  * §7 CommentRow/CommentList, §8 AddCommentControl, §9.5 post-write notice.
  */
 
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useDataBinding, useDispatchAction, useFormBinding } from '@a2ui-sdk/react/0.9'
 import type { DynamicValue } from '@a2ui-sdk/types/0.9'
 import {
@@ -75,7 +75,10 @@ import {
   shouldShowIssueEmptyState,
   statusBadgeLabel,
   statusBadgeStyle,
-  ticketCardSummary
+  ticketCardSummary,
+  transitionActionContext,
+  TRANSITION_APPLYING_TIMEOUT_MS,
+  TRANSITION_APPLYING_TIMEOUT_MESSAGE
 } from './logic'
 
 /**
@@ -435,12 +438,31 @@ export function TransitionPicker({
     { path: PATH_TRANSITION_ID },
     ''
   )
-  // jira-dock-autoapply-weblink-v1 (FR-003): the in-flight lock. There is NO success callback —
-  // the write is deterministic + async via main, which re-reads the issue and re-pushes a fresh
-  // detail frame that REMOUNTS this component idle (applying=false). So this flag only needs to
-  // guard against a second dispatch within this instance's lifetime (no double-dispatch).
+  // jira-dock-autoapply-weblink-v1 (FR-003): the in-flight lock. On the happy path there is NO
+  // success callback — the write is deterministic + async via main, which re-reads the issue and
+  // re-pushes a fresh detail frame that REMOUNTS this component idle (applying=false). So this flag
+  // primarily guards against a second dispatch within this instance's lifetime (no double-dispatch).
   const [applying, setApplying] = useState(false)
+  // bug jira-status-transition-applying-hang-v1: a recoverable inline error set ONLY by the
+  // "Applying…" watchdog below (a write that produced no fresh frame in time). The normal
+  // success/error re-push remounts this component, so a successful or main-noticed-failed write
+  // never reaches this state — it is the last-resort self-recovery so the lock can't hang forever.
+  const [timedOut, setTimedOut] = useState(false)
   const transitions = Array.isArray(transitionsValue) ? transitionsValue : []
+
+  // The watchdog timer for the in-flight lock. Armed when a transition is dispatched; cleared on
+  // remount (the success/error re-push unmounts this instance, cancelling the pending timer). If it
+  // ever fires, the write produced no fresh frame — clear "Applying…" and surface a recoverable
+  // error so the picker is usable again (FR-017 tone). NEVER leaks: cleared on unmount.
+  const applyTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  useEffect(
+    () => () => {
+      if (applyTimerRef.current) {
+        clearTimeout(applyTimerRef.current)
+      }
+    },
+    []
+  )
 
   if (transitions.length === 0) {
     return <p className="text-sm text-muted-foreground">No transitions available.</p>
@@ -455,12 +477,31 @@ export function TransitionPicker({
     if (applying || !issueKeyValue || !isTransitionSubmittable(next, transitionId)) {
       return
     }
+    // Keep the form binding in sync for the no-op/placeholder guard (`transitionId` above) on a
+    // re-select within this instance's lifetime; this is a React state write that does NOT flush
+    // synchronously, so it is NOT relied on for the dispatch below.
     setTransitionId(next)
     setApplying(true)
+    setTimedOut(false)
+    // bug jira-status-transition-applying-hang-v1: dispatch the LITERAL just-selected id, NOT a
+    // `{ path: PATH_TRANSITION_ID }` binding. The SDK resolves an action-context binding against
+    // the React-state-backed data model at dispatch time, BEFORE the `setTransitionId(next)` write
+    // above has flushed — so a binding would resolve to the stale/empty value and reach main as
+    // `transitionId: undefined`, which `validateJiraTransition` rejects (no write, no re-push) and
+    // the "Applying…" state would hang forever. The literal carries the chosen id unconditionally.
     dispatch(surfaceId, componentId, {
       name: JiraBoundAction.Transition,
-      context: { issueKey: issueKeyValue, transitionId: { path: PATH_TRANSITION_ID } }
+      context: transitionActionContext(issueKeyValue, next)
     })
+    // Arm the failure watchdog (FR-017): if no fresh frame remounts this instance within the
+    // window, self-recover so "Applying…" can never hang forever (see TRANSITION_APPLYING_TIMEOUT_MS).
+    if (applyTimerRef.current) {
+      clearTimeout(applyTimerRef.current)
+    }
+    applyTimerRef.current = setTimeout(() => {
+      setApplying(false)
+      setTimedOut(true)
+    }, TRANSITION_APPLYING_TIMEOUT_MS)
   }
 
   return (
@@ -488,6 +529,15 @@ export function TransitionPicker({
           </span>
         )}
       </div>
+      {/* bug jira-status-transition-applying-hang-v1: the watchdog's recoverable error — shown only
+          when a dispatched transition produced no fresh frame in time, so "Applying…" self-cleared
+          instead of hanging. The Select is re-enabled (applying=false), so the user can retry. */}
+      {timedOut && (
+        <span className="flex items-center gap-1.5 text-xs text-destructive" role="alert">
+          <TriangleAlert className="size-3.5 shrink-0" aria-hidden="true" />
+          {TRANSITION_APPLYING_TIMEOUT_MESSAGE}
+        </span>
+      )}
     </div>
   )
 }

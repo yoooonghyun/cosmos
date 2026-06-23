@@ -150,4 +150,51 @@ describe('mapTerminalKey', () => {
   it('Option+Enter with composing=true → null (defer to xterm during active composition)', () => {
     expect(mapTerminalKey(key({ key: 'Enter', altKey: true, composing: true }))).toBeNull()
   })
+
+  // --- split guard (from the live IME trace) ---
+  // At the Option+Left interrupt-keydown, compositionend has ALREADY fired
+  // (composing=false, isComposing=false, keyCode=37) but term.textarea still holds the
+  // composed line ("테스트  테스트 "; xterm clears it only on blur/CR). MOTIONS must defer on
+  // that sticky textareaValue — intercepting there desyncs xterm and corrupts the line
+  // ("테스트"→"트테스"→"스"). ENTER chords must NOT defer on it (that re-broke Shift+Enter).
+
+  it('Option+Left with sticky non-empty textareaValue (composing=false, keyCode=37) → null — the exact trace corruption case', () => {
+    expect(
+      mapTerminalKey(key({ key: 'ArrowLeft', altKey: true, isComposing: false, keyCode: 37, composing: false, textareaValue: '테스트  테스트 ' }))
+    ).toBeNull()
+  })
+
+  it('Option+Right with sticky non-empty textareaValue → null', () => {
+    expect(
+      mapTerminalKey(key({ key: 'ArrowRight', altKey: true, isComposing: false, keyCode: 39, composing: false, textareaValue: '테스트' }))
+    ).toBeNull()
+  })
+
+  it('Cmd+Left with sticky non-empty textareaValue → null (line motion deferred on a composed line)', () => {
+    expect(
+      mapTerminalKey(key({ key: 'ArrowLeft', metaKey: true, isComposing: false, keyCode: 37, composing: false, textareaValue: '테스트' }))
+    ).toBeNull()
+  })
+
+  it('Option+Left with empty textareaValue → word-left (pure-ASCII line: motion still works)', () => {
+    expect(
+      mapTerminalKey(key({ key: 'ArrowLeft', altKey: true, isComposing: false, keyCode: 37, composing: false, textareaValue: '' }))
+    ).toBe('\x1b[1;3D')
+  })
+
+  it('Shift+Enter with sticky non-empty textareaValue but composing=false → CSI-u newline (Enter ignores the sticky textarea — the regression fix)', () => {
+    expect(
+      mapTerminalKey(key({ key: 'Enter', shiftKey: true, composing: false, textareaValue: '테스트  테스트 ' }))
+    ).toBe('\x1b[13;2u')
+  })
+
+  it('Option+Enter with sticky non-empty textareaValue but composing=false → CSI-u alt-newline', () => {
+    expect(
+      mapTerminalKey(key({ key: 'Enter', altKey: true, composing: false, textareaValue: '테스트' }))
+    ).toBe('\x1b[13;3u')
+  })
+
+  it('Shift+Enter with composing=true AND textareaValue non-empty → null (active composition still defers Enter)', () => {
+    expect(mapTerminalKey(key({ key: 'Enter', shiftKey: true, composing: true, textareaValue: '테' }))).toBeNull()
+  })
 })

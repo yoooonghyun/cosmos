@@ -21,7 +21,10 @@ import {
   showErrorNotice,
   showSkeletonState,
   SLACK_LAYOUT_CLAMP_CLASS,
+  SLACK_LAYOUT_FILL_CLASS,
+  SLACK_LIST_SCROLL_CLASS,
   SLACK_OPEN_THREAD_ACTION,
+  SLACK_SURFACE_HOST_CLASS,
   SLACK_SEARCH_MODES,
   type SlackSearchMode
 } from './logic'
@@ -648,10 +651,140 @@ describe('SLACK_LAYOUT_CLAMP_CLASS (generative wrap clamp)', () => {
     expect(indexSrc).not.toContain('standardCatalog.components.Column')
     expect(indexSrc).not.toContain('standardCatalog.components.Row')
 
-    // ...and the wrapper module applies the clamp class around the SDK container.
+    // ...and the wrapper module applies the v2 fill class (which still carries the width-clamp
+    // tokens `w-full min-w-0 max-w-full`) around the SDK container. (slack-list-scroll-fill-v2
+    // folded the width-only clamp into SLACK_LAYOUT_FILL_CLASS; the clamp tokens are asserted in
+    // the SLACK_LAYOUT_FILL_CLASS describe block above.)
     const layoutSrc = readFileSync(new URL('./layout.tsx', import.meta.url), 'utf8')
-    expect(layoutSrc).toContain('SLACK_LAYOUT_CLAMP_CLASS')
+    expect(layoutSrc).toContain('SLACK_LAYOUT_FILL_CLASS')
     expect(layoutSrc).toContain('standardCatalog.components.Column')
     expect(layoutSrc).toContain('standardCatalog.components.Row')
+  })
+})
+
+/* ------------------------------------------------------------------------- *
+ * Per-list independent-scroll AND fill — v2 height-chain repair
+ * (slack-list-scroll-fill-v2, supersedes slack-independent-list-scroll-v1)
+ *
+ * v2 repairs the broken vertical height chain at the FIRST-PARTY DOM seam (host + layout.tsx
+ * Column/Row wrapper), not the catalog leaf: a lone list FILLS to the panel bottom (R2/SC-001)
+ * AND N lists each scroll independently (R1/SC-002) via the SAME flex-fill chain. The three
+ * class strings are pure exports here so the chain is node-assertable. These tests pin the v2
+ * chain tokens and lock OUT the failed Attempt-1/2 caps (`max-h-*`/`70vh`); they FAIL if any
+ * required chain token is dropped or a `max-h-*` cap is reintroduced.
+ * ------------------------------------------------------------------------- */
+describe('SLACK_LIST_SCROLL_CLASS (v2 list-root fill-chain consumer)', () => {
+  it('consumes the flex-fill chain (min-h-0 + flex-1 + overflow-y-auto) so a lone list fills and N siblings split + each scroll (R1+R2)', () => {
+    // Definite FLEX sizing (not a %/vh max-height): a lone list is the only flex child → fills
+    // (R2); N lists are sibling flex children → equal-split + each scrolls independently (R1).
+    expect(SLACK_LIST_SCROLL_CLASS).toContain('min-h-0')
+    expect(SLACK_LIST_SCROLL_CLASS).toContain('flex-1')
+    expect(SLACK_LIST_SCROLL_CLASS).toContain('overflow-y-auto')
+  })
+
+  it('preserves the min-w-0 / max-w-full wrap-safety so vertical scroll adds no horizontal overflow (FR-011)', () => {
+    expect(SLACK_LIST_SCROLL_CLASS).toContain('min-w-0')
+    expect(SLACK_LIST_SCROLL_CLASS).toContain('max-w-full')
+  })
+
+  it('DROPS the failed Attempt-1/2 caps: no max-h-* and no fixed 70vh (so neither dead-gap nor shared-scroll regresses)', () => {
+    // Attempt-1 `max-h-[70vh]` left a dead gap (R2 broken); Attempt-2 `max-h-full` against the
+    // indefinite SDK parent collapsed to shared scroll (R1 broken). The v2 bound is flex sizing,
+    // not a max-height cap — lock both out so a regression to either is caught.
+    expect(SLACK_LIST_SCROLL_CLASS).not.toContain('max-h-')
+    expect(SLACK_LIST_SCROLL_CLASS).not.toContain('70vh')
+    expect(SLACK_LIST_SCROLL_CLASS).not.toContain('vh]')
+  })
+
+  it('hides the scrollbar until the list is hovered (scrollbar-hover-only — no content shift, FR-010)', () => {
+    // The hover-only scrollbar utility (index.css) collapses the WebKit scrollbar by default,
+    // reveals it on :hover, and reserves the gutter (scrollbar-gutter: stable) so hover causes
+    // no horizontal content shift. Composing the token here is the node-checkable seam.
+    expect(SLACK_LIST_SCROLL_CLASS).toContain('scrollbar-hover-only')
+  })
+
+  it('the MESSAGE-bearing list roots compose the scroll bound (MessageList + SearchResultList)', () => {
+    // Source-level assertion (the SDK catalog components require SurfaceProvider context, so
+    // they can't be mounted in the node test env). MessageList + SearchResultList apply the
+    // bound to their root <div>.
+    const componentsSrc = readFileSync(new URL('./components.tsx', import.meta.url), 'utf8')
+    expect(componentsSrc).toContain('SLACK_LIST_SCROLL_CLASS')
+    // The import names the bound; the two message lists reference it on their root className.
+    const refs = componentsSrc.match(/SLACK_LIST_SCROLL_CLASS/g) ?? []
+    // 1 import + 1 use in MessageList + 1 use in SearchResultList = 3 occurrences.
+    expect(refs.length).toBeGreaterThanOrEqual(3)
+  })
+})
+
+describe('SLACK_LAYOUT_FILL_CLASS (v2 first-party Column/Row wrapper — threads the chain through the SDK child)', () => {
+  it('keeps the width clamp (w-full / min-w-0 / max-w-full) so the horizontal wrap fix is preserved (FR-011)', () => {
+    expect(SLACK_LAYOUT_FILL_CLASS).toContain('w-full')
+    expect(SLACK_LAYOUT_FILL_CLASS).toContain('min-w-0')
+    expect(SLACK_LAYOUT_FILL_CLASS).toContain('max-w-full')
+  })
+
+  it('forwards the vertical fill chain (flex / flex-col / min-h-0 / flex-1) so the wrapper is a fill link (FR-006)', () => {
+    expect(SLACK_LAYOUT_FILL_CLASS).toContain('flex')
+    expect(SLACK_LAYOUT_FILL_CLASS).toContain('flex-col')
+    expect(SLACK_LAYOUT_FILL_CLASS).toContain('min-h-0')
+    expect(SLACK_LAYOUT_FILL_CLASS).toContain('flex-1')
+  })
+
+  it('repairs the auto-height SDK flex child POSITIONALLY via [&>*] (keys off DOM position, not any SDK class — FR-005/FR-012)', () => {
+    // The SDK Column/Row renders `flex flex-col gap-4` with NO data-*/id/min-h-0 — the only stable
+    // anchor is that it is the wrapper's direct child. [&>*] threads min-h-0/flex-1 into it.
+    expect(SLACK_LAYOUT_FILL_CLASS).toContain('[&>*]:min-h-0')
+    expect(SLACK_LAYOUT_FILL_CLASS).toContain('[&>*]:flex-1')
+    expect(SLACK_LAYOUT_FILL_CLASS).toContain('[&>*]:flex')
+    expect(SLACK_LAYOUT_FILL_CLASS).toContain('[&>*]:min-w-0')
+  })
+
+  it('forces the SDK child to !flex-row so multiple lists lay out SIDE-BY-SIDE (세로 분할), not stacked', () => {
+    // The SDK Column is natively `flex-col` (stacks lists top/bottom = horizontal dividers, poor
+    // readability). The positional repair overrides it with `!flex-row` so sibling lists become
+    // full-height columns split by vertical dividers; a lone list still fills the full width.
+    expect(SLACK_LAYOUT_FILL_CLASS).toContain('[&>*]:!flex-row')
+    expect(SLACK_LAYOUT_FILL_CLASS).not.toContain('[&>*]:flex-col')
+  })
+
+  it('the first-party Column/Row wrappers apply the fill class (not the width-only clamp) — node-checkable wiring', () => {
+    const layoutSrc = readFileSync(new URL('./layout.tsx', import.meta.url), 'utf8')
+    expect(layoutSrc).toContain('SLACK_LAYOUT_FILL_CLASS')
+    expect(layoutSrc).not.toContain('SLACK_LAYOUT_CLAMP_CLASS')
+  })
+})
+
+describe('SLACK_SURFACE_HOST_CLASS (v2 tabpanel host = definite-height flex column, top of the chain)', () => {
+  it('carries flex / flex-col / min-h-0 so the host is a definite-height flex column (FR-006)', () => {
+    expect(SLACK_SURFACE_HOST_CLASS).toContain('flex')
+    expect(SLACK_SURFACE_HOST_CLASS).toContain('flex-col')
+    expect(SLACK_SURFACE_HOST_CLASS).toContain('min-h-0')
+  })
+
+  it('the SlackPanel generative tabpanel host composes the chain tokens (flex flex-col min-h-0) — node-checkable wiring', () => {
+    // Source-level assertion: the A2UI surface host <div role="tabpanel"> must carry the fill-chain
+    // tokens so the chain threads host → wrapper → list root. (SlackPanel can't mount in node.)
+    const panelSrc = readFileSync(new URL('../SlackPanel.tsx', import.meta.url), 'utf8')
+    const hostLine = panelSrc
+      .split('\n')
+      .find((l) => l.includes('overflow-auto p-3 text-card-foreground') && l.includes('flex-col'))
+    expect(hostLine, 'a tabpanel host div should carry flex + flex-col + min-h-0').toBeDefined()
+    expect(hostLine).toContain('flex')
+    expect(hostLine).toContain('flex-col')
+    expect(hostLine).toContain('min-h-0')
+  })
+
+  it('expresses a COMPLETE chain across the trio: host flex-col min-h-0 → wrapper flex-1 min-h-0 + [&>*] repair → list root flex-1 min-h-0 (any dropped token fails)', () => {
+    // Host top of chain.
+    expect(SLACK_SURFACE_HOST_CLASS).toContain('flex-col')
+    expect(SLACK_SURFACE_HOST_CLASS).toContain('min-h-0')
+    // Wrapper forwards fill + repairs the SDK child.
+    expect(SLACK_LAYOUT_FILL_CLASS).toContain('flex-1')
+    expect(SLACK_LAYOUT_FILL_CLASS).toContain('min-h-0')
+    expect(SLACK_LAYOUT_FILL_CLASS).toContain('[&>*]:flex-1')
+    expect(SLACK_LAYOUT_FILL_CLASS).toContain('[&>*]:min-h-0')
+    // List root consumes the chain.
+    expect(SLACK_LIST_SCROLL_CLASS).toContain('flex-1')
+    expect(SLACK_LIST_SCROLL_CLASS).toContain('min-h-0')
   })
 })

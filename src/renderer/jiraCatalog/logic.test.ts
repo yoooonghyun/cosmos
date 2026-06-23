@@ -15,8 +15,12 @@ import {
   shouldShowIssueEmptyState,
   statusBadgeLabel,
   statusBadgeStyle,
-  ticketCardSummary
+  ticketCardSummary,
+  transitionActionContext,
+  TRANSITION_APPLYING_TIMEOUT_MS,
+  TRANSITION_APPLYING_TIMEOUT_MESSAGE
 } from './logic'
+import { validateJiraTransition } from '../../shared/ipc/jira.validate'
 
 /* Jira generative-UI v2 — pure catalog decision logic (FR-006/008/010). */
 
@@ -99,6 +103,62 @@ describe('isTransitionSubmittable (design §6 — apply-on-select guard, FR-006/
   it('treats an empty/absent current id as "nothing in flight" (still submittable)', () => {
     expect(isTransitionSubmittable('31', '')).toBe(true)
     expect(isTransitionSubmittable('31', undefined)).toBe(true)
+  })
+})
+
+/*
+ * bug jira-status-transition-applying-hang-v1 — the status-change "Applying…" hang.
+ *
+ * Root cause: the TransitionPicker dispatched `transitionId` as a `{ path: '/transitionId' }`
+ * binding resolved against the SDK's React-state-backed data model AT DISPATCH TIME — in the same
+ * event tick as the `setTransitionId(next)` form write, which had not flushed. So main received
+ * `transitionId: undefined`, `validateJiraTransition` rejected it (no write / no re-push), and the
+ * picker's optimistic "Applying…" lock never cleared. The fix dispatches the LITERAL just-selected
+ * id via `transitionActionContext`, plus a watchdog that self-recovers if no frame ever arrives.
+ */
+describe('transitionActionContext (the fix — carries the LITERAL id, never a {path} binding)', () => {
+  it('returns the issueKey + the just-selected transitionId as plain string literals', () => {
+    const ctx = transitionActionContext('PROJ-123', '31')
+    expect(ctx).toEqual({ issueKey: 'PROJ-123', transitionId: '31' })
+  })
+
+  it('never emits a {path} binding for transitionId (the stale-binding bug)', () => {
+    const ctx = transitionActionContext('PROJ-123', '31')
+    // The pre-fix bug sent `{ path: '/transitionId' }`, which resolves to undefined before the
+    // form write flushes. A literal string is what reaches main.
+    expect(typeof ctx.transitionId).toBe('string')
+    expect(ctx.transitionId).not.toMatchObject({ path: expect.anything() })
+  })
+
+  it('produces a context main\'s validateJiraTransition ACCEPTS (end-to-end contract)', () => {
+    // This is the exact validator that rejected the empty value pre-fix. With the literal id it
+    // passes, so the dispatcher runs the write + re-pushes the surface (clearing "Applying…").
+    const ctx = transitionActionContext('PROJ-123', '31')
+    const warn = (): void => {}
+    expect(validateJiraTransition(ctx, warn)).toEqual({ issueKey: 'PROJ-123', transitionId: '31' })
+  })
+
+  it('demonstrates the pre-fix shape would be REJECTED by main (regression guard)', () => {
+    // What the buggy code effectively sent once the unflushed binding resolved to undefined.
+    const warn = (): void => {}
+    expect(validateJiraTransition({ issueKey: 'PROJ-123', transitionId: undefined }, warn)).toBeNull()
+    // And even if the literal binding object had leaked through unresolved, it is not a string.
+    expect(
+      validateJiraTransition({ issueKey: 'PROJ-123', transitionId: { path: '/transitionId' } }, warn)
+    ).toBeNull()
+  })
+})
+
+describe('TRANSITION_APPLYING_TIMEOUT (failure self-recovery — Applying… can never hang forever)', () => {
+  it('exposes a positive finite watchdog window', () => {
+    expect(typeof TRANSITION_APPLYING_TIMEOUT_MS).toBe('number')
+    expect(TRANSITION_APPLYING_TIMEOUT_MS).toBeGreaterThan(0)
+    expect(Number.isFinite(TRANSITION_APPLYING_TIMEOUT_MS)).toBe(true)
+  })
+
+  it('surfaces a non-empty, non-secret recoverable error message', () => {
+    expect(typeof TRANSITION_APPLYING_TIMEOUT_MESSAGE).toBe('string')
+    expect(TRANSITION_APPLYING_TIMEOUT_MESSAGE.trim().length).toBeGreaterThan(0)
   })
 })
 

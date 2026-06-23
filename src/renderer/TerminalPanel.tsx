@@ -230,7 +230,22 @@ function TerminalView({
     // only clears on blur or CR/ETX (causing Shift+Enter to stay blocked after composition).
     const compositionActiveRef = { current: false }
     const onCompositionStart = (): void => { compositionActiveRef.current = true }
-    const onCompositionEnd = (): void => { compositionActiveRef.current = false }
+    const onCompositionEnd = (): void => {
+      compositionActiveRef.current = false
+      // xterm leaves the just-committed text in its hidden textarea — it only clears it on
+      // blur or CR/ETX. That makes term.textarea.value STICKY: after typing Korean once, the
+      // mapTerminalKey motion guard (which defers while the textarea is non-empty, to avoid
+      // desyncing xterm mid-composition) would then defer EVERY Cmd/Option+Arrow forever, so
+      // word/line motion silently stops working. Clear it on the next macrotask — AFTER xterm's
+      // own compositionend handler (registered first, so its setTimeout(0) runs first) has read
+      // and committed the text to the PTY — so the leftover can't block later motions and can't
+      // be re-emitted. Guard on !composing so an immediately-restarted composition is untouched.
+      setTimeout(() => {
+        if (!compositionActiveRef.current && term.textarea && term.textarea.value !== '') {
+          term.textarea.value = ''
+        }
+      }, 0)
+    }
     term.textarea?.addEventListener('compositionstart', onCompositionStart)
     term.textarea?.addEventListener('compositionend', onCompositionEnd)
 
@@ -251,12 +266,12 @@ function TerminalView({
         type: e.type,
         isComposing: e.isComposing,
         keyCode: e.keyCode,
-        // composing: true iff a DOM compositionstart has fired without a matching
-        // compositionend. On macOS/Electron the interrupt-keydown (Option+Left) fires
-        // with isComposing=false and keyCode=37 — both legacy guards miss it — but
-        // compositionstart has already fired and compositionend has not yet, so this
-        // ref is reliably true throughout the active composition window.
-        composing: compositionActiveRef.current
+        // composing (Enter chords): true between compositionstart and compositionend.
+        composing: compositionActiveRef.current,
+        // textareaValue (motion chords): xterm's hidden textarea still holds the composed
+        // line after compositionend (sticky), so motions defer while it is non-empty to avoid
+        // desyncing xterm — see terminalKeymap.ts for the full trace.
+        textareaValue: term.textarea?.value ?? ''
       })
       if (seq === null) {
         return true
