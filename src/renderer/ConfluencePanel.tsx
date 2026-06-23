@@ -20,7 +20,7 @@
  * over `window.cosmos.confluence`; main attaches the token.
  */
 
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { A2UIProvider, type A2UIAction } from '@a2ui-sdk/react/0.9'
 import { BookText, ChevronLeft, Loader2, Search, X } from 'lucide-react'
 import { Button } from '@/components/ui/button'
@@ -50,7 +50,7 @@ import { PanelRefreshButton } from './PanelRefreshButton'
 import { panelRefreshInputsFor } from './panelRefreshLogic'
 import { PanelFooter } from './PanelFooter'
 import { ActiveTabSurface } from './ActiveTabSurface'
-import { PromptComposer } from './PromptComposer'
+import { usePublishComposer } from './ActiveComposerProvider'
 import { SurfaceSpinner } from './SurfaceSpinner'
 import { useGenerativePanelTabs } from './useGenerativePanelTabs'
 import { confluenceViewContext, contextChipFor } from './viewContextCapture'
@@ -556,6 +556,26 @@ export function ConfluencePanel({ active }: { active: boolean }): React.JSX.Elem
   // panel-refresh-v1 (Goal 1): the shared refresh control, fed the active tab's surface slice.
   const refreshInputs = panelRefreshInputsFor(activeTab)
 
+  // open-prompt-hoist-v1: publish this panel's composer wiring (null while not connected,
+  // mirroring the old `isConnected &&` JSX gate) so the ONE App-level composer routes to
+  // Confluence while it is the active surface; the view-context chip is captured as before.
+  usePublishComposer(
+    'confluence',
+    useMemo(
+      () =>
+        isConnected
+          ? {
+              onSubmit: submit,
+              placeholder: 'Ask about your Confluence pages…',
+              ariaLabel: 'Ask about Confluence',
+              contextChip: contextChipFor('confluence', confluenceViewContext(view, genUiPage)),
+              busy: showSpinner
+            }
+          : null,
+      [isConnected, submit, view, genUiPage, showSpinner]
+    )
+  )
+
   return (
     <section
       className="flex h-full min-w-0 flex-col border-l border-border bg-card"
@@ -784,16 +804,8 @@ export function ConfluencePanel({ active }: { active: boolean }): React.JSX.Elem
         )}
       </div>
 
-      {/* Composer docks above the footer, only when there is something to ask about. */}
-      {isConnected && (
-        <PromptComposer
-          onSubmit={submit}
-          placeholder="Ask about your Confluence pages…"
-          ariaLabel="Ask about Confluence"
-          contextChip={contextChipFor('confluence', confluenceViewContext(view, genUiPage))}
-          busy={showSpinner}
-        />
-      )}
+      {/* open-prompt-hoist-v1: the composer is now ONE App-level instance; this panel
+          publishes its wiring (gated on isConnected) via usePublishComposer above. */}
 
       {/* Connection bar is the panel footer (Terminal-unified layout). */}
       <PanelFooter

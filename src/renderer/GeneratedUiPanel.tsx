@@ -17,7 +17,7 @@
  * FR-009 cancel (now via tab close), FR-012 requestId echo, SC-005 malformed → safe.
  */
 
-import { useEffect } from 'react'
+import { useEffect, useMemo } from 'react'
 import { A2UIProvider } from '@a2ui-sdk/react/0.9'
 import { Sparkles } from 'lucide-react'
 import { PanelTabStrip, type PanelTab } from './PanelTabStrip'
@@ -25,7 +25,7 @@ import { PanelRefreshButton } from './PanelRefreshButton'
 import { panelRefreshInputsFor } from './panelRefreshLogic'
 import { PanelFooter } from './PanelFooter'
 import { ActiveTabSurface } from './ActiveTabSurface'
-import { PromptComposer } from './PromptComposer'
+import { usePublishComposer } from './ActiveComposerProvider'
 import { SurfaceSpinner } from './SurfaceSpinner'
 import { useGenerativePanelTabs } from './useGenerativePanelTabs'
 import { surfaceSpinnerVisible } from './promptComposerLogic'
@@ -84,6 +84,22 @@ export function GeneratedUiPanel({ active }: { active: boolean }): React.JSX.Ele
   // slice. A generated-UI surface composed without a descriptor derives to disabled (OQ-2).
   const refreshInputs = panelRefreshInputsFor(activeTab)
 
+  // open-prompt-hoist-v1: publish this panel's composer wiring to the shared registry so the
+  // ONE App-level composer routes to it while Generated UI is the active surface. Generated UI
+  // is always available (no connection gate), carries no view-context chip.
+  usePublishComposer(
+    'generated-ui',
+    useMemo(
+      () => ({
+        onSubmit: submit,
+        placeholder: 'Describe the UI you want…',
+        ariaLabel: 'Compose generated UI',
+        busy: showSpinner
+      }),
+      [submit, showSpinner]
+    )
+  )
+
   return (
     <section
       className="flex h-full min-w-0 flex-col border-l border-border bg-card"
@@ -137,12 +153,8 @@ export function GeneratedUiPanel({ active }: { active: boolean }): React.JSX.Ele
         )}
       </div>
 
-      <PromptComposer
-        onSubmit={submit}
-        placeholder="Describe the UI you want…"
-        ariaLabel="Compose generated UI"
-        busy={showSpinner}
-      />
+      {/* open-prompt-hoist-v1: the composer is now ONE App-level instance routed to the
+          active surface; this panel publishes its wiring via usePublishComposer above. */}
       <PanelFooter surfaceName="Generated UI" icon={Sparkles} activeTab={activeStripTab} />
     </section>
   )

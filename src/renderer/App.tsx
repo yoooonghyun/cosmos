@@ -16,6 +16,11 @@ import { SettingsDialog } from './SettingsDialog'
 import { CosmosSpinner } from './CosmosSpinner'
 import { SessionProvider, useEnabledIntegrations, useLoadSession } from './SessionProvider'
 import { OpenPromptPositionProvider } from './OpenPromptPositionProvider'
+import {
+  ActiveComposerProvider,
+  useActiveComposerConfig
+} from './ActiveComposerProvider'
+import { PromptComposer } from './PromptComposer'
 import { resolveFallbackSurface, visibleSurfaceIds, type SurfaceId } from './railVisibility'
 import './App.css'
 
@@ -86,7 +91,13 @@ export function App(): React.JSX.Element {
           through the shared SessionRegistry; wraps the whole shell so every panel's
           PromptComposer reads the one shared position. */}
       <OpenPromptPositionProvider>
-        <AppShell />
+        {/* open-prompt-hoist-v1: the active-composer registry wraps BOTH the panels
+            (which publish their per-surface composer wiring) and the ONE hoisted
+            PromptComposer the shell renders, so switching panels never re-mounts the
+            composer (no flicker) while the submit still routes to the active surface. */}
+        <ActiveComposerProvider>
+          <AppShell />
+        </ActiveComposerProvider>
       </OpenPromptPositionProvider>
     </SessionProvider>
   )
@@ -143,6 +154,10 @@ function AppShell(): React.JSX.Element {
 
   // The ordered visible rail surfaces (always-present + enabled gateable; FR-004/FR-005).
   const visibleIds = useMemo(() => visibleSurfaceIds(enabled), [enabled])
+
+  // open-prompt-hoist-v1: the stable surface-region element the single hoisted composer
+  // measures + positions its floating button within (constant across panel switches).
+  const surfaceRef = useRef<HTMLDivElement | null>(null)
 
   // FR-014/SC-007: when the active surface gets disabled (no longer visible), fall
   // focus back to Terminal so the user never stares at a hidden panel. Runs whenever
@@ -270,45 +285,55 @@ function AppShell(): React.JSX.Element {
             </Tooltip>
           </TabsList>
 
-          {/* The selected surface fills the main area. All five are kept mounted
-              (forceMount) and only hidden when inactive, so the Terminal's live
-              PTY session and a pending render_ui surface survive a switch. */}
-          <TabsContent
-            value="terminal"
-            forceMount
-            className="app__ui data-[state=inactive]:hidden"
-          >
-            <TerminalPanel active={surface === 'terminal'} />
-          </TabsContent>
-          <TabsContent
-            value="generated-ui"
-            forceMount
-            className="app__ui data-[state=inactive]:hidden"
-          >
-            <GeneratedUiPanel active={surface === 'generated-ui'} />
-          </TabsContent>
-          <TabsContent value="slack" forceMount className="app__ui data-[state=inactive]:hidden">
-            <SlackPanel active={surface === 'slack'} />
-          </TabsContent>
-          <TabsContent value="jira" forceMount className="app__ui data-[state=inactive]:hidden">
-            {/* Jira generative-UI v2 (D4): the panel is force-mounted, so it learns
-                it became the active rail surface from this prop and triggers the
-                per-switch default-view refresh AND scopes its tab shortcuts. */}
-            <JiraPanel active={surface === 'jira'} />
-          </TabsContent>
-          <TabsContent value="confluence" forceMount className="app__ui data-[state=inactive]:hidden">
-            <ConfluencePanel active={surface === 'confluence'} />
-          </TabsContent>
-          <TabsContent
-            value="google-calendar"
-            forceMount
-            className="app__ui data-[state=inactive]:hidden"
-          >
-            {/* Google Calendar integration v1 (FR-014): force-mounted, so it learns it
-                became the active rail surface from this prop and triggers the per-switch
-                default-view refresh AND scopes its tab shortcuts. */}
-            <GoogleCalendarPanel active={surface === 'google-calendar'} />
-          </TabsContent>
+          {/* open-prompt-hoist-v1: a STABLE surface-region wrapper that spans the whole
+              main area beside the rail. It is the box the ONE hoisted PromptComposer
+              measures + positions its floating button within (`surfaceRef`); because it
+              is the same element across panel switches, the composer never re-measures on
+              a switch (no flicker). `relative` so the composer overlay anchors to it. */}
+          <div ref={surfaceRef} className="relative flex min-w-0 flex-1 flex-col">
+            {/* The selected surface fills the main area. All five are kept mounted
+                (forceMount) and only hidden when inactive, so the Terminal's live
+                PTY session and a pending render_ui surface survive a switch. */}
+            <TabsContent
+              value="terminal"
+              forceMount
+              className="app__ui data-[state=inactive]:hidden"
+            >
+              <TerminalPanel active={surface === 'terminal'} />
+            </TabsContent>
+            <TabsContent
+              value="generated-ui"
+              forceMount
+              className="app__ui data-[state=inactive]:hidden"
+            >
+              <GeneratedUiPanel active={surface === 'generated-ui'} />
+            </TabsContent>
+            <TabsContent value="slack" forceMount className="app__ui data-[state=inactive]:hidden">
+              <SlackPanel active={surface === 'slack'} />
+            </TabsContent>
+            <TabsContent value="jira" forceMount className="app__ui data-[state=inactive]:hidden">
+              {/* Jira generative-UI v2 (D4): the panel is force-mounted, so it learns
+                  it became the active rail surface from this prop and triggers the
+                  per-switch default-view refresh AND scopes its tab shortcuts. */}
+              <JiraPanel active={surface === 'jira'} />
+            </TabsContent>
+            <TabsContent value="confluence" forceMount className="app__ui data-[state=inactive]:hidden">
+              <ConfluencePanel active={surface === 'confluence'} />
+            </TabsContent>
+            <TabsContent
+              value="google-calendar"
+              forceMount
+              className="app__ui data-[state=inactive]:hidden"
+            >
+              {/* Google Calendar integration v1 (FR-014): force-mounted, so it learns it
+                  became the active rail surface from this prop and triggers the per-switch
+                  default-view refresh AND scopes its tab shortcuts. */}
+              <GoogleCalendarPanel active={surface === 'google-calendar'} />
+            </TabsContent>
+
+            {/* The ONE hoisted Open-Prompt composer, routed to the active surface. */}
+            <SharedComposer surface={surface} surfaceRef={surfaceRef} />
+          </div>
         </Tabs>
         <SettingsDialog
           open={settingsOpen}
@@ -319,5 +344,45 @@ function AppShell(): React.JSX.Element {
         />
       </div>
     </TooltipProvider>
+  )
+}
+
+/**
+ * open-prompt-hoist-v1: the ONE hoisted Open-Prompt composer. It reads the ACTIVE
+ * surface's published composer wiring from the registry (`useActiveComposerConfig`) and
+ * renders a SINGLE `PromptComposer` over the surface region — so there is exactly one
+ * floating button + one shared draft + one shared drag/position, mounted once at the App
+ * level. The submit routes to whichever panel is active (its published `onSubmit`); a
+ * surface with no published composer (Terminal, or a disconnected integration) renders
+ * nothing. It overlays the surface region (`absolute inset-0`, pointer-events-none) so
+ * the panel content behind stays clickable; the composer re-enables pointer events only
+ * on its own button/card. `surfaceRef` is the stable box it measures + positions within.
+ */
+function SharedComposer({
+  surface,
+  surfaceRef
+}: {
+  surface: SurfaceId
+  surfaceRef: React.RefObject<HTMLDivElement | null>
+}): React.JSX.Element | null {
+  const config = useActiveComposerConfig(surface)
+  if (!config) {
+    return null
+  }
+  return (
+    <div className="pointer-events-none absolute inset-0 flex flex-col justify-end">
+      <PromptComposer
+        // NO `key={surface}`: the single instance MUST stay mounted across panel switches
+        // so it never re-measures (the whole point of the hoist — no flicker). The draft +
+        // collapsed/expanded + drag state are therefore genuinely shared across surfaces;
+        // the submit routes to the active surface via the published `onSubmit` (open-prompt-hoist-v1).
+        panelRef={surfaceRef}
+        onSubmit={config.onSubmit}
+        placeholder={config.placeholder}
+        ariaLabel={config.ariaLabel}
+        {...(config.contextChip ? { contextChip: config.contextChip } : {})}
+        busy={config.busy ?? false}
+      />
+    </div>
   )
 }

@@ -107,6 +107,15 @@ export interface PromptComposerProps {
    * reappears only once generation completes (its surface lands / errors). Default false.
    */
   busy?: boolean
+  /**
+   * open-prompt-hoist-v1: the element whose content box the floating button positions within
+   * (the active surface region). The composer is now ONE App-level instance hoisted OUT of any
+   * panel `<section>`, so it can no longer find the panel box via `rootRef.closest('section')`;
+   * the App passes the live active-surface element to measure instead. When omitted, it falls
+   * back to the legacy `closest('section')` ancestor (per-panel mount), so existing callers /
+   * tests are unaffected.
+   */
+  panelRef?: React.RefObject<HTMLElement | null>
 }
 
 /** Shared hint copy under the textarea (design §3.5). */
@@ -118,7 +127,8 @@ export function PromptComposer({
   ariaLabel,
   collapsedAriaLabel = 'Open prompt',
   contextChip,
-  busy = false
+  busy = false,
+  panelRef
 }: PromptComposerProps): React.JSX.Element {
   // Collapsed/expanded is session-only, default collapsed (FR-001/FR-016).
   const [expanded, setExpanded] = useState(false)
@@ -423,10 +433,12 @@ export function PromptComposer({
   // resting anchor for live following.
   const [restingPx, setRestingPx] = useState<PixelPoint>({ x: 0, y: 0 })
   useLayoutEffect(() => {
-    // The panel content box = the nearest `<section>` ancestor of PromptComposer's root
-    // (every panel is a `<section className="flex h-full flex-col">`). The logo positions
-    // across THIS box, so it is droppable anywhere in the panel — top/middle/corners/sides.
-    const panelEl: Element | null = rootRef.current?.closest('section') ?? null
+    // The panel content box. open-prompt-hoist-v1: the single hoisted composer is given the
+    // live ACTIVE-surface element via `panelRef` (it lives outside any panel `<section>` now),
+    // so measure that when provided; otherwise fall back to the nearest `<section>` ancestor
+    // (legacy per-panel mount — every panel is a `<section className="flex h-full flex-col">`).
+    // The logo positions across THIS box, so it is droppable anywhere — top/middle/corners/sides.
+    const panelEl: Element | null = panelRef?.current ?? rootRef.current?.closest('section') ?? null
     const measure = (): void => {
       const rect = panelEl?.getBoundingClientRect()
       const box = rect
@@ -449,7 +461,11 @@ export function PromptComposer({
       window.removeEventListener('resize', measure)
       window.removeEventListener('scroll', measure, true)
     }
-  }, [position])
+    // `panelRef` is a stable ref object (its identity never changes); it is listed so the
+    // effect re-binds if a caller ever swaps the ref. The single hoisted composer measures a
+    // STABLE surface-region element (constant across panel switches), so no per-switch re-run
+    // is needed — a size change (rail show/hide) is caught by the ResizeObserver above.
+  }, [position, panelRef])
 
   // What the logo wrapper is positioned at this render (panel-box-relative px): the live
   // drag px while dragging, else the resting (clamped) anchor from the shared fraction.

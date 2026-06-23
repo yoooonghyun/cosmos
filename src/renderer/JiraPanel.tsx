@@ -29,7 +29,7 @@
  * FR-020 (write re-push lands in tab).
  */
 
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { A2UIProvider, type A2UIAction } from '@a2ui-sdk/react/0.9'
 import { Search, SquareKanban, X } from 'lucide-react'
 import { Button } from '@/components/ui/button'
@@ -49,7 +49,7 @@ import { PanelRefreshButton } from './PanelRefreshButton'
 import { panelRefreshInputsFor } from './panelRefreshLogic'
 import { PanelFooter } from './PanelFooter'
 import { ActiveTabSurface } from './ActiveTabSurface'
-import { PromptComposer } from './PromptComposer'
+import { usePublishComposer } from './ActiveComposerProvider'
 import { SurfaceSpinner } from './SurfaceSpinner'
 import { contextChipFor, jiraViewContext } from './viewContextCapture'
 import { useGenerativePanelTabs, type TabSurface } from './useGenerativePanelTabs'
@@ -584,6 +584,26 @@ export function JiraPanel({ active }: { active: boolean }): React.JSX.Element {
   // Tab keyboard shortcuts act on THIS strip only while the Jira surface is active.
   useTabShortcuts({ active, tabs, activeTabId, onActivate: setActive, onNewTab: newTab, onCloseTab: handleCloseTab })
 
+  // open-prompt-hoist-v1: publish this panel's composer wiring (or null while not connected,
+  // mirroring the old `isConnected &&` JSX gate) so the ONE App-level composer routes to Jira
+  // while it is the active surface. The view-context chip is captured the same way as before.
+  usePublishComposer(
+    'jira',
+    useMemo(
+      () =>
+        isConnected
+          ? {
+              onSubmit: submit,
+              placeholder: 'Ask about your Jira issues…',
+              ariaLabel: 'Ask about your Jira issues',
+              contextChip: contextChipFor('jira', jiraViewContext(detailIssueKey)),
+              busy: showSpinner
+            }
+          : null,
+      [isConnected, submit, detailIssueKey, showSpinner]
+    )
+  )
+
   return (
     <section
       className="flex h-full min-w-0 flex-col border-l border-border bg-card"
@@ -726,16 +746,8 @@ export function JiraPanel({ active }: { active: boolean }): React.JSX.Element {
         )}
       </div>
 
-      {/* Composer docks above the footer, only when there is something to ask about. */}
-      {isConnected && (
-        <PromptComposer
-          onSubmit={submit}
-          placeholder="Ask about your Jira issues…"
-          ariaLabel="Ask about your Jira issues"
-          contextChip={contextChipFor('jira', jiraViewContext(detailIssueKey))}
-          busy={showSpinner}
-        />
-      )}
+      {/* open-prompt-hoist-v1: the composer is now ONE App-level instance; this panel
+          publishes its wiring (gated on isConnected) via usePublishComposer above. */}
 
       {/* Connection bar is the panel footer (Terminal-unified layout). */}
       <PanelFooter

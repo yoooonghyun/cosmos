@@ -235,9 +235,14 @@ function appIconPath(): string {
  * macOS-only: stamp the cosmos logo onto the dock. In dev the app runs from the
  * unpackaged Electron binary, whose bundle ships the default Electron dock icon;
  * `app.dock.setIcon` overrides it for the running process. We pass a `NativeImage`
- * (not the path string) because the image overload is the reliable form, and we
- * re-apply on `activate` so the cosmos icon survives the no-window state (on macOS
- * closing the last window does NOT quit) instead of reverting to the Electron icon.
+ * (not the path string) because the image overload is the reliable form.
+ *
+ * Persistence after the LAST window closes: on macOS closing the last window does
+ * NOT quit (window-all-closed is guarded), but destroying the window resets the dock
+ * tile back to the bundle's default Electron icon. `activate` only fires on the NEXT
+ * reactivation (a dock click), so the icon would show Electron's logo in the gap. We
+ * therefore re-stamp at the exact moment of the revert — the window `closed` event —
+ * as well as on `activate`, so the cosmos logo persists with no window open.
  * No-op off macOS (`app.dock` is undefined) or when the asset is missing.
  */
 function applyDockIcon(): void {
@@ -2011,6 +2016,14 @@ function createWindow(): void {
     agentRunner?.dispose()
     agentRunner = null
     mainWindow = null
+    // macOS: destroying the last window resets the dock tile to the bundle's default
+    // (Electron) icon. The reset happens on the runloop turn AFTER this handler returns,
+    // so a synchronous re-stamp here is immediately clobbered by the OS. Defer past the
+    // reset instead — two staggered ticks because the exact reset turn is not observable.
+    // ponytail: 0/120ms double-tap; if it still flashes Electron, the only real fix is
+    // packaging (the dev Electron.app bundle owns the tile), not more runtime re-stamps.
+    setTimeout(applyDockIcon, 0)
+    setTimeout(applyDockIcon, 120)
   })
 
   if (process.env['ELECTRON_RENDERER_URL']) {

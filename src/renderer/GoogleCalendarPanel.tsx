@@ -73,7 +73,7 @@ import { PanelRefreshButton } from './PanelRefreshButton'
 import { panelRefreshInputsFor } from './panelRefreshLogic'
 import { PanelFooter } from './PanelFooter'
 import { ActiveTabSurface } from './ActiveTabSurface'
-import { PromptComposer } from './PromptComposer'
+import { usePublishComposer } from './ActiveComposerProvider'
 import { SurfaceSpinner } from './SurfaceSpinner'
 import { useGenerativePanelTabs } from './useGenerativePanelTabs'
 import { calendarViewContext, contextChipFor } from './viewContextCapture'
@@ -628,6 +628,26 @@ export function GoogleCalendarPanel({ active }: { active: boolean }): React.JSX.
     onCloseTab: handleCloseTab
   })
 
+  // open-prompt-hoist-v1: publish this panel's composer wiring (null while not connected,
+  // mirroring the old `isConnected &&` JSX gate) so the ONE App-level composer routes to the
+  // Calendar while it is the active surface; the view-context chip is captured as before.
+  usePublishComposer(
+    'google-calendar',
+    useMemo(
+      () =>
+        isConnected
+          ? {
+              onSubmit: submit,
+              placeholder: 'Ask about your calendar…',
+              ariaLabel: 'Ask about your calendar',
+              contextChip: contextChipFor('google-calendar', calendarViewContext(genUiEvent)),
+              busy: showSpinner
+            }
+          : null,
+      [isConnected, submit, genUiEvent, showSpinner]
+    )
+  )
+
   return (
     <section
       className="relative flex h-full min-w-0 flex-col border-l border-border bg-card"
@@ -758,16 +778,8 @@ export function GoogleCalendarPanel({ active }: { active: boolean }): React.JSX.
         )}
       </div>
 
-      {/* Composer docks above the footer, only when there is something to ask about. */}
-      {isConnected && (
-        <PromptComposer
-          onSubmit={submit}
-          placeholder="Ask about your calendar…"
-          ariaLabel="Ask about your calendar"
-          contextChip={contextChipFor('google-calendar', calendarViewContext(genUiEvent))}
-          busy={showSpinner}
-        />
-      )}
+      {/* open-prompt-hoist-v1: the composer is now ONE App-level instance; this panel
+          publishes its wiring (gated on isConnected) via usePublishComposer above. */}
 
       {/* Connection bar is the panel footer (Terminal-unified layout). */}
       <PanelFooter
