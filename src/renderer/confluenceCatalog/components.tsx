@@ -23,6 +23,7 @@
  * §3 states, §6 catalog re-point.
  */
 
+import { createContext, useContext } from 'react'
 import { useDataBinding, useDispatchAction } from '@a2ui-sdk/react/0.9'
 import { ExternalLink, Info, TriangleAlert } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
@@ -38,10 +39,26 @@ import {
   CONFLUENCE_OPEN_DETAIL_ACTION,
   countLabel,
   isOpenDetailEmittable,
+  isRowSelected,
   showEmptyState,
   showErrorNotice
 } from './logic'
 import { sanitizeConfluenceHtml } from './sanitize'
+
+/* ------------------------------------------------------------------------- *
+ * Open-page context (confluence-page-detail-dock-v1, FR-007)
+ *
+ * The right-side detail dock's open page id, provided by `ConfluencePanel` AROUND the
+ * generative `<A2UIProvider>` so the bound `SearchResultList` (rendered inside the SDK
+ * host, which only injects `surfaceId`/`componentId`) can mark the OPEN page's row as
+ * SELECTED (`aria-pressed` + inset ring). Renderer-local: a plain React context, never an
+ * IPC payload or A2UI binding. Undefined / empty => no dock open => no row marked.
+ * ------------------------------------------------------------------------- */
+
+const ConfluenceOpenPageContext = createContext<string | undefined>(undefined)
+
+/** Provider the panel wraps around its generative A2UI host (the open dock page id). */
+export const ConfluenceOpenPageProvider = ConfluenceOpenPageContext.Provider
 
 /**
  * The SHARED Confluence page-detail BODY (confluence-detail-rich-render-v1, FR-007/FR-008,
@@ -228,6 +245,10 @@ export function SearchResultList({
   const isLoading = useDataBinding<boolean>(surfaceId, loading, false)
   const errorMessage = useDataBinding<string | undefined>(surfaceId, error, undefined)
   const dispatch = useDispatchAction()
+  // confluence-page-detail-dock-v1 (FR-007): the open detail dock's page id, provided by
+  // ConfluencePanel around the A2UI host. The row whose id matches it carries the SELECTED
+  // marker. Undefined => no dock open => no row marked.
+  const openPageId = useContext(ConfluenceOpenPageContext)
   const items = boundRows(rows)
   // confluence-page-detail-nav-v1: a row with a non-empty page id opens that page's detail
   // in place by REUSING the native page-detail browser (not a separate A2UI surface). The
@@ -264,6 +285,11 @@ export function SearchResultList({
       </div>
       {items.map((result, i) => {
         const actionable = isOpenDetailEmittable(result.id)
+        // confluence-page-detail-dock-v1 (FR-007): the row whose page the right-side dock is
+        // currently showing is marked SELECTED — aria-pressed + a calm inset ring (the flush
+        // divided list uses an inset ring, never a rounded card outline). The marker moves on
+        // retarget and clears when the dock closes (openPageId → undefined).
+        const selected = isRowSelected(result.id, openPageId)
         // Actionable (non-empty id): a real <button> wrapper — focusable, Enter/Space for
         // free, cosmos focus ring drawn INSET (the Confluence list is a flush divided list,
         // not rounded cards — design §1.3). Do NOT add rounded-*.
@@ -271,7 +297,11 @@ export function SearchResultList({
           <button
             key={result.id}
             type="button"
-            className="w-full text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset"
+            aria-pressed={selected}
+            className={cn(
+              'w-full text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset',
+              selected && 'bg-accent/40 ring-1 ring-ring/50 ring-inset'
+            )}
             aria-label={`Open ${result.title ?? 'page'}`}
             onClick={() => open(result.id, result.title)}
           >

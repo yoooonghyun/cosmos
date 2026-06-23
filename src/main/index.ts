@@ -12,6 +12,7 @@ import {
   dialog,
   ipcMain,
   Menu,
+  nativeImage,
   safeStorage,
   shell,
   type IpcMainEvent,
@@ -228,6 +229,28 @@ registerSlackImageScheme()
 // works in dev; absent → fall back to the default Electron icon.
 function appIconPath(): string {
   return join(app.getAppPath(), 'build', 'icon.png')
+}
+
+/**
+ * macOS-only: stamp the cosmos logo onto the dock. In dev the app runs from the
+ * unpackaged Electron binary, whose bundle ships the default Electron dock icon;
+ * `app.dock.setIcon` overrides it for the running process. We pass a `NativeImage`
+ * (not the path string) because the image overload is the reliable form, and we
+ * re-apply on `activate` so the cosmos icon survives the no-window state (on macOS
+ * closing the last window does NOT quit) instead of reverting to the Electron icon.
+ * No-op off macOS (`app.dock` is undefined) or when the asset is missing.
+ */
+function applyDockIcon(): void {
+  if (process.platform !== 'darwin' || !app.dock) {
+    return
+  }
+  if (!existsSync(appIconPath())) {
+    return
+  }
+  const image = nativeImage.createFromPath(appIconPath())
+  if (!image.isEmpty()) {
+    app.dock.setIcon(image)
+  }
 }
 
 let mainWindow: BrowserWindow | null = null
@@ -1707,14 +1730,11 @@ function createWindow(): void {
 
   // TEMP DIAGNOSTIC: surface renderer-side crashes/console errors into the main
   // stdout (dev log) so a blank-screen React crash is debuggable.
-  mainWindow.webContents.on(
-    'console-message',
-    (_e: Electron.Event, level: number, message: string, line: number, source: string) => {
-      if (level >= 2) {
-        console.error(`[renderer console] ${source}:${line} ${message}`)
-      }
+  mainWindow.webContents.on('console-message', (e) => {
+    if (e.level === 'error') {
+      console.error(`[renderer console] ${e.sourceId}:${e.lineNumber} ${e.message}`)
     }
-  )
+  })
   mainWindow.webContents.on('render-process-gone', (_e, details) => {
     console.error('[renderer gone]', JSON.stringify(details))
   })
@@ -2053,9 +2073,7 @@ app.whenReady().then(() => {
   buildAppMenu()
   // macOS shows the dock icon from the app bundle, not the BrowserWindow `icon`;
   // set it explicitly so dev (unpackaged Electron) shows the cosmos icon too.
-  if (process.platform === 'darwin' && existsSync(appIconPath())) {
-    app.dock?.setIcon(appIconPath())
-  }
+  applyDockIcon()
   registerIpcHandlers()
   createWindow()
 
@@ -2078,6 +2096,10 @@ app.whenReady().then(() => {
   installLocalFileProtocol(paneRoot)
 
   app.on('activate', () => {
+    // Re-stamp the cosmos dock icon: after the last window closes macOS keeps the
+    // app alive (window-all-closed is guarded below), and the dock can fall back to
+    // the dev Electron binary's default icon. Re-applying here keeps the cosmos logo.
+    applyDockIcon()
     if (BrowserWindow.getAllWindows().length === 0) {
       createWindow()
     }

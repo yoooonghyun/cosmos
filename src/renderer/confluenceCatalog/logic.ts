@@ -40,6 +40,20 @@ export function hasReadableBody(body: string | undefined): boolean {
   return typeof body === 'string' && body.trim() !== ''
 }
 
+/**
+ * confluence-page-detail-dock-v1 (FR-007): whether a list row is the one whose page the
+ * right-side detail dock is currently showing — i.e. the row carries the SELECTED marker
+ * (`aria-pressed` + inset ring). True only when an open page id is present AND it equals
+ * this row's id (both non-empty). A closed dock (`openPageId` undefined/empty) marks no
+ * row. Pure string equality so it is node-testable; total — never throws.
+ */
+export function isRowSelected(
+  rowPageId: string | undefined,
+  openPageId: string | undefined
+): boolean {
+  return typeof rowPageId === 'string' && rowPageId !== '' && rowPageId === openPageId
+}
+
 /* ------------------------------------------------------------------------- *
  * Bound-list display gating (confluence-generative-adapter-v1, FR-004)
  *

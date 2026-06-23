@@ -186,7 +186,8 @@ describe('resolvePaneSpawn', () => {
       ['p1', { sessionId: 'sess-resume', cwd: PICKED }]
     ])
     const sessionMap = new Map<string, PaneSessionRecord>()
-    const mint = vi.fn(() => 'sess-fresh')
+    let n = 0
+    const mint = vi.fn(() => `sess-fresh-${++n}`)
     const dirExists = vi.fn(() => true)
 
     // Start #1: GENUINE restore-from-disk — resume in the picked cwd; single-consumes the resume
@@ -198,14 +199,18 @@ describe('resolvePaneSpawn', () => {
 
     // (StrictMode dispose runs here — index.ts no longer clears sessionMap, so the record survives.)
 
-    // Start #2: same paneId, NO resume entry, NO override. Re-attach the SAME session/cwd via
-    // `--session-id` (create-or-continue) so an empty/just-killed session never errors.
+    // Start #2: same paneId, NO resume entry, NO override. Re-attach the picked cwd with a FRESH
+    // session id — reusing 'sess-resume' would collide with Start#1's still-terminating claude
+    // ("Session ID is already in use").
     const start2 = resolvePaneSpawn('p1', SANDBOX, resumeMap, sessionMap, mint, undefined, dirExists)
-    expect(start2).toEqual({ args: ['--session-id', 'sess-resume'], resume: false, cwd: PICKED })
-    expect(start2.args).not.toContain('--resume') // never "No conversation found"
+    expect(start2.resume).toBe(false)
+    expect(start2.cwd).toBe(PICKED) // cwd preserved
     expect(start2.cwd).not.toBe(SANDBOX) // <-- the cwd bug: pre-fix this was SANDBOX
-    expect(mint).not.toHaveBeenCalled() // no fresh session minted
-    expect(sessionMap.get('p1')).toEqual({ sessionId: 'sess-resume', cwd: PICKED })
+    expect(start2.args[0]).toBe('--session-id')
+    expect(start2.args).not.toContain('--resume') // never "No conversation found"
+    expect(start2.args[1]).not.toBe('sess-resume') // FRESH id — no "already in use" collision
+    expect(mint).toHaveBeenCalledTimes(1)
+    expect(sessionMap.get('p1')).toEqual({ sessionId: start2.args[1], cwd: PICKED })
   })
 
   // terminal-cwd-sandbox-v1: the SAME idempotent re-start protects a FRESHLY-PICKED tab too. Its
@@ -216,19 +221,23 @@ describe('resolvePaneSpawn', () => {
   it('idempotent re-start of a freshly-picked tab: re-start re-attaches the recorded picked cwd via --session-id', () => {
     const PICKED = '/Users/me/project'
     const { resumeMap, sessionMap } = makeMaps()
-    const mint = vi.fn(() => 'sess-fresh')
+    let n = 0
+    const mint = vi.fn(() => `sess-${++n}`)
 
     // First start: fresh pick records the picked cwd + minted session.
     const first = resolvePaneSpawn('p1', SANDBOX, resumeMap, sessionMap, mint, PICKED)
-    expect(first).toEqual({ args: ['--session-id', 'sess-fresh'], resume: false, cwd: PICKED })
+    expect(first).toEqual({ args: ['--session-id', 'sess-1'], resume: false, cwd: PICKED })
 
-    // StrictMode remount: no override, sessionMap record survives → re-attach the SAME session.
+    // StrictMode remount: no override, sessionMap record survives → re-attach the picked cwd with
+    // a FRESH session id (reusing 'sess-1' would collide with the still-terminating first claude).
     const second = resolvePaneSpawn('p1', SANDBOX, resumeMap, sessionMap, mint)
-    expect(second).toEqual({ args: ['--session-id', 'sess-fresh'], resume: false, cwd: PICKED })
-    expect(second.args).not.toContain('--resume') // never "No conversation found" on empty session
+    expect(second.resume).toBe(false)
+    expect(second.cwd).toBe(PICKED) // cwd preserved, NOT re-sandboxed
     expect(second.cwd).not.toBe(SANDBOX)
-    expect(mint).toHaveBeenCalledTimes(1) // only the first start minted; the re-start reused the id
-    expect(sessionMap.get('p1')).toEqual({ sessionId: 'sess-fresh', cwd: PICKED })
+    expect(second.args).not.toContain('--resume') // never "No conversation found" on empty session
+    expect(second.args[1]).not.toBe('sess-1') // fresh id — no "already in use" collision
+    expect(mint).toHaveBeenCalledTimes(2)
+    expect(sessionMap.get('p1')).toEqual({ sessionId: second.args[1], cwd: PICKED })
   })
 
   // restart-pty-cwd-v1 must still win on a re-start: an explicit folder pick (overrideCwd) on a
@@ -258,14 +267,17 @@ describe('resolvePaneSpawn', () => {
     const GONE = '/persisted/gone'
     const { resumeMap, sessionMap } = makeMaps()
     sessionMap.set('p1', { sessionId: 'sess-keep', cwd: GONE })
-    const mint = vi.fn(() => 'sess-fresh')
+    const mint = vi.fn(() => 'sess-new')
     const dirExists = vi.fn((d: string) => d === SANDBOX)
     const result = resolvePaneSpawn('p1', SANDBOX, resumeMap, sessionMap, mint, undefined, dirExists)
-    // Reuse branch uses `--session-id` (create-or-continue); the SPAWN falls back to sandbox.
-    expect(result).toEqual({ args: ['--session-id', 'sess-keep'], resume: false, cwd: SANDBOX })
-    expect(mint).not.toHaveBeenCalled()
+    // Reuse branch mints a FRESH `--session-id` (create-or-continue, no collision); the SPAWN
+    // falls back to sandbox because the recorded folder is gone.
+    expect(result.args[0]).toBe('--session-id')
+    expect(result.args[1]).toBe('sess-new')
+    expect(result.resume).toBe(false)
+    expect(result.cwd).toBe(SANDBOX)
     // The record keeps the chosen folder so a reappearing folder restores next launch.
-    expect(sessionMap.get('p1')).toEqual({ sessionId: 'sess-keep', cwd: GONE })
+    expect(sessionMap.get('p1')).toEqual({ sessionId: 'sess-new', cwd: GONE })
   })
 
   it('does not affect a different pane (per-pane independence, FR-007)', () => {

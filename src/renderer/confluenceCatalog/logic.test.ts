@@ -7,6 +7,7 @@ import {
   CONFLUENCE_OPEN_DETAIL_ACTION,
   hasReadableBody,
   isOpenDetailEmittable,
+  isRowSelected,
   showEmptyState,
   showErrorNotice
 } from './logic'
@@ -63,6 +64,29 @@ describe('isOpenDetailEmittable (id-gated clickable row, FR-001/FR-002)', () => 
     expect(isOpenDetailEmittable('')).toBe(false)
     expect(isOpenDetailEmittable('   ')).toBe(false)
     expect(isOpenDetailEmittable('\t\n')).toBe(false)
+  })
+})
+
+/* confluence-page-detail-dock-v1 — selected-row marker on the open page's row (FR-007). */
+
+describe('isRowSelected (open-dock selected-row marker, FR-007)', () => {
+  it('is true when the row id equals the open dock page id (the marked row)', () => {
+    expect(isRowSelected('P1', 'P1')).toBe(true)
+  })
+
+  it('is false for a row whose id differs from the open page (not the marked row)', () => {
+    expect(isRowSelected('P1', 'P2')).toBe(false)
+  })
+
+  it('is false when the dock is closed (no open page id → no row marked)', () => {
+    expect(isRowSelected('P1', undefined)).toBe(false)
+    expect(isRowSelected('P1', '')).toBe(false)
+  })
+
+  it('is false for a row with no id, never matching an empty open id (no throw)', () => {
+    expect(isRowSelected(undefined, undefined)).toBe(false)
+    expect(isRowSelected(undefined, 'P1')).toBe(false)
+    expect(isRowSelected('', '')).toBe(false)
   })
 })
 

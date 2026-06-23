@@ -1,5 +1,6 @@
 {
   "name": "cosmos",
+  "productName": "cosmos",
   "version": "0.0.1",
   "description": "Conductor-style Electron host app embedding Claude Code as its engine",
   "main": "out/main/index.js",

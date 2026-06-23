@@ -29,9 +29,8 @@ import { CalendarDays, Loader2 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
-import { Skeleton } from '@/components/ui/skeleton'
 import { googleCalendarCatalog, CATALOG_ID } from './googleCalendarCatalog'
-import { EventDetail } from './googleCalendarCatalog/components'
+import { EventDetail, CalendarLoadingLayout } from './googleCalendarCatalog/components'
 import {
   CalendarNavContext,
   CalendarDetailContext,
@@ -86,74 +85,6 @@ import { useConfirm } from './useConfirm'
 import { ConfirmDialog } from '@/components/ui/confirm-dialog'
 import { confirmCopy } from './confirmLogic'
 import type { GoogleCalendarConnectionStatus } from '../shared/googleCalendar'
-
-/* ------------------------------------------------------------------------- *
- * Loading skeleton — foreshadow the month grid (design §2.1 MonthGridSkeleton)
- * ------------------------------------------------------------------------- */
-
-/** A 7×5 month-grid skeleton shown while the per-switch default-view read is in flight. */
-function MonthGridSkeleton(): React.JSX.Element {
-  return (
-    <div className="flex flex-col gap-2" aria-busy="true">
-      <Skeleton className="h-4 w-28" />
-      <div className="overflow-hidden rounded-lg border border-border">
-        <div className="grid grid-cols-7 border-b border-border bg-muted/40">
-          {Array.from({ length: 7 }).map((_, i) => (
-            <div key={i} className="px-1 py-1">
-              <Skeleton className="mx-auto h-3 w-6" />
-            </div>
-          ))}
-        </div>
-        <div className="grid grid-cols-7 [&>*]:border-b [&>*]:border-r [&>*]:border-border">
-          {Array.from({ length: 35 }).map((_, i) => (
-            <div key={i} className="flex min-h-[64px] flex-col gap-1 p-1">
-              <Skeleton className="ml-auto h-3 w-4" />
-              {i % 3 === 0 && <Skeleton className="h-3 w-full" />}
-            </div>
-          ))}
-        </div>
-      </div>
-    </div>
-  )
-}
-
-/**
- * A schedule-shaped skeleton (calendar-week-day-views-v1 §2.1) — the Week/Day analog of
- * MonthGridSkeleton: an hour gutter + N day columns with a few placeholder blocks, shown
- * while the per-switch Week/Day default-view read is in flight.
- */
-function ScheduleSkeleton({ columns }: { columns: number }): React.JSX.Element {
-  return (
-    <div className="flex flex-col gap-2" aria-busy="true">
-      <Skeleton className="h-4 w-40" />
-      <div className="flex overflow-hidden rounded-lg border border-border">
-        <div className="w-12 shrink-0 border-r border-border">
-          {Array.from({ length: 8 }).map((_, i) => (
-            <div key={i} className="flex h-10 items-start justify-end pr-1 pt-0.5">
-              <Skeleton className="h-2 w-6" />
-            </div>
-          ))}
-        </div>
-        {Array.from({ length: columns }).map((_, c) => (
-          <div key={c} className="flex min-w-0 flex-1 flex-col border-l border-border">
-            <div className="border-b border-border py-1.5">
-              <Skeleton className="mx-auto h-3 w-10" />
-            </div>
-            <div className="relative h-80">
-              {(c % 2 === 0 ? [12, 48] : [28]).map((top, i) => (
-                <Skeleton
-                  key={i}
-                  className="absolute inset-x-1 h-10 rounded-sm"
-                  style={{ top: `${top}%` }}
-                />
-              ))}
-            </div>
-          </div>
-        ))}
-      </div>
-    </div>
-  )
-}
 
 /* ------------------------------------------------------------------------- *
  * Connect call-to-action (desktop OAuth browser flow) — Google-specific copy.
@@ -668,7 +599,7 @@ export function GoogleCalendarPanel({ active }: { active: boolean }): React.JSX.
   // The surface send-spinner gate, scoped to the ACTIVE tab (composer-send-animation-v1
   // FR-005/FR-008). A user compose sets `inFlight` (not `loadingDefault`), so it shows the
   // spinner; a default read sets `loadingDefault` (excluded here) and routes to the
-  // MonthGridSkeleton branch first, so the two never co-render.
+  // GridSkeleton branch first, so the two never co-render.
   const showSpinner = !!activeTab &&
     surfaceSpinnerVisible({
       inFlight: activeTab.inFlight,
@@ -745,17 +676,17 @@ export function GoogleCalendarPanel({ active }: { active: boolean }): React.JSX.
           </div>
         ) : (
           <div className="flex min-h-0 flex-1 flex-col p-3 text-card-foreground" role="tabpanel">
-            {/* calendar-date-change-keeps-chrome: the FULL skeleton is shown ONLY for the INITIAL
-                default-view read (no surface yet). A date-change REFETCH (loadingDefault while a
-                surface already exists) keeps the existing surface mounted so the legend + the
-                date/range-nav header — both rendered INSIDE the surface — stay on screen and the
-                new frame swaps the grid in place, instead of blanking the whole panel each step. */}
+            {/* calendar-date-change-keeps-chrome: the INITIAL default-view read (no surface yet)
+                and a date-change REFETCH (surface exists) share the SAME three-zone separated
+                layout — a LEGEND SIDEBAR + a HEADER over the per-view GRID skeleton. On the
+                INITIAL load there is no surface yet, so `CalendarLoadingLayout` renders SKELETON
+                placeholders for the sidebar + header (in the SAME `flex-row` layout EventList
+                uses) around the per-view `GridSkeleton`. On a REFETCH the surface stays mounted
+                and EventList renders the REAL legend + header chrome around the same `GridSkeleton`
+                (see CalendarLoadingContext below). So the only difference between first-load and a
+                date-change is skeleton-vs-real chrome — the layout never jumps when data lands. */}
             {calendarLoadingScope(activeTab?.loadingDefault, activeTab?.surface != null) === 'full' ? (
-              activeIntent.view === 'month' ? (
-                <MonthGridSkeleton />
-              ) : (
-                <ScheduleSkeleton columns={activeIntent.view === 'day' ? 1 : 7} />
-              )
+              <CalendarLoadingLayout view={activeIntent.view} />
             ) : (
               <>
                 {/* Surface send-spinner: busy state while a submitted compose is in flight,

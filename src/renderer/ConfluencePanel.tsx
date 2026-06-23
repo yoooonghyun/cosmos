@@ -22,7 +22,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { A2UIProvider, type A2UIAction } from '@a2ui-sdk/react/0.9'
-import { BookText, ChevronLeft, Loader2, Search } from 'lucide-react'
+import { BookText, ChevronLeft, Loader2, Search, X } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Badge } from '@/components/ui/badge'
@@ -38,7 +38,13 @@ import {
 import { confluenceCatalog, CONFLUENCE_CATALOG_ID } from './confluenceCatalog'
 import { CONFLUENCE_OPEN_DETAIL_ACTION } from './confluenceCatalog/logic'
 // Shared page-detail body + title — native panel + gen-UI overlay render IDENTICALLY (SC-002/SC-005).
-import { PageDetailBody, PageDetailTitle } from './confluenceCatalog/components'
+// confluence-page-detail-dock-v1 (FR-007): the open-dock page id provider lets the bound
+// SearchResultList mark the OPEN page's row as selected (a renderer-local React context).
+import {
+  ConfluenceOpenPageProvider,
+  PageDetailBody,
+  PageDetailTitle
+} from './confluenceCatalog/components'
 import { PanelTabStrip, type PanelTab } from './PanelTabStrip'
 import { PanelRefreshButton } from './PanelRefreshButton'
 import { panelRefreshInputsFor } from './panelRefreshLogic'
@@ -594,39 +600,17 @@ export function ConfluencePanel({ active }: { active: boolean }): React.JSX.Elem
               />
             )}
           </div>
-        ) : genUiPage ? (
-          // confluence-page-detail-nav-v1: a row in a GENERATED-UI list was clicked. Show
-          // the SAME native page-detail browser (back row + native `PageDetail`, which reads
-          // via `window.cosmos.confluence.getPage`) over the active tab — no surface compose.
-          // "Back" clears the overlay and the generated list returns verbatim.
-          <>
-            <div className="flex items-center gap-1.5 border-b border-border px-2 py-1.5">
-              <Button
-                type="button"
-                variant="ghost"
-                size="icon-sm"
-                aria-label="Back"
-                onClick={closeGenUiPage}
-              >
-                <ChevronLeft className="size-4" />
-              </Button>
-              <span className="min-w-0 truncate text-sm font-medium text-foreground">
-                {/* #100: the "Open in Confluence" link lives on this TOP header title (not the
-                    body title). `detailWebUrl` is lifted up from `PageDetail` below. */}
-                <PageDetailTitle title={genUiPage.title} webUrl={detailWebUrl} />
-              </span>
-            </div>
-            <div className="min-h-0 flex-1">
-              <PageDetail
-                key={genUiPage.pageId}
-                pageId={genUiPage.pageId}
-                onReconnect={() => void refreshStatus()}
-                onWebUrl={setDetailWebUrl}
-              />
-            </div>
-          </>
         ) : (
-          <>
+          // confluence-page-detail-dock-v1: the connected content region is a
+          // `@container/confluencebody` TWO-PANE — the document list (native base / spinner /
+          // generative A2UI host) stays mounted on the LEFT (`min-w-0 flex-1`); when a
+          // generated-UI row is clicked, the native `PageDetail` opens in a RIGHT-side DOCK
+          // BESIDE the list (~half the panel width) instead of a whole-region view swap. The
+          // list narrows to share the space; below the breakpoint the dock is a right-drawer
+          // overlay over the list with a click-away scrim. Mirrors the Slack thread dock + Jira
+          // ticket-detail dock. The dock + selected-row state is the existing per-tab `genUiPage`.
+          <div className="@container/confluencebody relative flex min-h-0 flex-1">
+            <div className="flex min-w-0 flex-1 flex-col">
             {/* Native search/page browser — the base shown at zero tabs AND on an
                 uncomposed (new `+`) active tab (FR-017). */}
             {showNativeBase && (
@@ -733,17 +717,70 @@ export function ConfluencePanel({ active }: { active: boolean }): React.JSX.Elem
                     Could not render this surface: {activeTab.error}
                   </p>
                 )}
-                <A2UIProvider key={activeTab.id} catalog={confluenceCatalog}>
-                  <ActiveTabSurface
-                    surface={activeTab.surface}
-                    catalogId={CONFLUENCE_CATALOG_ID}
-                    panelName="ConfluencePanel"
-                    onAction={handleSurfaceAction}
-                  />
-                </A2UIProvider>
+                {/* confluence-page-detail-dock-v1 (FR-007): provide the open dock's page id so
+                    the bound `SearchResultList` marks the OPEN page's row as selected. */}
+                <ConfluenceOpenPageProvider value={genUiPage?.pageId}>
+                  <A2UIProvider key={activeTab.id} catalog={confluenceCatalog}>
+                    <ActiveTabSurface
+                      surface={activeTab.surface}
+                      catalogId={CONFLUENCE_CATALOG_ID}
+                      panelName="ConfluencePanel"
+                      onAction={handleSurfaceAction}
+                    />
+                  </A2UIProvider>
+                </ConfluenceOpenPageProvider>
               </div>
             )}
-          </>
+            </div>
+
+            {/* confluence-page-detail-dock-v1: the right-side page-detail DOCK (FR-001/FR-003).
+                A row in a GENERATED-UI list was clicked → the SAME native `PageDetail` (reads
+                via `window.cosmos.confluence.getPage`) opens HERE, BESIDE the still-mounted list,
+                instead of a whole-region view swap. Width is ~HALF the panel
+                (`clamp(20rem,50%,40rem)`, spec OQ-1 — wider than the 42% Slack/Jira docks per the
+                user's "화면 반정도"). Below `@[40rem]/confluencebody` it is an absolute right-drawer
+                overlaying the list (does not squeeze it, scrim closes); at/above it docks
+                side-by-side and the list narrows. Close (X / scrim) → `closeGenUiPage`. */}
+            {genUiPage && (
+              <>
+                {/* Narrow-mode scrim: closes the dock on click; hidden side-by-side. */}
+                <div
+                  className="absolute inset-0 z-10 bg-black/40 transition-opacity duration-200 @[40rem]/confluencebody:hidden"
+                  aria-hidden="true"
+                  onClick={closeGenUiPage}
+                />
+                <div className="absolute inset-y-0 right-0 z-20 flex w-full max-w-[30rem] translate-x-0 flex-col border-l border-border bg-card shadow-lg transition-transform duration-200 ease-out motion-reduce:transition-none @[40rem]/confluencebody:relative @[40rem]/confluencebody:w-[clamp(20rem,50%,40rem)] @[40rem]/confluencebody:max-w-none @[40rem]/confluencebody:shrink-0 @[40rem]/confluencebody:shadow-none">
+                  {/* Dock frame header — the EXISTING back-row header (PageDetailTitle + the
+                      "Open in Confluence" `detailWebUrl` lift, #100), with the leading Back arrow
+                      swapped for a trailing ghost `icon-sm` X close (the Slack/Jira/calendar dock
+                      close affordance). */}
+                  <div className="flex shrink-0 items-center gap-1.5 border-b border-border px-2 py-1.5">
+                    <BookText className="size-4 shrink-0 text-muted-foreground" aria-hidden="true" />
+                    <span className="min-w-0 flex-1 truncate text-sm font-medium text-foreground">
+                      <PageDetailTitle title={genUiPage.title} webUrl={detailWebUrl} />
+                    </span>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="icon-sm"
+                      aria-label="Close page"
+                      onClick={closeGenUiPage}
+                    >
+                      <X className="size-4" />
+                    </Button>
+                  </div>
+                  <div className="min-h-0 flex-1">
+                    <PageDetail
+                      key={genUiPage.pageId}
+                      pageId={genUiPage.pageId}
+                      onReconnect={() => void refreshStatus()}
+                      onWebUrl={setDetailWebUrl}
+                    />
+                  </div>
+                </div>
+              </>
+            )}
+          </div>
         )}
       </div>
 

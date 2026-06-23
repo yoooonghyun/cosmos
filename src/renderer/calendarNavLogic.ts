@@ -130,6 +130,46 @@ export function calendarLoadingScope(
 }
 
 /**
+ * Per-zone chrome state for a loading scope (calendar-date-change-keeps-chrome). The calendar's
+ * loading layout has THREE zones — the legend SIDEBAR, the range-nav HEADER, and the GRID — and
+ * each is either the REAL chrome or a SKELETON placeholder. Both skeleton-bearing scopes use the
+ * SAME separated layout (sidebar + header + grid); they differ only in whether the legend/header
+ * are real or skeleton:
+ *
+ *  - `'full'` (INITIAL load, no surface yet) → every zone is a skeleton: there is no real legend
+ *     or nav wiring, so `CalendarLoadingLayout` draws skeleton placeholders for the sidebar +
+ *     header around the per-view `GridSkeleton`.
+ *  - `'keep'` (date-change REFETCH, surface mounted) → the legend + header are REAL (kept from the
+ *     mounted surface); only the GRID is a skeleton.
+ *  - `'none'` → not loading; nothing is a skeleton.
+ *
+ * The grid is a skeleton in BOTH skeleton-bearing scopes, so the layout never jumps when data
+ * lands — only the legend/header swap skeleton→real. Pure/node-testable.
+ */
+export interface CalendarLoadingZones {
+  /** True ⇒ the legend SIDEBAR is a skeleton placeholder; false ⇒ the real legend (or absent). */
+  legendSkeleton: boolean
+  /** True ⇒ the range-nav HEADER is a skeleton placeholder; false ⇒ the real header. */
+  headerSkeleton: boolean
+  /** True ⇒ the GRID area shows the per-view skeleton; false ⇒ the real grid. */
+  gridSkeleton: boolean
+}
+
+export function calendarLoadingZones(scope: CalendarLoadingScope): CalendarLoadingZones {
+  switch (scope) {
+    case 'full':
+      // Initial load: no real chrome yet — all three zones are skeleton.
+      return { legendSkeleton: true, headerSkeleton: true, gridSkeleton: true }
+    case 'keep':
+      // Date-change refetch: real legend + header stay; only the grid is a skeleton.
+      return { legendSkeleton: false, headerSkeleton: false, gridSkeleton: true }
+    case 'none':
+      // Not loading: nothing is a skeleton.
+      return { legendSkeleton: false, headerSkeleton: false, gridSkeleton: false }
+  }
+}
+
+/**
  * Which GRID skeleton matches a view's real layout (calendar-date-change-keeps-chrome):
  *
  *  - `'month'` → `'month-grid'`: the 7-column month-cell skeleton (mirrors `CalendarMonthGrid`).

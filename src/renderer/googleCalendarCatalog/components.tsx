@@ -451,8 +451,14 @@ function ScheduleSkeletonBody({ columns }: { columns: number }): React.JSX.Eleme
   )
 }
 
-/** Map a target view to its grid-body skeleton (mirrors `skeletonForView`). */
-function GridSkeleton({ view }: { view: CalendarViewKind }): React.JSX.Element {
+/**
+ * Map a target view to its grid-body skeleton (mirrors `skeletonForView`). The SINGLE
+ * per-view grid-skeleton renderer used by BOTH loading paths (calendar-date-change-keeps-chrome):
+ * the `EventList` date-change `'keep'` refetch (chrome stays around it) AND the panel's INITIAL
+ * `'full'` load (no surface/chrome yet — the panel renders this alone in the grid column), so
+ * month/week/day always share ONE skeleton shape regardless of which load triggered it.
+ */
+export function GridSkeleton({ view }: { view: CalendarViewKind }): React.JSX.Element {
   switch (skeletonForView(view)) {
     case 'month-grid':
       return <MonthGridSkeletonBody />
@@ -461,6 +467,79 @@ function GridSkeleton({ view }: { view: CalendarViewKind }): React.JSX.Element {
     case 'schedule-1':
       return <ScheduleSkeletonBody columns={1} />
   }
+}
+
+/**
+ * The LEGEND SIDEBAR skeleton (calendar-date-change-keeps-chrome) — a left rail placeholder that
+ * matches `CalendarLegend`'s shape (the `w-44` rail with a right hairline divider + a few
+ * calendar-name chip rows), so the first-load sidebar area is RESERVED and reads as loading
+ * instead of collapsing. Rendered only on the INITIAL load (no surface ⇒ no real legend yet); a
+ * date-change refetch keeps the REAL legend instead.
+ */
+function CalendarLegendSkeleton(): React.JSX.Element {
+  return (
+    <aside
+      className="shrink-0 w-44 max-h-full overflow-y-auto pr-3 border-r border-border"
+      aria-hidden="true"
+    >
+      {/* Rail title placeholder (parity with the "Calendars" heading). */}
+      <div className="px-2 pb-1">
+        <Skeleton className="h-3 w-16" />
+      </div>
+      {/* A few calendar-name chip rows (dot + label), matching CalendarToggle's list row. */}
+      <div className="flex flex-col gap-0.5">
+        {[14, 11, 13, 9].map((w, i) => (
+          <div key={i} className="flex w-full items-center gap-2 px-2 py-1">
+            <Skeleton className="size-2 shrink-0 rounded-full" />
+            <Skeleton className="h-3" style={{ width: `${w * 6}px` }} />
+          </div>
+        ))}
+      </div>
+    </aside>
+  )
+}
+
+/**
+ * The HEADER skeleton (calendar-date-change-keeps-chrome) — a top bar that matches
+ * `CalendarRangeNav`'s height + structure (left view-switcher cluster, centered prev/label/next,
+ * a right "Today" button), filled with `Skeleton` placeholders. Rendered only on the INITIAL load
+ * (no surface ⇒ no real nav wiring yet); a date-change refetch keeps the REAL header instead.
+ */
+function CalendarHeaderSkeleton(): React.JSX.Element {
+  return (
+    <div className="flex items-center justify-between gap-2" aria-hidden="true">
+      {/* View switcher (Month/Week/Day segmented control). */}
+      <Skeleton className="h-8 w-36 rounded-md" />
+      {/* Prev / range-label / next cluster. */}
+      <div className="flex items-center gap-1">
+        <Skeleton className="size-8 rounded-md" />
+        <Skeleton className="mx-1 h-4 w-40" />
+        <Skeleton className="size-8 rounded-md" />
+      </div>
+      {/* "Today" button. */}
+      <Skeleton className="h-8 w-16 rounded-md" />
+    </div>
+  )
+}
+
+/**
+ * The INITIAL-load loading layout (calendar-date-change-keeps-chrome) — the three-zone skeleton
+ * laid out EXACTLY like the loaded/`'keep'` `EventList`: a LEGEND SIDEBAR skeleton on the left + a
+ * flex column on the right carrying a HEADER skeleton over the per-view `GridSkeleton`. Using the
+ * SAME flex layout (`flex-row items-stretch gap-3` → `aside w-44` + `flex-1 flex-col gap-2`) means
+ * the ONLY difference between first-load and a date-change refetch is whether the chrome is a
+ * skeleton vs the real legend/header — so real data landing causes no layout jump.
+ */
+export function CalendarLoadingLayout({ view }: { view: CalendarViewKind }): React.JSX.Element {
+  return (
+    <div className="flex h-full w-full min-w-0 flex-row items-stretch gap-3" aria-busy="true">
+      <CalendarLegendSkeleton />
+      <div className="flex min-h-0 min-w-0 flex-1 flex-col gap-2">
+        <CalendarHeaderSkeleton />
+        <GridSkeleton view={view} />
+      </div>
+    </div>
+  )
 }
 
 /* ------------------------------------------------------------------------- *

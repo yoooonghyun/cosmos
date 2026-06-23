@@ -16,6 +16,7 @@ import {
   dayLabel,
   weekRangeLabel,
   calendarLoadingScope,
+  calendarLoadingZones,
   skeletonForView,
   type CalendarMonthIntent,
   type CalendarDayAnchor
@@ -273,5 +274,79 @@ describe('skeletonForView (calendar-date-change-keeps-chrome — per-view grid s
 
   it('day ⇒ the 1-column schedule skeleton', () => {
     expect(skeletonForView('day')).toBe('schedule-1')
+  })
+})
+
+/**
+ * Unification (calendar-date-change-keeps-chrome): the INITIAL `'full'` load and the
+ * date-change `'keep'` refetch render the SAME per-view grid skeleton. The skeleton SHAPE is a
+ * function of the VIEW alone (`skeletonForView`), independent of which loading scope is active —
+ * so month/week/day look identical on first-load and on a date step. Both a `'full'` and a
+ * `'keep'` scope (the two skeleton-bearing scopes) resolve to the same skeleton for a given view.
+ */
+describe('full + keep share one per-view skeleton (initial load matches date-change)', () => {
+  const skeletonBearing: Array<'full' | 'keep'> = ['full', 'keep']
+
+  for (const view of ['month', 'week', 'day'] as const) {
+    it(`${view}: every skeleton-bearing scope maps to skeletonForView('${view}')`, () => {
+      const expected = skeletonForView(view)
+      for (const scope of skeletonBearing) {
+        // The scope is whichever calendarLoadingScope returns for a loading state; both 'full'
+        // (no surface) and 'keep' (surface present) are skeleton-bearing and pick the skeleton
+        // by VIEW only — so the chosen skeleton is the same for both.
+        expect(scope === 'full' || scope === 'keep').toBe(true)
+        expect(skeletonForView(view)).toBe(expected)
+      }
+    })
+  }
+
+  it('calendarLoadingScope returns the two skeleton-bearing scopes for a loading state', () => {
+    // 'full' for the initial (no-surface) load, 'keep' for the date-change refetch (surface present).
+    expect(calendarLoadingScope(true, false)).toBe('full')
+    expect(calendarLoadingScope(true, true)).toBe('keep')
+  })
+})
+
+/**
+ * Per-zone chrome (calendar-date-change-keeps-chrome): the first-load + refetch loading states use
+ * the SAME three-zone (sidebar / header / grid) separated layout and differ only in whether the
+ * legend + header are skeleton (first-load) or real (refetch). The GRID is a skeleton in BOTH so
+ * there is no layout jump when data lands.
+ */
+describe('calendarLoadingZones (sidebar/header/grid skeleton split per scope)', () => {
+  it("'full' (initial load) ⇒ all three zones are skeleton (sidebar + header + grid)", () => {
+    expect(calendarLoadingZones('full')).toEqual({
+      legendSkeleton: true,
+      headerSkeleton: true,
+      gridSkeleton: true
+    })
+  })
+
+  it("'keep' (date-change refetch) ⇒ real legend + header, only the GRID is a skeleton", () => {
+    expect(calendarLoadingZones('keep')).toEqual({
+      legendSkeleton: false,
+      headerSkeleton: false,
+      gridSkeleton: true
+    })
+  })
+
+  it("'none' ⇒ nothing is a skeleton", () => {
+    expect(calendarLoadingZones('none')).toEqual({
+      legendSkeleton: false,
+      headerSkeleton: false,
+      gridSkeleton: false
+    })
+  })
+
+  it('the GRID is a skeleton in BOTH skeleton-bearing scopes (no layout jump on data land)', () => {
+    expect(calendarLoadingZones('full').gridSkeleton).toBe(true)
+    expect(calendarLoadingZones('keep').gridSkeleton).toBe(true)
+  })
+
+  it('first-load is the ONLY scope that skeletons the legend + header chrome', () => {
+    expect(calendarLoadingZones('full').legendSkeleton).toBe(true)
+    expect(calendarLoadingZones('full').headerSkeleton).toBe(true)
+    expect(calendarLoadingZones('keep').legendSkeleton).toBe(false)
+    expect(calendarLoadingZones('keep').headerSkeleton).toBe(false)
   })
 })

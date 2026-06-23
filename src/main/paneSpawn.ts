@@ -125,9 +125,19 @@ export function resolvePaneSpawn(
   // the record is preserved, so a transient miss never erases the chosen folder.)
   const existing = sessionMap.get(paneId)
   if (existing && !(overrideCwd && overrideCwd.length > 0)) {
+    // Re-attach in the SAME recorded cwd, but mint a FRESH session id. Reusing
+    // `existing.sessionId` collided: in the StrictMode double-start, Start#1's claude (which
+    // holds that id) is still terminating when Start#2 spawns, so claude rejects the spawn with
+    // "Session ID <id> is already in use". A freshly minted `--session-id` avoids that collision
+    // (and the "No conversation found" case — a fresh id always create-or-continues). The cwd —
+    // the thing we must preserve to fix the sandbox bug — is kept unchanged; the only cost is the
+    // dev-only loss of an empty/just-restored session's continuity, which is acceptable (the
+    // renderer keeps the restored scrollback as read-only history).
     const exists = dirExists(existing.cwd)
     const spawnCwd = exists ? existing.cwd : sandboxDir
-    return { args: ['--session-id', existing.sessionId], resume: false, cwd: spawnCwd }
+    const sessionId = mintSessionId()
+    sessionMap.set(paneId, { sessionId, cwd: existing.cwd })
+    return { args: ['--session-id', sessionId], resume: false, cwd: spawnCwd }
   }
   // Fresh path: a non-empty chosen directory overrides the default sandbox cwd (FR-004).
   const cwd = overrideCwd && overrideCwd.length > 0 ? overrideCwd : sandboxDir
