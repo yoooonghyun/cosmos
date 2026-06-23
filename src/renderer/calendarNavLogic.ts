@@ -100,6 +100,59 @@ export function isSurfaceForIntent(
   return surfaceMonth.year === intent.year && surfaceMonth.month === intent.month
 }
 
+/**
+ * How the default-view loading state should paint, so a DATE CHANGE never blanks the legend +
+ * range-nav header (calendar-date-change-keeps-chrome). The full-surface skeleton replaces the
+ * WHOLE EventList — including the legend (CalendarLegend) and the date/nav header
+ * (CalendarRangeNav), both rendered INSIDE the surface — so on every month/week/day step the
+ * legend + header flash away and the panel feels slow.
+ *
+ *  - `'full'`   — INITIAL read with NO prior surface (first connect / fresh tab): show the
+ *                 shape-matched skeleton fully; there is no chrome to preserve yet.
+ *  - `'keep'`   — a date-change REFETCH while a surface already exists: keep the existing
+ *                 surface mounted (its legend + range-nav header stay on screen, instant-feeling)
+ *                 and let the new frame swap the grid in place — no skeleton flash.
+ *  - `'none'`   — not loading a default view; render the surface normally.
+ *
+ * Pure/node-testable — the panel maps the result to the render branch.
+ */
+export type CalendarLoadingScope = 'full' | 'keep' | 'none'
+
+export function calendarLoadingScope(
+  loadingDefault: boolean | undefined,
+  hasSurface: boolean
+): CalendarLoadingScope {
+  if (!loadingDefault) {
+    return 'none'
+  }
+  // A surface already on screen ⇒ this is a date-change refetch: keep the chrome, no skeleton.
+  return hasSurface ? 'keep' : 'full'
+}
+
+/**
+ * Which GRID skeleton matches a view's real layout (calendar-date-change-keeps-chrome):
+ *
+ *  - `'month'` → `'month-grid'`: the 7-column month-cell skeleton (mirrors `CalendarMonthGrid`).
+ *  - `'week'`  → `'schedule-7'`: a time-axis + 7 day-column schedule skeleton.
+ *  - `'day'`   → `'schedule-1'`: a time-axis + a single day-column schedule skeleton.
+ *
+ * Used both for the INITIAL full skeleton and the date-change `'keep'` grid skeleton so each
+ * view's loading shape always matches the grid it is replacing. Pure/node-testable; the panel +
+ * catalog map the kind to the concrete skeleton component.
+ */
+export type CalendarSkeletonKind = 'month-grid' | 'schedule-7' | 'schedule-1'
+
+export function skeletonForView(view: 'month' | 'week' | 'day'): CalendarSkeletonKind {
+  switch (view) {
+    case 'month':
+      return 'month-grid'
+    case 'week':
+      return 'schedule-7'
+    case 'day':
+      return 'schedule-1'
+  }
+}
+
 /* ------------------------------------------------------------------------- *
  * Week/Day anchor arithmetic (calendar-week-day-views-v1)
  * ------------------------------------------------------------------------- */

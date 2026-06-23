@@ -9,9 +9,48 @@
  * total functions — a missing/odd value yields a safe display string, never a throw.
  */
 
+import type { SlackSearchMatch } from '../../shared/slack'
+import type { SlackMessageRowProps } from './SlackMessageRow'
+
 /** Author display name with raw-id fallback (FR-004 / native `authorName`). */
 export function authorName(userId: string, userName?: string): string {
   return userName && userName.trim() !== '' ? userName : userId
+}
+
+/**
+ * Map a Slack SEARCH match into the SAME row-props shape `SlackMessageRow` expects from a
+ * channel-history message (bug slack-search-row-data-parity-v1). A search hit and a history
+ * message both feed the ONE canonical `SlackMessageRow`, but a `SlackSearchMatch` is a
+ * DIFFERENT DTO than `SlackMessage`, so the two render paths must map their fields the SAME
+ * way or a search row silently renders sparse (e.g. an unmapped field dropped). This single
+ * mapper is shared by BOTH the native `SearchResults` and the generated `SearchResultRow` so
+ * the field mapping can never drift; the node test asserts every shared field is carried.
+ *
+ * Parity notes:
+ *  - `userName` is the RESOLVED display name (FR-014): search.messages does NOT return it, so
+ *    BOTH paths resolve it via `getUser` (native `resolveNames`, generated `resolveAuthorNames`)
+ *    BEFORE this mapper runs. The avatar initials + name then match a history row exactly
+ *    (raw-`userId` fallback only when resolution failed — the SAME fallback the history row uses).
+ *  - `text`/`customEmoji` are already decoded at the single main mapping point (`slackClient`
+ *    `search` applies `decodeSlackText` + the custom-emoji resolver just like history), so rich
+ *    text + custom emoji render identically.
+ *  - `channelName` adds the cross-channel `#channel` chip (the ONLY intended difference).
+ *  - search rows carry NO thread coords and NO image attachments (search.messages omits them),
+ *    so `onOpenThread`/`images` are absent — degrading to the same non-interactive, image-less
+ *    row a history message with neither would produce (not a degraded variant).
+ *
+ * Pure + total: omits each optional field when absent (so a missing optional never becomes an
+ * explicit `undefined` prop); never throws.
+ */
+export function searchMatchToRowProps(match: SlackSearchMatch): SlackMessageRowProps {
+  return {
+    ts: match.ts,
+    userId: match.userId,
+    ...(match.userName !== undefined ? { userName: match.userName } : {}),
+    text: match.text,
+    ...(match.customEmoji ? { customEmoji: match.customEmoji } : {}),
+    ...(match.channelName ? { channelName: match.channelName } : {})
+  }
 }
 
 /** Initials for the Avatar fallback (NO remote images). Returns '?' for an empty name. */
@@ -52,6 +91,128 @@ export function formatTs(ts: string): string {
 /** A list count label ("1 channel" / "N channels") with correct pluralization. */
 export function countLabel(count: number, singular: string, plural: string): string {
   return `${count} ${count === 1 ? singular : plural}`
+}
+
+/**
+ * Filter a channel list by a name query (bug slack-channel-search-v1, Issue 1). The native
+ * Slack panel paginates ALL public channels into one in-memory list, so finding a channel by
+ * name is a pure case-insensitive substring filter over that list — no extra Slack read, no
+ * token, no IPC. An empty/whitespace query returns the list UNCHANGED (the default browse
+ * view). The match ignores a leading `#` on either side so typing "#general" or "general"
+ * both work. Pure + total: a non-array input yields `[]`, an odd channel name compares as
+ * empty, never throws.
+ */
+export function filterChannelsByName<T extends { name?: string }>(
+  channels: readonly T[] | undefined,
+  query: string
+): T[] {
+  if (!Array.isArray(channels)) {
+    return []
+  }
+  const needle = query.trim().replace(/^#/, '').toLowerCase()
+  if (needle === '') {
+    return [...channels]
+  }
+  return channels.filter((c) =>
+    (typeof c.name === 'string' ? c.name : '').toLowerCase().includes(needle)
+  )
+}
+
+/**
+ * Which subject the ONE shared Slack search Input acts on (bug slack-search-mode-selector-v1):
+ * the unified [Channels] / [Messages] mode toggle. `'channels'` filters the in-memory channel
+ * list by name (the {@link filterChannelsByName} path — narrows the channel list, no Slack read);
+ * `'messages'` runs the message search (the `search` → `SlackMessageRow` results path). The mode
+ * itself is component state; this type + the helpers below keep the per-mode decisions
+ * (placeholder, whether a submit applies) node-testable.
+ */
+export type SlackSearchMode = 'channels' | 'messages'
+
+/** The two modes in display order — the segmented toggle iterates this. */
+export const SLACK_SEARCH_MODES: readonly SlackSearchMode[] = ['channels', 'messages']
+
+/** Human label for a search mode (the segmented toggle's button text). */
+export function searchModeLabel(mode: SlackSearchMode): string {
+  return mode === 'channels' ? 'Channels' : 'Messages'
+}
+
+/**
+ * Placeholder for the ONE shared search Input, switched by the selected mode
+ * (bug slack-search-mode-selector-v1). `'channels'` → "Find a channel" (filters the loaded
+ * list as you type); `'messages'` → "Search messages" (runs the message search on submit).
+ * Pure + total: an unknown mode falls back to the message-search placeholder.
+ */
+export function searchPlaceholder(mode: SlackSearchMode): string {
+  return mode === 'channels' ? 'Find a channel' : 'Search messages'
+}
+
+/**
+ * Whether the shared Input runs its action on FORM SUBMIT (Enter) rather than live-as-you-type
+ * (bug slack-search-mode-selector-v1). Message search is an explicit Slack read, so it fires on
+ * submit only; channel filtering is a local list narrow that updates on every keystroke (no
+ * submit needed). Pure decision so the panel wiring stays node-testable.
+ */
+export function searchModeSubmits(mode: SlackSearchMode): boolean {
+  return mode === 'messages'
+}
+
+/**
+ * Prepend an OLDER page of history above the existing (newer) messages, keeping the whole
+ * list in one ascending-chronological order (bug slack-message-order-loadmore-v1, Issue 3).
+ *
+ * The channel history renders NEWEST-at-bottom (oldest at top): `toMessages` sorts every page
+ * ascending by `ts`, and the list paints them top-to-bottom. "Load more" fetches the NEXT
+ * cursor page, which is OLDER history, so those rows belong ABOVE the current ones — appending
+ * them at the bottom (the old behavior) tangled the order. This puts the older page first, then
+ * the existing rows, and re-sorts by `ts` so any interleaving is resolved into one clean
+ * ascending order. Returns a NEW array. Pure + total: non-array inputs coerce to `[]`, a row
+ * with an odd/absent `ts` sorts as epoch 0, never throws.
+ */
+export function prependOlderMessages<T extends { ts?: string }>(
+  existing: readonly T[] | undefined,
+  olderPage: readonly T[] | undefined
+): T[] {
+  const cur = Array.isArray(existing) ? existing : []
+  const older = Array.isArray(olderPage) ? olderPage : []
+  return [...older, ...cur].sort((a, b) => compareTsAsc(a.ts, b.ts))
+}
+
+/**
+ * Order a GENERATED bound message list ascending by `ts` (oldest → newest, newest-at-bottom)
+ * so it renders IDENTICALLY to the native panel (bug slack-generated-message-order-v1).
+ *
+ * The native list owns its own accumulation and PREPENDS older history above
+ * ({@link prependOlderMessages}). The GENERATED bound list's accumulation is owned by the
+ * shared main-side `AdapterDispatcher`, which is panel-agnostic and APPENDS every next page at
+ * the BOTTOM of the accumulated array (correct for Jira/Confluence, which paginate
+ * newest-first downward). For Slack history the next page is OLDER, so a raw append tangles the
+ * order vs native. Rather than special-case the SHARED dispatcher (which would risk
+ * Jira/Confluence), the Slack catalog re-orders the rows it was handed at the RENDER layer:
+ * one ascending sort makes the displayed order match native no matter which direction the
+ * dispatcher accumulated. Pure + total: a non-array input yields `[]`, an odd/absent `ts` sorts
+ * as epoch 0, returns a NEW array, never throws.
+ */
+export function orderBoundMessages<T extends { ts?: string }>(rows: readonly T[] | undefined): T[] {
+  if (!Array.isArray(rows)) {
+    return []
+  }
+  return [...rows].sort((a, b) => compareTsAsc(a.ts, b.ts))
+}
+
+/**
+ * Compare two Slack epoch `ts` strings ("seconds.micros") NUMERICALLY for ascending
+ * (oldest → newest) order (bug slack-message-order-loadmore-v1). A lexical compare misorders
+ * unequal-length integer parts ("999.9" sorts after "1000.0"); `Number()` parses the whole
+ * fixed-point value so the microsecond suffix tiebreaks. A non-numeric/absent `ts` sorts as 0.
+ * Pure + total, never throws. (Mirrors the main-side `compareTs` in `slackClient.ts`, kept here
+ * so the renderer prepend is node-testable without importing main.)
+ */
+export function compareTsAsc(a: string | undefined, b: string | undefined): number {
+  const na = Number(a)
+  const nb = Number(b)
+  const va = Number.isFinite(na) ? na : 0
+  const vb = Number.isFinite(nb) ? nb : 0
+  return va - vb
 }
 
 /**

@@ -299,7 +299,14 @@ export function PromptComposer({
         return
       }
       const box = slotBox()
-      const anchor = fractionToPx(position, box, OPEN_PROMPT_BUTTON_SIZE_PX)
+      const f = followRef.current
+      // Re-grab during a release-SETTLE: the committed `position` fraction is STALE (it commits
+      // only once the spring settles), so seeding from it would snap the button back to its
+      // previous resting spot. While a settle is mid-flight (`rafId` live or a `dragPx` painted),
+      // grab from the LIVE animated position (`f.currentPx`) so the new drag continues from where
+      // the button visibly is. Otherwise (at rest) seed from the committed fraction.
+      const settleInFlight = f.rafId != null || dragPx != null
+      const anchor = settleInFlight ? { ...f.currentPx } : fractionToPx(position, box, OPEN_PROMPT_BUTTON_SIZE_PX)
       // The grab offset within the button so the cursor stays on the same spot mid-drag.
       const pointer: PixelPoint = { x: event.clientX - box.left, y: event.clientY - box.top }
       dragStart.current = {
@@ -308,9 +315,9 @@ export function PromptComposer({
         anchorOffset: { x: pointer.x - anchor.x, y: pointer.y - anchor.y }
       }
       draggingRef.current = false
-      // Seed the eased-follow state machine from the current resting anchor so the spring eases
-      // OUT from where the button already sits (no pop). Cancel any leftover settle loop first.
-      const f = followRef.current
+      // Cancel any leftover settle loop, then seed the eased-follow state machine from the anchor
+      // (the live position when re-grabbing mid-settle) so the spring eases OUT from where the
+      // button already sits (no pop / no jump-back).
       if (f.rafId != null) {
         cancelAnimationFrame(f.rafId)
         f.rafId = null
@@ -322,7 +329,7 @@ export function PromptComposer({
       f.pendingCommit = null
       event.currentTarget.setPointerCapture(event.pointerId)
     },
-    [expanded, busy, position, slotBox]
+    [expanded, busy, position, slotBox, dragPx]
   )
 
   const onLogoPointerMove = useCallback(

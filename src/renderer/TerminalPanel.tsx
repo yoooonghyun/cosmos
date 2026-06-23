@@ -34,6 +34,7 @@ import { PanelTabStrip, type PanelTab } from './PanelTabStrip'
 import { PanelFooter } from './PanelFooter'
 import { usePanelTabs } from './usePanelTabs'
 import { useTabShortcuts } from './useTabShortcuts'
+import { resolveCloseTarget } from './closeTabRouting'
 import { mapTerminalKey } from './terminalKeymap'
 import {
   isFolderOpen,
@@ -87,6 +88,7 @@ function TerminalView({
   initialScrollback,
   restoredOpenFiles,
   onOpenFilesChange,
+  onViewerStateChange,
   registerSerializer
 }: {
   paneId: string
@@ -107,6 +109,15 @@ function TerminalView({
   restoredOpenFiles?: RestoredOpenFiles
   /** Report this pane's open-files change to the panel so the session save captures it (FR-013). */
   onOpenFilesChange: (paneId: string, slice: RestoredOpenFiles) => void
+  /**
+   * terminal-focus-aware-close-tab-v1: report this pane's viewer-focus + open-file count +
+   * close-active-file callback to the panel so the (active pane's) state can drive the focus-aware
+   * `Ctrl/Cmd+W` routing. Only the ACTIVE pane's report is used by the panel (FR-012).
+   */
+  onViewerStateChange: (
+    paneId: string,
+    state: { viewerFocused: boolean; openFileCount: number; closeActiveFile: () => void }
+  ) => void
   /** Register this pane's scrollback serializer with the panel; returns an unregister fn. */
   registerSerializer: (paneId: string, serialize: () => string) => () => void
 }): React.JSX.Element {
@@ -217,7 +228,18 @@ function TerminalView({
     // suppress xterm's default by returning false), or null to let xterm handle the key
     // unchanged — so plain typing, Enter-submit, Ctrl-C and paste are untouched.
     term.attachCustomKeyEventHandler((e) => {
-      const seq = mapTerminalKey(e)
+      // NB: pass explicit fields — spreading a DOM KeyboardEvent (`{...e}`) drops key/altKey/
+      // metaKey/etc (they're prototype getters, not own enumerable props), which would make
+      // mapTerminalKey see undefined for every field and intercept nothing.
+      const seq = mapTerminalKey({
+        key: e.key,
+        metaKey: e.metaKey,
+        altKey: e.altKey,
+        shiftKey: e.shiftKey,
+        ctrlKey: e.ctrlKey,
+        type: e.type,
+        isComposing: e.isComposing
+      })
       if (seq === null) {
         return true
       }
@@ -378,10 +400,29 @@ function TerminalView({
     (slice: RestoredOpenFiles) => onOpenFilesChange(paneId, slice),
     [onOpenFilesChange, paneId]
   )
+  // terminal-focus-aware-close-tab-v1 (OQ-1): track whether THIS pane's file viewer holds focus
+  // (focus-within), set by the viewer's onFocus/onBlur. Drives the focus-aware Ctrl/Cmd+W route.
+  const [viewerFocused, setViewerFocused] = useState(false)
   // The MIDDLE viewer column + RIGHT tree dock, both backed by ONE explorer hook instance (a click
   // in the dock retargets the viewer). Hooks run unconditionally; while !live the hook is inert.
   // The restored open-files slice seeds the strip on go-live (FR-004).
-  const { viewer, tree } = useExplorerPanes(paneId, live, restoredOpenFiles, reportOpenFiles)
+  const { viewer, tree, openFileCount, closeActiveFile } = useExplorerPanes(
+    paneId,
+    live,
+    restoredOpenFiles,
+    reportOpenFiles,
+    setViewerFocused
+  )
+  // terminal-focus-aware-close-tab-v1: report this pane's viewer-focus + open-file count + the
+  // close-active-file callback up to the panel. The panel ignores all but the ACTIVE pane (FR-012);
+  // when a pane goes inactive it reports `viewerFocused: false` so a stale focus never routes.
+  useEffect(() => {
+    onViewerStateChange(paneId, {
+      viewerFocused: active && viewerFocused,
+      openFileCount,
+      closeActiveFile
+    })
+  }, [paneId, active, viewerFocused, openFileCount, closeActiveFile, onViewerStateChange])
   return (
     // terminal-file-explorer-v1 3-pane §1.1: the tab body is a horizontal flex ROW. BEFORE a folder
     // is opened we render ONLY the VS-Code-style WELCOME view (the [Open a folder] CTA) — no split,
@@ -616,14 +657,43 @@ export function TerminalPanel({ active }: { active: boolean }): React.JSX.Elemen
 
   const activeStripTab = stripTabs.find((t) => t.id === activeTabId) ?? null
 
-  // Tab keyboard shortcuts act on THIS strip only while the Terminal surface is active.
+  // terminal-focus-aware-close-tab-v1: the ACTIVE pane's viewer-focus + open-file count + close-
+  // active-file callback, lifted from its TerminalView. Held in a ref (not state) so a focus/open
+  // change does not re-render the whole panel; the shortcut handler reads it at keystroke time.
+  // Each pane reports here; only the entry matching `activeTabId` is consulted for routing (FR-012).
+  const viewerStateByPaneRef = useRef<
+    Map<string, { viewerFocused: boolean; openFileCount: number; closeActiveFile: () => void }>
+  >(new Map())
+  const handleViewerStateChange = useCallback(
+    (paneId: string, state: { viewerFocused: boolean; openFileCount: number; closeActiveFile: () => void }): void => {
+      viewerStateByPaneRef.current.set(paneId, state)
+    },
+    []
+  )
+
+  // Tab keyboard shortcuts act on THIS strip only while the Terminal surface is active. `tab:close`
+  // is focus-aware (terminal-focus-aware-close-tab-v1): the active pane's lifted viewer state decides
+  // whether Ctrl/Cmd+W closes the file tab or the panel tab. `resolveClose`/`onCloseFileTab` read the
+  // active pane's report at call time so they always reflect the pane the user is looking at.
   useTabShortcuts({
     active,
     tabs,
     activeTabId,
     onActivate: setActive,
     onNewTab: handleNewTab,
-    onCloseTab: handleClose
+    onCloseTab: handleClose,
+    resolveClose: () => {
+      const state = activeTabId ? viewerStateByPaneRef.current.get(activeTabId) : undefined
+      return resolveCloseTarget({
+        viewerFocused: state?.viewerFocused ?? false,
+        openFileCount: state?.openFileCount ?? 0
+      })
+    },
+    onCloseFileTab: () => {
+      if (activeTabId) {
+        viewerStateByPaneRef.current.get(activeTabId)?.closeActiveFile()
+      }
+    }
   })
 
   return (
@@ -652,6 +722,7 @@ export function TerminalPanel({ active }: { active: boolean }): React.JSX.Elemen
             initialScrollback={restoredScrollbackRef.current.get(t.id)}
             restoredOpenFiles={restoredOpenFilesRef.current.get(t.id)}
             onOpenFilesChange={handleOpenFilesChange}
+            onViewerStateChange={handleViewerStateChange}
             registerSerializer={registerSerializer}
           />
         ))}

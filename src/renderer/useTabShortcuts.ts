@@ -13,6 +13,7 @@
  */
 
 import { useEffect, useRef } from 'react'
+import type { CloseTarget } from './closeTabRouting'
 
 export interface TabShortcutOps {
   /** True only for the currently-visible rail surface (gates all tab commands). */
@@ -27,6 +28,16 @@ export interface TabShortcutOps {
   onNewTab: () => void
   /** Close the tab with this id (Cmd+W). */
   onCloseTab: (id: string) => void
+  /**
+   * Optional focus-aware `tab:close` routing (terminal-focus-aware-close-tab-v1, FR-001/FR-008).
+   * Only the Terminal panel passes these; other panels omit them and keep the panel-tab close.
+   * When `resolveClose` returns `'file-tab'` AND `onCloseFileTab` is wired, `tab:close` closes the
+   * file viewer's active open-file tab instead of the panel tab. Any other case (no resolver,
+   * `'panel-tab'`, or no `onCloseFileTab`) falls back to the existing `onCloseTab(active)`.
+   */
+  resolveClose?: () => CloseTarget
+  /** Close the active open-file tab in the focused file viewer (FR-002/FR-003/FR-011). */
+  onCloseFileTab?: () => void
 }
 
 export function useTabShortcuts(ops: TabShortcutOps): void {
@@ -37,7 +48,8 @@ export function useTabShortcuts(ops: TabShortcutOps): void {
 
   useEffect(() => {
     const off = window.cosmos.shortcuts.onTrigger((payload) => {
-      const { active, tabs, activeTabId, onActivate, onNewTab, onCloseTab } = ref.current
+      const { active, tabs, activeTabId, onActivate, onNewTab, onCloseTab, resolveClose, onCloseFileTab } =
+        ref.current
       if (!active) {
         return
       }
@@ -46,7 +58,12 @@ export function useTabShortcuts(ops: TabShortcutOps): void {
           onNewTab()
           break
         case 'tab:close':
-          if (activeTabId) {
+          // terminal-focus-aware-close-tab-v1: when the active pane's file viewer holds focus and
+          // has an open file, close that file tab instead of the panel tab (FR-001/FR-002). The
+          // resolver is only wired by the Terminal panel; every other panel falls straight through.
+          if (resolveClose?.() === 'file-tab' && onCloseFileTab) {
+            onCloseFileTab()
+          } else if (activeTabId) {
             onCloseTab(activeTabId)
           }
           break

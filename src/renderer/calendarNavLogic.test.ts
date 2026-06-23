@@ -15,6 +15,8 @@ import {
   monthLabel,
   dayLabel,
   weekRangeLabel,
+  calendarLoadingScope,
+  skeletonForView,
   type CalendarMonthIntent,
   type CalendarDayAnchor
 } from './calendarNavLogic'
@@ -227,5 +229,49 @@ describe('range labels (calendar-week-day-views-v1 header)', () => {
     expect(weekRangeLabel({ year: 2026, month: 11, day: 31 })).toBe(
       'December 27, 2026 – January 2, 2027'
     )
+  })
+})
+
+describe('calendarLoadingScope (calendar-date-change-keeps-chrome — legend + nav header stay on a date change)', () => {
+
+  it('INITIAL read (no prior surface) ⇒ full skeleton', () => {
+
+    expect(calendarLoadingScope(true, false)).toBe('full')
+
+  })
+
+
+
+  it('date-change REFETCH (loading WHILE a surface exists) ⇒ keep the surface (no blank, chrome stays)', () => {
+
+    expect(calendarLoadingScope(true, true)).toBe('keep')
+
+  })
+
+
+
+  it('not loading ⇒ none, regardless of surface presence', () => {
+
+    expect(calendarLoadingScope(false, true)).toBe('none')
+
+    expect(calendarLoadingScope(false, false)).toBe('none')
+
+    expect(calendarLoadingScope(undefined, true)).toBe('none')
+
+  })
+
+})
+
+describe('skeletonForView (calendar-date-change-keeps-chrome — per-view grid skeleton)', () => {
+  it('month ⇒ the 7-col month-grid skeleton', () => {
+    expect(skeletonForView('month')).toBe('month-grid')
+  })
+
+  it('week ⇒ the 7-column schedule skeleton', () => {
+    expect(skeletonForView('week')).toBe('schedule-7')
+  })
+
+  it('day ⇒ the 1-column schedule skeleton', () => {
+    expect(skeletonForView('day')).toBe('schedule-1')
   })
 })

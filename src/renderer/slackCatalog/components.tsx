@@ -34,15 +34,14 @@ import { LoadMoreButton, useBound, type Bound } from '../catalogShared/controls'
 // shared with the native panel; the catalog list skeleton (design §5).
 import { SlackMessageRow } from './SlackMessageRow'
 import { MessageSkeleton } from './MessageSkeleton'
-import { parseMessageRuns } from './messageContent'
 import type { SlackImageRef } from '../../shared/slack'
 import {
-  authorName,
   boundRows,
   buildOpenThreadContext,
   countLabel,
-  formatTs,
   initials,
+  orderBoundMessages,
+  searchMatchToRowProps,
   showEmptyState,
   showErrorNotice,
   showSkeletonState,
@@ -304,7 +303,11 @@ export function MessageList({
   const rows = useBound<MessageRowNode[]>(surfaceId, messages, undefined)
   const isLoading = useDataBinding<boolean>(surfaceId, loading, false)
   const errorMessage = useDataBinding<string | undefined>(surfaceId, error, undefined)
-  const items = boundRows(rows)
+  // bug slack-generated-message-order-v1: the shared dispatcher APPENDS each older page at the
+  // bottom of the accumulated array (correct for Jira/Confluence), but Slack history paginates
+  // to OLDER messages, so render the bound rows in one ascending order to match the native
+  // panel (newest-at-bottom). Re-ordering here leaves the shared dispatcher untouched.
+  const items = orderBoundMessages(boundRows(rows))
   const loaded = useLoadedOnce(items.length, isLoading)
   if (showSkeletonState(items.length, isLoading, loaded, errorMessage)) {
     return <MessageSkeleton />
@@ -324,12 +327,16 @@ export function MessageList({
           {countLabel(items.length, 'message', 'messages')}
         </p>
       </div>
+      {/* bug slack-generated-message-order-v1: the message list is newest-at-bottom, so the
+          load-more (OLDER history) affordance belongs at the TOP — loading older messages grows
+          the list ABOVE the existing thread, matching the native panel. ChannelList /
+          SearchResultList keep their bottom load-more (those are not chronological threads). */}
+      <LoadMoreButton surfaceId={surfaceId} componentId={componentId} loading={loading} hasMore={hasMore} region={region} />
       {items.map((m, i) => (
         // slack-generative-message-parity-v1 (FR-005): pass the list's real
         // surfaceId/componentId so the row's reply-drill-in dispatch routes through the SDK.
         <MessageRow key={m.ts ?? i} {...m} surfaceId={surfaceId} componentId={componentId} />
       ))}
-      <LoadMoreButton surfaceId={surfaceId} componentId={componentId} loading={loading} hasMore={hasMore} region={region} />
     </div>
   )
 }
@@ -356,44 +363,28 @@ export function SearchResultRow({
   userName,
   text,
   customEmoji,
+  channelId,
   channelName
 }: SearchResultRowNode): React.JSX.Element {
-  const name = authorName(userId ?? '', userName)
-  const runs = parseMessageRuns(text ?? '', customEmoji)
+  // bug slack-search-shared-row-v1 / slack-search-row-data-parity-v1 (Issue 2): a search hit
+  // renders via the ONE canonical SlackMessageRow AND through the SAME field mapper the native
+  // search path uses (`searchMatchToRowProps`), so avatars, rich text, custom emoji, author name,
+  // and layout are identical to a channel-history row. `userName` is the RESOLVED display name
+  // (the generated path's `resolveAuthorNames` fills it before this renders); absent → the raw-id
+  // fallback the history row also uses. The `#channelName` chip is the only intended difference;
+  // no thread coords ⇒ non-interactive row.
   return (
-    <div className="flex w-full min-w-0 gap-2.5 border-b border-border/60 px-3 py-2 last:border-b-0">
-      <Avatar size="sm" className="mt-0.5">
-        <AvatarFallback>{initials(name)}</AvatarFallback>
-      </Avatar>
-      <div className="min-w-0 flex-1">
-        <div className="flex items-center gap-2">
-          <span className="truncate text-sm font-medium text-foreground">{name}</span>
-          {channelName && (
-            <Badge variant="outline" className="px-1.5 py-0 text-[10px]">
-              #{channelName}
-            </Badge>
-          )}
-          <span className="ml-auto shrink-0 text-xs text-muted-foreground">
-            {formatTs(ts ?? '')}
-          </span>
-        </div>
-        <p className="whitespace-pre-wrap break-words text-sm text-card-foreground">
-          {runs.map((run, i) =>
-            run.kind === 'custom-emoji' ? (
-              <img
-                key={i}
-                src={run.ref}
-                alt={`:${run.shortcode}:`}
-                title={`:${run.shortcode}:`}
-                className="inline-block h-[1.25em] w-auto translate-y-[0.15em] align-baseline"
-              />
-            ) : (
-              run.text
-            )
-          )}
-        </p>
-      </div>
-    </div>
+    <SlackMessageRow
+      {...searchMatchToRowProps({
+        ts: ts ?? '',
+        userId: userId ?? '',
+        ...(userName !== undefined ? { userName } : {}),
+        text: text ?? '',
+        ...(customEmoji ? { customEmoji } : {}),
+        channelId: channelId ?? '',
+        ...(channelName ? { channelName } : {})
+      })}
+    />
   )
 }
 

@@ -35,6 +35,30 @@ export function useCalendarDetailSelectedId(): string | null {
   return useContext(CalendarDetailContext)
 }
 
+/* ------------------------------------------------------------------------- *
+ * CalendarLoadingContext — delivers the live default view's IN-FLIGHT refetch state into the
+ * catalog (calendar-date-change-keeps-chrome). On a date-change REFETCH the panel keeps the
+ * existing surface mounted so the legend + range-nav HEADER stay as persistent chrome, and
+ * provides `{ loading: true, view }` so `EventList` swaps only the GRID BODY for the skeleton
+ * matching the TARGET view (`view` = the new intent, NOT the still-mounted old surface's view)
+ * — never blanking the chrome, never showing a top progress bar.
+ *
+ * Renderer-only; nothing here is persisted or crosses IPC. Default `null` (not loading).
+ * ------------------------------------------------------------------------- */
+
+export interface CalendarLoadingValue {
+  /** The TARGET view the in-flight refetch is for — selects the grid skeleton shape. */
+  view: CalendarViewKind
+}
+
+/** The in-flight date-change refetch state (target view), or null when not refetching. */
+export const CalendarLoadingContext = createContext<CalendarLoadingValue | null>(null)
+
+/** Read the in-flight date-change refetch state (grid → skeleton for `view`), or null. */
+export function useCalendarLoading(): CalendarLoadingValue | null {
+  return useContext(CalendarLoadingContext)
+}
+
 /** The active default-view granularity (calendar-week-day-views-v1). */
 export type CalendarViewKind = 'month' | 'week' | 'day'
 

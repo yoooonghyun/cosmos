@@ -36,6 +36,7 @@ import {
   CalendarNavContext,
   CalendarDetailContext,
   CalendarVisibilityContext,
+  CalendarLoadingContext,
   type CalendarNavValue,
   type CalendarVisibilityValue
 } from './googleCalendarCatalog/navContext'
@@ -62,6 +63,7 @@ import {
   weekRangeLabel,
   dayLabel,
   viewToWirePayload,
+  calendarLoadingScope,
   type CalendarMonthIntent,
   type CalendarDayAnchor,
   type CalendarViewIntent
@@ -743,9 +745,12 @@ export function GoogleCalendarPanel({ active }: { active: boolean }): React.JSX.
           </div>
         ) : (
           <div className="flex min-h-0 flex-1 flex-col p-3 text-card-foreground" role="tabpanel">
-            {/* Per-tab loading skeleton: shown for the initial default-view read. Matches the
-                requested view's shape (month grid vs week/day schedule). */}
-            {activeTab?.loadingDefault ? (
+            {/* calendar-date-change-keeps-chrome: the FULL skeleton is shown ONLY for the INITIAL
+                default-view read (no surface yet). A date-change REFETCH (loadingDefault while a
+                surface already exists) keeps the existing surface mounted so the legend + the
+                date/range-nav header — both rendered INSIDE the surface — stay on screen and the
+                new frame swaps the grid in place, instead of blanking the whole panel each step. */}
+            {calendarLoadingScope(activeTab?.loadingDefault, activeTab?.surface != null) === 'full' ? (
               activeIntent.view === 'month' ? (
                 <MonthGridSkeleton />
               ) : (
@@ -772,7 +777,10 @@ export function GoogleCalendarPanel({ active }: { active: boolean }): React.JSX.
                     this pane — it is hoisted to the panel root so it spans the full viewport
                     height independent of the grid (see below). */}
                 {activeTab && (
-                  <div className="flex min-h-0 min-w-0 flex-1 overflow-auto">
+                  <div
+                    className="relative flex min-h-0 min-w-0 flex-1 overflow-auto"
+                    {...(activeTab.loadingDefault ? { 'aria-busy': true } : {})}
+                  >
                     <A2UIProvider key={activeTab.id} catalog={googleCalendarCatalog}>
                       {/* calendar-month-year-nav-v1: inject month/year navigation into the
                           catalog grid. Non-null ONLY for the live default view, so composed
@@ -782,16 +790,32 @@ export function GoogleCalendarPanel({ active }: { active: boolean }): React.JSX.
                             hidden-set so the legend toggle survives the view-nav remount + a
                             restart. Non-null only for the live default view. */}
                         <CalendarVisibilityContext.Provider value={visibilityValue}>
-                          {/* The open-detail dock's current event id flows down so the matching
-                              chip reads `selected` (FR-003). */}
-                          <CalendarDetailContext.Provider value={genUiEvent?.id ?? null}>
-                            <ActiveTabSurface
-                              surface={activeTab.surface}
-                              catalogId={CATALOG_ID}
-                              panelName="GoogleCalendarPanel"
-                              onAction={handleSurfaceAction}
-                            />
-                          </CalendarDetailContext.Provider>
+                          {/* calendar-date-change-keeps-chrome: on a date-change REFETCH (the
+                              `'keep'` scope) the surface stays mounted so the legend + range-nav
+                              header stay as persistent chrome; this non-null value tells EventList
+                              to swap only the GRID for the TARGET-view skeleton (no progress bar,
+                              no blank). `null` in the steady state renders the grid normally. */}
+                          <CalendarLoadingContext.Provider
+                            value={
+                              calendarLoadingScope(
+                                activeTab.loadingDefault,
+                                activeTab.surface != null
+                              ) === 'keep'
+                                ? { view: activeIntent.view }
+                                : null
+                            }
+                          >
+                            {/* The open-detail dock's current event id flows down so the matching
+                                chip reads `selected` (FR-003). */}
+                            <CalendarDetailContext.Provider value={genUiEvent?.id ?? null}>
+                              <ActiveTabSurface
+                                surface={activeTab.surface}
+                                catalogId={CATALOG_ID}
+                                panelName="GoogleCalendarPanel"
+                                onAction={handleSurfaceAction}
+                              />
+                            </CalendarDetailContext.Provider>
+                          </CalendarLoadingContext.Provider>
                         </CalendarVisibilityContext.Provider>
                       </CalendarNavContext.Provider>
                     </A2UIProvider>

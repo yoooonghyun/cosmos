@@ -35,16 +35,32 @@ import {
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue
+} from '@/components/ui/select'
 import { Textarea } from '@/components/ui/textarea'
 import { Badge } from '@/components/ui/badge'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Skeleton } from '@/components/ui/skeleton'
-import { Avatar, AvatarFallback } from '@/components/ui/avatar'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { slackCatalog, SLACK_CATALOG_ID, SLACK_OPEN_CHANNEL_ACTION } from './slackCatalog'
 import { SlackMessageRow } from './slackCatalog/SlackMessageRow'
-import { parseMessageRuns } from './slackCatalog/messageContent'
-import { countLabel, SLACK_OPEN_THREAD_ACTION, type SlackOpenThreadContext } from './slackCatalog/logic'
+import {
+  countLabel,
+  filterChannelsByName,
+  prependOlderMessages,
+  searchMatchToRowProps,
+  searchModeLabel,
+  searchPlaceholder,
+  SLACK_OPEN_THREAD_ACTION,
+  SLACK_SEARCH_MODES,
+  type SlackOpenThreadContext,
+  type SlackSearchMode
+} from './slackCatalog/logic'
 import {
   type OpenThreadState,
   openThread as openThreadTransition,
@@ -84,38 +100,11 @@ import type {
 
 /* ------------------------------------------------------------------------- *
  * Helpers
+ *
+ * Author/initials/timestamp presentation now lives ONCE in the shared `SlackMessageRow`
+ * (search + history + thread all render through it — bug slack-search-shared-row-v1), so
+ * the panel no longer hand-rolls those formatters.
  * ------------------------------------------------------------------------- */
-
-/** Author display name with raw-id fallback (FR-014). */
-function authorName(userId: string, userName?: string): string {
-  return userName && userName.trim() !== '' ? userName : userId
-}
-
-/** Initials for the Avatar fallback (NO remote images — design §0/§5). */
-function initials(name: string): string {
-  const parts = name.replace(/^[@#]/, '').trim().split(/\s+/).filter(Boolean)
-  if (parts.length === 0) {
-    return '?'
-  }
-  if (parts.length === 1) {
-    return parts[0].slice(0, 2).toUpperCase()
-  }
-  return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase()
-}
-
-/** Best-effort short timestamp from a Slack `ts` (design only needs one present). */
-function formatTs(ts: string): string {
-  const seconds = Number(ts.split('.')[0])
-  if (!Number.isFinite(seconds)) {
-    return ''
-  }
-  return new Date(seconds * 1000).toLocaleString(undefined, {
-    month: 'short',
-    day: 'numeric',
-    hour: '2-digit',
-    minute: '2-digit'
-  })
-}
 
 /* ------------------------------------------------------------------------- *
  * Small shared sub-views (uniform across read surfaces — design §2.3)
@@ -384,10 +373,16 @@ function ConnectForm({
 
 function ChannelList({
   onOpen,
-  onReconnect
+  onReconnect,
+  filter
 }: {
   onOpen: (channel: SlackChannel) => void
   onReconnect: () => void
+  // bug slack-search-mode-selector-v1: the channel-name filter is now driven by the ONE shared
+  // search Input at the panel base (the [Channels] mode), so it comes in as a prop instead of a
+  // local Input here. Client-side only — a pure substring filter over the already-loaded
+  // channels; no extra Slack read, no token, no IPC. Empty ⇒ the full browse list.
+  filter: string
 }): React.JSX.Element {
   const [items, setItems] = useState<SlackChannel[]>([])
   const [cursor, setCursor] = useState<string | undefined>(undefined)
@@ -433,46 +428,58 @@ function ChannelList({
   if (loaded && items.length === 0) {
     return <EmptyLine>No channels available.</EmptyLine>
   }
+  // bug slack-search-mode-selector-v1: the visible rows are the name-filtered subset. The filter
+  // text now arrives from the shared search Input ([Channels] mode) instead of a local Input.
+  const visible = filterChannelsByName(items, filter)
+  const filtering = filter.trim() !== ''
   return (
-    <ScrollArea className="h-full">
-      <div className="flex flex-col p-1">
-        {items.map((channel) => (
-          <Button
-            key={channel.id}
-            type="button"
-            variant="ghost"
-            className="h-8 w-full justify-start gap-1.5 px-2 font-normal"
-            onClick={() => onOpen(channel)}
-          >
-            <Hash className="size-3.5 shrink-0 text-muted-foreground" />
-            <span className="truncate text-foreground">{channel.name}</span>
-            {channel.isMember && (
-              <Badge variant="secondary" className="ml-auto px-1.5 py-0 text-[10px]">
-                member
-              </Badge>
-            )}
-          </Button>
-        ))}
-        {cursor && (
-          <Button
-            type="button"
-            variant="ghost"
-            size="sm"
-            className="mt-1 w-full justify-center gap-1.5 text-muted-foreground"
-            onClick={() => void load(cursor)}
-            disabled={loadingMore}
-          >
-            {loadingMore ? (
-              <>
-                <Loader2 className="size-3.5 animate-spin" /> Loading…
-              </>
-            ) : (
-              'Load more channels'
-            )}
-          </Button>
-        )}
-      </div>
-    </ScrollArea>
+    <div className="flex h-full min-h-0 flex-col">
+      <ScrollArea className="min-h-0 flex-1">
+        <div className="flex flex-col p-1">
+          {visible.length === 0 ? (
+            <EmptyLine>No channels match “{filter.trim()}”.</EmptyLine>
+          ) : (
+            visible.map((channel) => (
+              <Button
+                key={channel.id}
+                type="button"
+                variant="ghost"
+                className="h-8 w-full justify-start gap-1.5 px-2 font-normal"
+                onClick={() => onOpen(channel)}
+              >
+                <Hash className="size-3.5 shrink-0 text-muted-foreground" />
+                <span className="truncate text-foreground">{channel.name}</span>
+                {channel.isMember && (
+                  <Badge variant="secondary" className="ml-auto px-1.5 py-0 text-[10px]">
+                    member
+                  </Badge>
+                )}
+              </Button>
+            ))
+          )}
+          {/* Load-more pages in MORE channels to filter over; hidden while a filter is active so
+              it never looks like "more results" for the query (the filter is over loaded rows). */}
+          {cursor && !filtering && (
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              className="mt-1 w-full justify-center gap-1.5 text-muted-foreground"
+              onClick={() => void load(cursor)}
+              disabled={loadingMore}
+            >
+              {loadingMore ? (
+                <>
+                  <Loader2 className="size-3.5 animate-spin" /> Loading…
+                </>
+              ) : (
+                'Load more channels'
+              )}
+            </Button>
+          )}
+        </div>
+      </ScrollArea>
+    </div>
   )
 }
 
@@ -486,7 +493,8 @@ function MessageList({
   onOpenThread,
   onReconnect,
   resolveNames,
-  scroll = true
+  scroll = true,
+  olderAbove = true
 }: {
   load: (cursor?: string) => Promise<SlackResult<SlackPage<SlackMessage>>>
   emptyText: string
@@ -500,6 +508,15 @@ function MessageList({
    * region inside the single shared ScrollArea the thread dock places around them.
    */
   scroll?: boolean
+  /**
+   * Whether the next page is OLDER history that belongs ABOVE the current rows
+   * (bug slack-message-order-loadmore-v1, Issue 3). `true` (default) — channel history: the
+   * list is newest-at-bottom, so "load more" (the older `next_cursor` page) is rendered at the
+   * TOP and PREPENDS older rows above the existing thread, keeping one ascending order. `false`
+   * — thread replies: `conversations.replies` paginates to NEWER replies, so load-more stays at
+   * the bottom and appends.
+   */
+  olderAbove?: boolean
 }): React.JSX.Element {
   const [items, setItems] = useState<SlackMessage[]>([])
   const [cursor, setCursor] = useState<string | undefined>(undefined)
@@ -519,7 +536,16 @@ function MessageList({
       const result = await load(next)
       if (result.ok) {
         const withNames = await resolveNames(result.data.items)
-        setItems((prev) => (next ? [...prev, ...withNames] : withNames))
+        // bug slack-message-order-loadmore-v1 (Issue 3): an OLDER page (olderAbove) is PREPENDED
+        // above the existing rows + re-sorted ascending so the newest-at-bottom order is kept; a
+        // NEWER page (thread replies) appends at the bottom as before. First page replaces.
+        setItems((prev) =>
+          !next
+            ? withNames
+            : olderAbove
+              ? prependOlderMessages(prev, withNames)
+              : [...prev, ...withNames]
+        )
         setCursor(result.data.nextCursor)
         setLoaded(true)
       } else {
@@ -528,7 +554,7 @@ function MessageList({
       setLoading(false)
       setLoadingMore(false)
     },
-    [load, resolveNames]
+    [load, resolveNames, olderAbove]
   )
 
   useEffect(() => {
@@ -548,29 +574,34 @@ function MessageList({
   if (loaded && items.length === 0) {
     return <EmptyLine>{emptyText}</EmptyLine>
   }
+  // bug slack-message-order-loadmore-v1 (Issue 3): the load-more affordance for OLDER history
+  // belongs at the TOP (older messages prepend ABOVE the newest-at-bottom thread); thread
+  // replies keep load-more at the bottom (it appends newer replies). Same button either way.
+  const loadMore = cursor ? (
+    <Button
+      type="button"
+      variant="ghost"
+      size="sm"
+      className="m-2 justify-center gap-1.5 text-muted-foreground"
+      onClick={() => void run(cursor)}
+      disabled={loadingMore}
+    >
+      {loadingMore ? (
+        <>
+          <Loader2 className="size-3.5 animate-spin" /> {olderAbove ? 'Loading older…' : 'Loading…'}
+        </>
+      ) : (
+        olderAbove ? 'Load older messages' : 'Load more'
+      )}
+    </Button>
+  ) : null
   const body = (
     <div className="flex flex-col">
+      {olderAbove && loadMore}
       {items.map((m) => (
         <MessageRow key={m.ts} message={m} onOpenThread={onOpenThread} />
       ))}
-      {cursor && (
-        <Button
-          type="button"
-          variant="ghost"
-          size="sm"
-          className="m-2 justify-center gap-1.5 text-muted-foreground"
-          onClick={() => void run(cursor)}
-          disabled={loadingMore}
-        >
-          {loadingMore ? (
-            <>
-              <Loader2 className="size-3.5 animate-spin" /> Loading…
-            </>
-          ) : (
-            'Load more'
-          )}
-        </Button>
-      )}
+      {!olderAbove && loadMore}
     </div>
   )
   // bug slack-thread-unified-scroll-v1: history/search own their scroll (ScrollArea h-full);
@@ -865,6 +896,7 @@ function SlackThreadPanel({
             key={`${context.channelId}-${context.threadTs}-${replyReloadKey}`}
             emptyText="No replies."
             scroll={false}
+            olderAbove={false}
             load={async (cursor) => {
               // conversations.replies returns the parent as the first item; it is shown as the
               // thread header above, so drop it here to avoid rendering the root twice (FR-003).
@@ -913,10 +945,19 @@ function SlackThreadPanel({
 
 function SearchResults({
   query,
-  onReconnect
+  onReconnect,
+  resolveMatchNames
 }: {
   query: string
   onReconnect: () => void
+  /**
+   * Resolve author ids → display names on the search matches (bug slack-search-row-data-parity-v1).
+   * search.messages does NOT return a display name, so without this the rows showed the raw
+   * `userId` (and raw-id avatar initials) while history rows showed "Alice" — the visible
+   * divergence. Reuses the panel's shared name cache + raw-id fallback, exactly like history's
+   * `resolveNames`, so a search row's author/avatar now matches a history row.
+   */
+  resolveMatchNames: (matches: SlackSearchMatch[]) => Promise<SlackSearchMatch[]>
 }): React.JSX.Element {
   const [items, setItems] = useState<SlackSearchMatch[]>([])
   const [loading, setLoading] = useState(true)
@@ -928,13 +969,17 @@ function SearchResults({
     setError(null)
     const result = await window.cosmos.slack.search({ query })
     if (result.ok) {
-      setItems(result.data.items)
+      // FR-014 data parity: resolve author display names before rendering so the search row's
+      // name + avatar initials match a channel-history row (history calls resolveNames; search
+      // previously skipped it — the root cause of the "search doesn't share the component" report).
+      const withNames = await resolveMatchNames(result.data.items)
+      setItems(withNames)
       setLoaded(true)
     } else {
       setError(result)
     }
     setLoading(false)
-  }, [query])
+  }, [query, resolveMatchNames])
 
   useEffect(() => {
     void run()
@@ -958,47 +1003,15 @@ function SearchResults({
         <p className="px-3 py-2 text-xs text-muted-foreground" aria-live="polite">
           {items.length} {items.length === 1 ? 'result' : 'results'} for “{query}”
         </p>
-        {items.map((m) => {
-          const name = authorName(m.userId, m.userName)
-          return (
-            <div
-              key={`${m.channelId}-${m.ts}`}
-              className="flex gap-2.5 border-b border-border/60 px-3 py-2"
-            >
-              <Avatar size="sm" className="mt-0.5">
-                <AvatarFallback>{initials(name)}</AvatarFallback>
-              </Avatar>
-              <div className="min-w-0 flex-1">
-                <div className="flex items-center gap-2">
-                  <span className="truncate text-sm font-medium text-foreground">{name}</span>
-                  {m.channelName && (
-                    <Badge variant="outline" className="px-1.5 py-0 text-[10px]">
-                      #{m.channelName}
-                    </Badge>
-                  )}
-                  <span className="ml-auto shrink-0 text-xs text-muted-foreground">
-                    {formatTs(m.ts)}
-                  </span>
-                </div>
-                <p className="whitespace-pre-wrap break-words text-sm text-card-foreground">
-                  {parseMessageRuns(m.text, m.customEmoji).map((run, i) =>
-                    run.kind === 'custom-emoji' ? (
-                      <img
-                        key={i}
-                        src={run.ref}
-                        alt={`:${run.shortcode}:`}
-                        title={`:${run.shortcode}:`}
-                        className="inline-block h-[1.25em] w-auto translate-y-[0.15em] align-baseline"
-                      />
-                    ) : (
-                      run.text
-                    )
-                  )}
-                </p>
-              </div>
-            </div>
-          )
-        })}
+        {/* bug slack-search-shared-row-v1 / slack-search-row-data-parity-v1 (Issue 2): search hits
+            render via the SAME shared SlackMessageRow AND through the SAME field mapper
+            (`searchMatchToRowProps`) the generated path uses — identical avatars, rich text, custom
+            emoji, and RESOLVED author name (resolveMatchNames ran above) — instead of a divergent
+            row or a sparse raw-id one. The cross-channel `#channelName` chip is the only intended
+            difference; no thread coords ⇒ non-interactive row (search has no drill-in). */}
+        {items.map((m) => (
+          <SlackMessageRow key={`${m.channelId}-${m.ts}`} {...searchMatchToRowProps(m)} />
+        ))}
       </div>
     </ScrollArea>
   )
@@ -1020,6 +1033,10 @@ function SearchResults({
 export function SlackPanel({ active }: { active: boolean }): React.JSX.Element {
   const [status, setStatus] = useState<SlackConnectionStatus>({ state: 'not_connected' })
   const [busy, setBusy] = useState(false)
+  // bug slack-search-mode-selector-v1: WHAT the one shared search Input acts on. 'channels'
+  // narrows the channel list by name (filterChannelsByName); 'messages' runs the message search
+  // (→ SearchResults). Component state (default 'channels' = the browse-and-find default).
+  const [searchMode, setSearchMode] = useState<SlackSearchMode>('channels')
   // Confirmed-render bump (slack-send-message-v1, FR-013): after a successful channel
   // send, remount the history MessageList so the just-sent message is re-read.
   const [historyReloadKey, setHistoryReloadKey] = useState(0)
@@ -1234,15 +1251,58 @@ export function SlackPanel({ active }: { active: boolean }): React.JSX.Element {
     return messages.map((m) => ({ ...m, userName: cache.get(m.userId) ?? m.userId }))
   }, [])
 
+  /**
+   * Resolve author ids → display names on SEARCH matches (bug slack-search-row-data-parity-v1).
+   * The search-row twin of `resolveNames`: search.messages returns no display name, so without
+   * this the search rows showed the raw `userId` + raw-id avatar initials while history rows
+   * showed the resolved name. Reuses the SAME `nameCache` + `getUser` + raw-id fallback so a
+   * search row's author/avatar is identical to a channel-history row (FR-014).
+   */
+  const resolveMatchNames = useCallback(
+    async (matches: SlackSearchMatch[]): Promise<SlackSearchMatch[]> => {
+      const cache = nameCache.current
+      const unknownIds = Array.from(
+        new Set(matches.map((m) => m.userId).filter((id) => id && !cache.has(id)))
+      )
+      await Promise.all(
+        unknownIds.map(async (id) => {
+          const result: SlackResult<SlackUser> = await window.cosmos.slack.getUser({ userId: id })
+          cache.set(id, result.ok ? result.data.displayName : id)
+        })
+      )
+      return matches.map((m) => ({ ...m, userName: cache.get(m.userId) ?? m.userId }))
+    },
+    []
+  )
+
+  // bug slack-search-mode-selector-v1: submit only RUNS in 'messages' mode (message search is an
+  // explicit Slack read). In 'channels' mode the same Input filters the list live-as-you-type, so
+  // a submit is a no-op (the list is already narrowed). Switching to 'channels' also drops out of
+  // any search results view so the channel list (now filtered by the shared text) is shown.
   const submitSearch = useCallback(
     (e: React.FormEvent) => {
       e.preventDefault()
+      if (searchMode !== 'messages') {
+        return
+      }
       const q = searchText.trim()
       if (q !== '') {
         setView({ kind: 'search', query: q })
       }
     },
-    [searchText]
+    [searchMode, searchText, setView]
+  )
+
+  // Selecting a mode routes the shared Input. 'channels' → leave search results and show the
+  // (filtered) channel list; 'messages' → land on the channels base so the next submit searches.
+  const selectSearchMode = useCallback(
+    (mode: SlackSearchMode) => {
+      setSearchMode(mode)
+      if (mode === 'channels' && view.kind === 'search') {
+        setView({ kind: 'channels' })
+      }
+    },
+    [view.kind, setView]
   )
 
   const isConnected = status.state === 'connected'
@@ -1308,21 +1368,50 @@ export function SlackPanel({ active }: { active: boolean }): React.JSX.Element {
                 uncomposed (new `+`) active tab (FR-017). */}
             {showNativeBase && (
               <>
-                {/* Search field (FR-015). Disabled + helper when search unavailable. */}
-                <div className="border-b border-border p-2">
-                  <form onSubmit={submitSearch} className="relative">
-                    <Search className="pointer-events-none absolute left-2.5 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground" />
-                    <Input
-                      value={searchText}
-                      onChange={(e) => setSearchText(e.target.value)}
-                      placeholder="Search messages"
-                      className="h-8 pl-8 text-sm"
-                      disabled={status.canSearch === false}
-                      aria-label="Search messages"
-                    />
-                  </form>
-                  {status.canSearch === false && (
-                    <p className="mt-1 text-xs text-muted-foreground">
+                {/* Unified search (bug slack-search-mode-selector-v1): a scope DROPDOWN to the
+                    LEFT of the single search Input picks WHAT it searches — the channel list
+                    (filterChannelsByName, live as-you-type) or messages (search → SearchResults,
+                    on submit). FR-015: the Messages option + Input disable + helper when message
+                    search is unavailable; Channels stays usable (it's a local list filter). */}
+                <div className="flex flex-col gap-2 border-b border-border p-2">
+                  <div className="flex items-center gap-2">
+                    <Select
+                      value={searchMode}
+                      onValueChange={(v) => selectSearchMode(v as SlackSearchMode)}
+                    >
+                      <SelectTrigger
+                        size="sm"
+                        className="h-8 shrink-0 text-sm"
+                        aria-label="Search scope"
+                      >
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {SLACK_SEARCH_MODES.map((mode) => (
+                          <SelectItem
+                            key={mode}
+                            value={mode}
+                            disabled={mode === 'messages' && status.canSearch === false}
+                          >
+                            {searchModeLabel(mode)}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                    <form onSubmit={submitSearch} className="relative flex-1">
+                      <Search className="pointer-events-none absolute left-2.5 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground" />
+                      <Input
+                        value={searchText}
+                        onChange={(e) => setSearchText(e.target.value)}
+                        placeholder={searchPlaceholder(searchMode)}
+                        className="h-8 pl-8 text-sm"
+                        disabled={searchMode === 'messages' && status.canSearch === false}
+                        aria-label={searchPlaceholder(searchMode)}
+                      />
+                    </form>
+                  </div>
+                  {searchMode === 'messages' && status.canSearch === false && (
+                    <p className="text-xs text-muted-foreground">
                       Search isn’t available for this connection.
                     </p>
                   )}
@@ -1357,6 +1446,10 @@ export function SlackPanel({ active }: { active: boolean }): React.JSX.Element {
                       <ChannelList
                         onOpen={(channel) => setView({ kind: 'history', channel })}
                         onReconnect={() => void refreshStatus()}
+                        // bug slack-search-mode-selector-v1: filter the list only while the shared
+                        // Input is in [Channels] mode; in [Messages] mode the text targets message
+                        // search, so the channel list stays the full browse list.
+                        filter={searchMode === 'channels' ? searchText : ''}
                       />
                     )}
                     {view.kind === 'history' && (
@@ -1400,7 +1493,11 @@ export function SlackPanel({ active }: { active: boolean }): React.JSX.Element {
                       </>
                     )}
                     {view.kind === 'search' && (
-                      <SearchResults query={view.query} onReconnect={() => void refreshStatus()} />
+                      <SearchResults
+                        query={view.query}
+                        onReconnect={() => void refreshStatus()}
+                        resolveMatchNames={resolveMatchNames}
+                      />
                     )}
                   </div>
 

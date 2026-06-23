@@ -23,12 +23,12 @@ describe('mapTerminalKey', () => {
     expect(mapTerminalKey(key({ key: 'ArrowRight', metaKey: true }))).toBe('\x05')
   })
 
-  it('Option+Left → backward-word (Meta-b)', () => {
-    expect(mapTerminalKey(key({ key: 'ArrowLeft', altKey: true }))).toBe('\x1bb')
+  it('Option+Left → backward-word (CSI-u-safe Alt+Left, not bare ESC b)', () => {
+    expect(mapTerminalKey(key({ key: 'ArrowLeft', altKey: true }))).toBe('\x1b[1;3D')
   })
 
-  it('Option+Right → forward-word (Meta-f)', () => {
-    expect(mapTerminalKey(key({ key: 'ArrowRight', altKey: true }))).toBe('\x1bf')
+  it('Option+Right → forward-word (CSI-u-safe Alt+Right, not bare ESC f)', () => {
+    expect(mapTerminalKey(key({ key: 'ArrowRight', altKey: true }))).toBe('\x1b[1;3C')
   })
 
   it('soft newline is CSI-u Shift+Enter', () => {
@@ -70,5 +70,21 @@ describe('mapTerminalKey', () => {
 
   it('keyup for an intercepted chord is ignored (no double-send)', () => {
     expect(mapTerminalKey(key({ key: 'ArrowLeft', metaKey: true, type: 'keyup' }))).toBeNull()
+  })
+
+  it('Option+Left mid-IME-composition → null (defer to xterm so CompositionHelper commits the syllable)', () => {
+    expect(mapTerminalKey(key({ key: 'ArrowLeft', altKey: true, isComposing: true }))).toBeNull()
+  })
+
+  it('Option+Right mid-IME-composition → null', () => {
+    expect(mapTerminalKey(key({ key: 'ArrowRight', altKey: true, isComposing: true }))).toBeNull()
+  })
+
+  it('Cmd+Left mid-IME-composition → null', () => {
+    expect(mapTerminalKey(key({ key: 'ArrowLeft', metaKey: true, isComposing: true }))).toBeNull()
+  })
+
+  it('Option+Left not composing → word-left sequence (normal motion still works)', () => {
+    expect(mapTerminalKey(key({ key: 'ArrowLeft', altKey: true, isComposing: false }))).toBe('\x1b[1;3D')
   })
 })

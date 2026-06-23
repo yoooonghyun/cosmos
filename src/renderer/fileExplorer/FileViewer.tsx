@@ -166,7 +166,8 @@ export function FileViewer({
   activeRelPath,
   viewer,
   onActivate,
-  onClose
+  onClose,
+  onViewerFocusChange
 }: {
   paneId: string
   /** The ordered open files (terminal-file-tabs-v1) — empty → the "Select a file" placeholder. */
@@ -179,12 +180,36 @@ export function FileViewer({
   onActivate: (relPath: string) => void
   /** Close a tab (X / Delete/Backspace). */
   onClose: (relPath: string) => void
+  /**
+   * Report focus-within of the viewer region (terminal-focus-aware-close-tab-v1, OQ-1). `true` when
+   * focus enters the viewer subtree (the tab strip OR the body), `false` when it leaves — so the
+   * Terminal panel can route `Ctrl/Cmd+W` to the active file tab while this viewer is focused.
+   */
+  onViewerFocusChange?: (focused: boolean) => void
 }): React.JSX.Element {
+  // FR-006/FR-007: track focus-within on the SHARED outer container so it covers BOTH the populated
+  // (tab strip + body) and the empty "Select a file" branches. `onFocus`/`onBlur` bubble as
+  // focusin/focusout; `relatedTarget` staying inside this node means focus only moved WITHIN the
+  // viewer (e.g. tab → body), so we don't flap the boolean. `outline-none` keeps the wrapper itself
+  // from drawing a focus ring; `tabIndex={-1}` lets the empty placeholder receive focus on click.
+  const handleFocus = (): void => onViewerFocusChange?.(true)
+  const handleBlur = (event: React.FocusEvent<HTMLDivElement>): void => {
+    if (event.currentTarget.contains(event.relatedTarget as Node | null)) {
+      return
+    }
+    onViewerFocusChange?.(false)
+  }
+
   if (openFiles.length === 0 || viewer === null) {
     // §5.1 empty state: a calm, low-emphasis placeholder, FULL column height (no strip). The tree
     // dock (RIGHT) is already visible, so this is purely "you haven't picked a file yet".
     return (
-      <div className="flex min-h-0 min-w-0 flex-1 flex-col items-center justify-center gap-2 bg-card px-4 text-center text-muted-foreground select-none">
+      <div
+        tabIndex={-1}
+        onFocus={handleFocus}
+        onBlur={handleBlur}
+        className="flex min-h-0 min-w-0 flex-1 flex-col items-center justify-center gap-2 bg-card px-4 text-center text-muted-foreground outline-none select-none"
+      >
         <MousePointerClick className="size-6 text-muted-foreground/70" aria-hidden="true" />
         <p className="text-xs">Select a file to preview it here.</p>
       </div>
@@ -193,7 +218,11 @@ export function FileViewer({
   // ≥1 file open: the FileTabStrip REPLACES the #84 single-file header (design §4 — the header folds
   // into the active tab; one `h-8` band). The body renders the ACTIVE file's ViewerState unchanged.
   return (
-    <div className="flex min-h-0 min-w-0 flex-1 flex-col bg-card outline-none">
+    <div
+      onFocus={handleFocus}
+      onBlur={handleBlur}
+      className="flex min-h-0 min-w-0 flex-1 flex-col bg-card outline-none"
+    >
       <FileTabStrip
         tabs={openFiles}
         activeRelPath={activeRelPath}

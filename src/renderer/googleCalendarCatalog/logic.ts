@@ -280,6 +280,22 @@ export function visibleEvents(
   return list.filter((ev) => !(typeof ev.calendarId === 'string' && hidden.has(ev.calendarId)))
 }
 
+/**
+ * A STABLE content key for a hidden-calendar set (calendar-selection-persistence regression
+ * fix). The catalog memoizes its per-view visibility filter on this STRING rather than on the
+ * Set object identity: a `useMemo`/`React.memo` keyed on a `Set` reference silently fails to
+ * recompute when the panel hands down a fresh-but-equal Set, or worse re-shows a deselected
+ * calendar in the week/day schedule. Keying on the sorted-joined ids makes the filter track the
+ * set's CONTENTS, so hiding/showing a calendar always re-runs in every view (month/week/day).
+ * Empty/absent ⇒ '' (the no-op key). Pure/node-testable.
+ */
+export function hiddenCalendarsKey(hidden: Set<string> | undefined): string {
+  if (!(hidden instanceof Set) || hidden.size === 0) {
+    return ''
+  }
+  return [...hidden].sort().join('|')
+}
+
 /* ------------------------------------------------------------------------- *
  * Timed vs all-day + label formatting (FR-016)
  * ------------------------------------------------------------------------- */

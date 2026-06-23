@@ -44,9 +44,12 @@ import {
   useCalendarNav,
   useCalendarDetailSelectedId,
   useCalendarVisibility,
+  useCalendarLoading,
   type CalendarNavValue,
   type CalendarViewKind
 } from './navContext'
+import { Skeleton } from '@/components/ui/skeleton'
+import { skeletonForView } from '../calendarNavLogic'
 import {
   CALENDAR_OPEN_DETAIL_ACTION,
   isOpenDetailEmittable,
@@ -73,6 +76,7 @@ import {
   isAllDay,
   seedHiddenCalendarIds,
   visibleEvents,
+  hiddenCalendarsKey,
   tokenColorClasses,
   type CalendarLegendData,
   type DayCellData,
@@ -369,6 +373,97 @@ function CalendarLegend({
 }
 
 /* ------------------------------------------------------------------------- *
+ * Grid-body skeletons (calendar-date-change-keeps-chrome) — the GRID-ONLY loading shapes
+ * shown INSIDE the chrome on a date-change refetch. Unlike the panel's full-surface
+ * skeletons, these render ONLY the bordered grid box (no header, no legend), so the live
+ * legend + range-nav header stay around them while the grid swaps to the matching skeleton.
+ * `MonthGridSkeletonBody` mirrors `CalendarMonthGrid`'s box; `ScheduleSkeletonBody` mirrors
+ * `ScheduleView`'s time-axis + N day columns.
+ * ------------------------------------------------------------------------- */
+
+/** The month-grid box skeleton (7 weekday headers + 5 weeks of day cells), no header label. */
+function MonthGridSkeletonBody(): React.JSX.Element {
+  return (
+    <div
+      className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-lg border border-border"
+      aria-busy="true"
+    >
+      {/* Weekday header row (parity with CalendarMonthGrid). */}
+      <div className="grid grid-cols-7 border-b border-border bg-muted/40">
+        {Array.from({ length: 7 }).map((_, i) => (
+          <div key={i} className="px-1 py-1">
+            <Skeleton className="mx-auto h-3 w-6" />
+          </div>
+        ))}
+      </div>
+      {/* Day cells: 5 weeks × 7 cols, auto-rows-fr so they fill the grid height like the real one. */}
+      <div className="grid min-h-0 flex-1 auto-rows-fr grid-cols-7 [&>*]:border-b [&>*]:border-r [&>*]:border-border">
+        {Array.from({ length: 35 }).map((_, i) => (
+          <div key={i} className="flex flex-col gap-1 p-1">
+            <Skeleton className="ml-auto h-3 w-4" />
+            {i % 3 === 0 && <Skeleton className="h-3 w-full" />}
+          </div>
+        ))}
+      </div>
+    </div>
+  )
+}
+
+/**
+ * The schedule box skeleton (Week/Day): the hour gutter + `columns` day columns with a few
+ * placeholder blocks, mirroring `ScheduleView`'s box. `columns` = 7 (week) / 1 (day).
+ */
+function ScheduleSkeletonBody({ columns }: { columns: number }): React.JSX.Element {
+  return (
+    <div
+      className="flex w-full min-h-0 min-w-0 flex-1 overflow-hidden rounded-lg border border-border"
+      style={{ ['--cal-hour-h' as string]: '2.5rem' }}
+      aria-busy="true"
+    >
+      {/* Hour gutter (parity with TimeAxis). */}
+      <div className="w-12 shrink-0">
+        {Array.from({ length: 9 }).map((_, i) => (
+          <div key={i} className="flex h-[var(--cal-hour-h)] items-start justify-end pr-1 pt-0.5">
+            {i > 0 && <Skeleton className="h-2 w-6" />}
+          </div>
+        ))}
+      </div>
+      {/* Day columns: a header band (week only) + a positioned-block area. */}
+      {Array.from({ length: Math.max(1, columns) }).map((_, c) => (
+        <div key={c} className="flex min-w-0 flex-1 flex-col border-l border-border">
+          {columns > 1 && (
+            <div className="border-b border-border py-1.5">
+              <Skeleton className="mx-auto h-3 w-10" />
+            </div>
+          )}
+          <div className="relative min-h-0 flex-1">
+            {(c % 2 === 0 ? [12, 48] : [28]).map((top, i) => (
+              <Skeleton
+                key={i}
+                className="absolute inset-x-1 h-10 rounded-sm"
+                style={{ top: `${top}%` }}
+              />
+            ))}
+          </div>
+        </div>
+      ))}
+    </div>
+  )
+}
+
+/** Map a target view to its grid-body skeleton (mirrors `skeletonForView`). */
+function GridSkeleton({ view }: { view: CalendarViewKind }): React.JSX.Element {
+  switch (skeletonForView(view)) {
+    case 'month-grid':
+      return <MonthGridSkeletonBody />
+    case 'schedule-7':
+      return <ScheduleSkeletonBody columns={7} />
+    case 'schedule-1':
+      return <ScheduleSkeletonBody columns={1} />
+  }
+}
+
+/* ------------------------------------------------------------------------- *
  * NavIconButton — a single ghost icon chevron for the nav cluster
  * (calendar-month-year-nav-v1 → calendar-week-day-views-v1).
  * ------------------------------------------------------------------------- */
@@ -542,9 +637,13 @@ function CalendarMonthGrid({
 }): React.JSX.Element {
   // Derive the grid once per (events, window, hidden-set). `now` is read at render so the
   // today indicator is correct; memoizing on the inputs keeps the bucketing off the hot path.
+  // Key the bucketing memo on the hidden set's CONTENT (not its Set identity) so a legend
+  // deselect always re-buckets — parity with the schedule path (calendar-selection-persistence).
+  const hiddenKey = hiddenCalendarsKey(hiddenCalendarIds)
   const grid = useMemo(
     () => buildMonthGrid(events, timeMin, new Date(), 'sunday', hiddenCalendarIds),
-    [events, timeMin, hiddenCalendarIds]
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [events, timeMin, hiddenKey]
   )
   const isEmpty = grid.cells.every((c) => c.events.length === 0)
   return (
@@ -821,8 +920,16 @@ function ScheduleView({
   selectedId?: string
 }): React.JSX.Element {
   // Drop events owned by a hidden calendar BEFORE layout via the SINGLE shared visibility
-  // filter (parity with the month grid; calendar-selection-persistence).
-  const visible = useMemo(() => visibleEvents(events, hiddenCalendarIds), [events, hiddenCalendarIds])
+  // filter (parity with the month grid; calendar-selection-persistence). The memo keys on the
+  // hidden set's CONTENT (`hiddenCalendarsKey`), not its object identity: a deselect re-renders
+  // EventList via CalendarVisibilityContext, but a memo keyed on the Set REFERENCE could miss the
+  // change in the week/day schedule (the regression: a deselected calendar stayed on the grid).
+  const hiddenKey = hiddenCalendarsKey(hiddenCalendarIds)
+  const visible = useMemo(
+    () => visibleEvents(events, hiddenCalendarIds),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [events, hiddenKey]
+  )
 
   const columns = useMemo(() => dayColumnsForWindow(timeMin, timeMax), [timeMin, timeMax])
   const isDay = columns.length <= 1
@@ -924,6 +1031,12 @@ export function EventList({
   // snapshot / disconnected) ⇒ the plain `<h2>` label, no controls (FR-016/FR-017).
   const nav = useCalendarNav()
 
+  // calendar-date-change-keeps-chrome: a date-change REFETCH is in flight. The panel keeps THIS
+  // (the previous) surface mounted so the legend + range-nav header stay as persistent chrome;
+  // non-null ⇒ swap the GRID for the skeleton matching the TARGET view (`loadingState.view`, the
+  // NEW intent — NOT this still-mounted surface's `view`). No top progress bar.
+  const loadingState = useCalendarLoading()
+
   // calendar-selection-persistence: the live default view injects a PANEL-OWNED, PERSISTED
   // hidden-set + toggle (survives the view-nav remount AND restart). When present it WINS —
   // the per-surface local state below is bypassed entirely, fixing both the week/day deselect
@@ -972,7 +1085,14 @@ export function EventList({
         <CalendarLegend calendars={legend} hidden={hidden} onToggle={toggle} />
       )}
       <div className="flex min-h-0 min-w-0 flex-1 flex-col">
-        {isSchedule ? (
+        {loadingState ? (
+          // Date-change refetch: keep the range-nav HEADER (target label via `nav`) + render the
+          // TARGET-view grid skeleton in place of the old grid. The legend rail (above) stays too.
+          <div className="flex h-full min-h-0 min-w-0 flex-col gap-2">
+            {nav && <CalendarRangeNav nav={nav} />}
+            <GridSkeleton view={loadingState.view} />
+          </div>
+        ) : isSchedule ? (
           <ScheduleView
             events={items}
             timeMin={timeMin}

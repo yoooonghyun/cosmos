@@ -18,6 +18,7 @@
 import { useState } from 'react'
 import { Maximize2 } from 'lucide-react'
 import { Avatar, AvatarFallback } from '@/components/ui/avatar'
+import { Badge } from '@/components/ui/badge'
 import { authorName, countLabel, formatTs, initials, shouldOpenThreadOnRowClick } from './logic'
 import { parseMessageRuns } from './messageContent'
 import { SlackImageViewer } from './SlackImageViewer'
@@ -46,6 +47,13 @@ export interface SlackMessageRowProps {
    * below the body. Absent / empty → no thumbnails.
    */
   images?: SlackImageRef[]
+  /**
+   * The channel a SEARCH hit belongs to (bug slack-search-shared-row-v1, Issue 2). Search
+   * results span channels, so a hit shows a `#channelName` context chip beside the author —
+   * the ONLY presentational difference from a same-channel history row. Channel-history /
+   * thread rows omit it (the channel is implied by the view). Non-secret display label.
+   */
+  channelName?: string
   /**
    * When present (thread coords carried, native drill-in wired), the WHOLE ROW becomes an
    * open-thread trigger and the "N replies" affordance is interactive
@@ -203,6 +211,7 @@ export function SlackMessageRow({
   replyCount,
   customEmoji,
   images,
+  channelName,
   onOpenThread
 }: SlackMessageRowProps): React.JSX.Element {
   const name = authorName(userId ?? '', userName)
@@ -251,7 +260,12 @@ export function SlackMessageRow({
       <div className="min-w-0 flex-1">
         <div className="flex items-baseline gap-2">
           <span className="truncate text-sm font-medium text-foreground">{name}</span>
-          <span className="shrink-0 text-xs text-muted-foreground">{formatTs(ts ?? '')}</span>
+          {channelName && (
+            <Badge variant="outline" className="shrink-0 px-1.5 py-0 text-[10px]">
+              #{channelName}
+            </Badge>
+          )}
+          <span className="ml-auto shrink-0 text-xs text-muted-foreground">{formatTs(ts ?? '')}</span>
         </div>
         <MessageBody text={text} customEmoji={customEmoji} />
         <MessageImages images={images} onView={setViewing} />

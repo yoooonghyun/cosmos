@@ -14,6 +14,7 @@ import {
   monthFromWindow,
   seedHiddenCalendarIds,
   visibleEvents,
+  hiddenCalendarsKey,
   tokenColorClasses,
   tokenColorName,
   type CalendarLegendData,
@@ -323,6 +324,55 @@ describe('visibleEvents (calendar-selection-persistence — the single visibilit
 
   it('degrades a non-array events input to [] (never throws)', () => {
     expect(visibleEvents(undefined, new Set(['team@x']))).toEqual([])
+  })
+
+  // calendar-week-day-views deselect REGRESSION: the WEEK/DAY schedule path runs the SAME
+  // `visibleEvents` filter as the month grid (ScheduleView calls it before laying events into
+  // DayColumns). Timed events carrying calendarId + start/end (the schedule shape) must drop
+  // out exactly like the month all-day events do — so a deselected calendar disappears in
+  // week/day too. This asserts the shared filter is field-correct for the schedule shape.
+  it('drops timed (week/day schedule) events owned by a hidden calendar', () => {
+    const timedTeam: EventChipData = {
+      id: 'wt1',
+      start: '2026-06-16T09:30:00-07:00',
+      end: '2026-06-16T10:00:00-07:00',
+      allDay: false,
+      calendarId: 'team@x'
+    }
+    const timedHol: EventChipData = {
+      id: 'wh1',
+      start: '2026-06-16T11:00:00-07:00',
+      end: '2026-06-16T12:00:00-07:00',
+      allDay: false,
+      calendarId: 'holidays@x'
+    }
+    const out = visibleEvents([timedTeam, timedHol], new Set(['holidays@x']))
+    expect(out.map((e) => e.id)).toEqual(['wt1'])
+  })
+})
+
+describe('hiddenCalendarsKey (calendar-selection-persistence — STABLE content key drives the per-view memo)', () => {
+  // The regression: a `useMemo`/`React.memo` keyed on the hidden SET object identity could miss a
+  // deselect in the week/day schedule. The catalog now keys its visibility memo on this CONTENT
+  // string, so two DIFFERENT-content sets always produce different keys (forcing recompute), and
+  // two SAME-content sets (regardless of object identity / insertion order) produce equal keys.
+  it('changes when the set CONTENT changes (hide then show toggles the key)', () => {
+    const shown = hiddenCalendarsKey(new Set())
+    const hidOne = hiddenCalendarsKey(new Set(['holidays@x']))
+    const hidTwo = hiddenCalendarsKey(new Set(['holidays@x', 'team@x']))
+    expect(shown).not.toBe(hidOne)
+    expect(hidOne).not.toBe(hidTwo)
+  })
+
+  it('is STABLE across object identity + insertion order (same content ⇒ same key)', () => {
+    const a = hiddenCalendarsKey(new Set(['team@x', 'holidays@x']))
+    const b = hiddenCalendarsKey(new Set(['holidays@x', 'team@x'])) // different identity + order
+    expect(a).toBe(b)
+  })
+
+  it('empty / absent ⇒ the no-op empty key', () => {
+    expect(hiddenCalendarsKey(new Set())).toBe('')
+    expect(hiddenCalendarsKey(undefined)).toBe('')
   })
 })
 

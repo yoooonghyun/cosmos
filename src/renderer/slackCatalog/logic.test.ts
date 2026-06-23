@@ -4,16 +4,26 @@ import {
   authorName,
   boundRows,
   buildOpenThreadContext,
+  compareTsAsc,
   countLabel,
+  filterChannelsByName,
   formatTs,
   initials,
   messageRowOpenThread,
+  orderBoundMessages,
+  prependOlderMessages,
+  searchMatchToRowProps,
+  searchModeLabel,
+  searchModeSubmits,
+  searchPlaceholder,
   shouldOpenThreadOnRowClick,
   showEmptyState,
   showErrorNotice,
   showSkeletonState,
   SLACK_LAYOUT_CLAMP_CLASS,
-  SLACK_OPEN_THREAD_ACTION
+  SLACK_OPEN_THREAD_ACTION,
+  SLACK_SEARCH_MODES,
+  type SlackSearchMode
 } from './logic'
 
 /* Slack + Confluence generative-UI v1 — pure Slack catalog display helpers (FR-004). */
@@ -63,6 +73,239 @@ describe('formatTs (Slack epoch ts — design §2.3)', () => {
   it('returns "" for a non-numeric / absent ts (safe fallback, row shows no time)', () => {
     expect(formatTs('')).toBe('')
     expect(formatTs('not-a-number')).toBe('')
+  })
+})
+
+/* bug slack-channel-search-v1 (Issue 1) — find a channel by name over the loaded list. */
+
+describe('filterChannelsByName (channel name filter — Issue 1)', () => {
+  const channels = [
+    { id: 'C1', name: 'general' },
+    { id: 'C2', name: 'random' },
+    { id: 'C3', name: 'eng-general' },
+    { id: 'C4', name: 'Design' }
+  ]
+
+  it('returns the FULL list unchanged for an empty / whitespace query (default browse)', () => {
+    expect(filterChannelsByName(channels, '')).toEqual(channels)
+    expect(filterChannelsByName(channels, '   ')).toEqual(channels)
+  })
+
+  it('matches case-insensitively as a substring (happy path — finds a channel by name)', () => {
+    expect(filterChannelsByName(channels, 'gen').map((c) => c.id)).toEqual(['C1', 'C3'])
+    expect(filterChannelsByName(channels, 'DESIGN').map((c) => c.id)).toEqual(['C4'])
+  })
+
+  it('ignores a leading # on the query so "#random" works like "random"', () => {
+    // The leading # is stripped, so "#random" matches the same as "random" (only C2).
+    expect(filterChannelsByName(channels, '#random').map((c) => c.id)).toEqual(['C2'])
+    expect(filterChannelsByName(channels, 'random').map((c) => c.id)).toEqual(['C2'])
+  })
+
+  it('returns [] when nothing matches (genuinely-empty filtered view)', () => {
+    expect(filterChannelsByName(channels, 'zzz')).toEqual([])
+  })
+
+  it('returns [] for a non-array input and tolerates an odd/absent name (safe fallback)', () => {
+    expect(filterChannelsByName(undefined, 'x')).toEqual([])
+    expect(
+      filterChannelsByName([{ id: 'C9' } as { id: string; name?: string }], 'x')
+    ).toEqual([])
+  })
+})
+
+/* bug slack-search-mode-selector-v1 — the unified [Channels]/[Messages] search mode. */
+
+describe('search mode selector (channels vs messages — slack-search-mode-selector-v1)', () => {
+  it('lists both modes in display order', () => {
+    expect(SLACK_SEARCH_MODES).toEqual(['channels', 'messages'])
+  })
+
+  it('labels each mode for the segmented toggle (happy path)', () => {
+    expect(searchModeLabel('channels')).toBe('Channels')
+    expect(searchModeLabel('messages')).toBe('Messages')
+  })
+
+  it('switches the shared Input placeholder by mode', () => {
+    expect(searchPlaceholder('channels')).toBe('Find a channel')
+    expect(searchPlaceholder('messages')).toBe('Search messages')
+  })
+
+  it('runs message search on submit, but channel filter live as-you-type', () => {
+    expect(searchModeSubmits('messages')).toBe(true)
+    expect(searchModeSubmits('channels')).toBe(false)
+  })
+
+  it('falls back to the message-search placeholder for an unknown mode (safe fallback)', () => {
+    expect(searchPlaceholder('???' as SlackSearchMode)).toBe('Search messages')
+  })
+})
+
+/* bug slack-message-order-loadmore-v1 (Issue 3) — load-more PREPENDS older history. */
+
+describe('compareTsAsc (numeric ascending ts compare — Issue 3)', () => {
+  it('orders oldest → newest numerically (not lexically)', () => {
+    // String compare would misorder "999.9" after "1000.0"; numeric compare must not.
+    expect(compareTsAsc('999.9', '1000.0')).toBeLessThan(0)
+    expect(compareTsAsc('1700000002.0', '1700000001.0')).toBeGreaterThan(0)
+  })
+
+  it('treats an absent / non-numeric ts as epoch 0 (stable, never throws)', () => {
+    expect(compareTsAsc(undefined, '1')).toBeLessThan(0)
+    expect(compareTsAsc('nope', undefined)).toBe(0)
+  })
+})
+
+describe('prependOlderMessages (older page goes ABOVE — Issue 3)', () => {
+  const newer = [
+    { ts: '1700000010.0', text: 'c' },
+    { ts: '1700000020.0', text: 'd' }
+  ]
+  const older = [
+    { ts: '1700000001.0', text: 'a' },
+    { ts: '1700000002.0', text: 'b' }
+  ]
+
+  it('prepends the older page ABOVE the existing rows, keeping one ascending order (the fix)', () => {
+    // The OLD behavior appended older below → ['c','d','a','b'] (tangled). The fix must
+    // produce one ascending chronological order with the older rows on top.
+    expect(prependOlderMessages(newer, older).map((m) => m.text)).toEqual(['a', 'b', 'c', 'd'])
+  })
+
+  it('re-sorts any interleaving by numeric ts so the merged list stays ordered', () => {
+    const mixedExisting = [{ ts: '1700000005.0', text: 'mid' }]
+    const mixedOlder = [
+      { ts: '1700000009.0', text: 'late' },
+      { ts: '1700000001.0', text: 'early' }
+    ]
+    expect(prependOlderMessages(mixedExisting, mixedOlder).map((m) => m.text)).toEqual([
+      'early',
+      'mid',
+      'late'
+    ])
+  })
+
+  it('coerces non-array inputs to [] (safe fallback, never throws)', () => {
+    expect(prependOlderMessages(undefined, older).map((m) => m.text)).toEqual(['a', 'b'])
+    expect(prependOlderMessages(newer, undefined).map((m) => m.text)).toEqual(['c', 'd'])
+    expect(prependOlderMessages(undefined, undefined)).toEqual([])
+  })
+
+  it('returns a NEW array (does not mutate either input)', () => {
+    const a = [{ ts: '2.0' }]
+    const b = [{ ts: '1.0' }]
+    const out = prependOlderMessages(a, b)
+    expect(out).not.toBe(a)
+    expect(out).not.toBe(b)
+    expect(a).toEqual([{ ts: '2.0' }])
+    expect(b).toEqual([{ ts: '1.0' }])
+  })
+})
+
+/*
+ * bug slack-generated-message-order-v1 — the GENERATED bound MessageList re-orders the
+ * dispatcher-accumulated rows ascending so it matches the native panel (newest-at-bottom).
+ * The shared dispatcher appends each older page at the BOTTOM of the accumulated array; this
+ * test FAILS without the catalog-layer sort (the rows would render bottom-appended/tangled).
+ */
+describe('orderBoundMessages (generated list matches native order)', () => {
+  it('sorts the accumulated rows ascending by ts (newest at the bottom) — the fix', () => {
+    // Simulate the dispatcher's append accumulation for Slack history: page 1 (newer) then a
+    // load-more page 2 that is OLDER, concatenated at the bottom → tangled raw order.
+    const accumulatedRaw = [
+      { ts: '1700000010.0', text: 'newer-1' },
+      { ts: '1700000020.0', text: 'newer-2' },
+      { ts: '1700000001.0', text: 'older-1' },
+      { ts: '1700000002.0', text: 'older-2' }
+    ]
+    // Without the fix the rows render in raw accumulation order
+    // (['newer-1','newer-2','older-1','older-2']); the fix must produce one ascending order.
+    expect(orderBoundMessages(accumulatedRaw).map((m) => m.text)).toEqual([
+      'older-1',
+      'older-2',
+      'newer-1',
+      'newer-2'
+    ])
+  })
+
+  it('orders by NUMERIC ts (not lexical) so unequal-length epochs sort correctly', () => {
+    const rows = [{ ts: '1000.0', text: 'b' }, { ts: '999.9', text: 'a' }]
+    expect(orderBoundMessages(rows).map((m) => m.text)).toEqual(['a', 'b'])
+  })
+
+  it('coerces a non-array / undefined bound value to [] (safe fallback, never throws)', () => {
+    expect(orderBoundMessages(undefined)).toEqual([])
+    expect(orderBoundMessages(null as unknown as { ts?: string }[])).toEqual([])
+  })
+
+  it('tolerates an odd/absent ts (sorts as epoch 0) and returns a NEW array', () => {
+    const rows = [{ ts: '5.0', text: 'has-ts' }, { text: 'no-ts' } as { ts?: string; text: string }]
+    const out = orderBoundMessages(rows)
+    expect(out).not.toBe(rows)
+    // The absent-ts row sorts as epoch 0 → ahead of the ts:5.0 row.
+    expect(out.map((m) => m.text)).toEqual(['no-ts', 'has-ts'])
+  })
+})
+
+/*
+ * bug slack-search-row-data-parity-v1 — a SlackSearchMatch maps into the SAME row-props shape
+ * SlackMessageRow expects from a channel-history message, so a search hit renders identically.
+ * These FAIL if the mapper drops a shared field (the cause of "search results don't share the
+ * message component" — the rows looked different because their data was mapped sparsely).
+ */
+describe('searchMatchToRowProps (search match → shared row props — data parity)', () => {
+  it('carries EVERY shared display field a history row uses (full match)', () => {
+    const match = {
+      ts: '1700000000.000100',
+      userId: 'U123',
+      userName: 'Alice',
+      text: 'hello :wave:',
+      channelId: 'C999',
+      channelName: 'general',
+      customEmoji: { wave: 'cosmos-slack-img://x' }
+    }
+    expect(searchMatchToRowProps(match)).toEqual({
+      ts: '1700000000.000100',
+      userId: 'U123',
+      userName: 'Alice',
+      text: 'hello :wave:',
+      customEmoji: { wave: 'cosmos-slack-img://x' },
+      channelName: 'general'
+    })
+  })
+
+  it('keeps ts/userId/text + the resolved userName so the author + avatar match a history row', () => {
+    // userName is the RESOLVED display name (resolveMatchNames fills it before mapping). The
+    // mapper MUST carry it — dropping it is the bug that showed the raw userId / raw-id initials.
+    const props = searchMatchToRowProps({
+      ts: '1.0',
+      userId: 'U1',
+      userName: 'Bob',
+      text: 'hi',
+      channelId: 'C1'
+    })
+    expect(props.userName).toBe('Bob')
+    expect(props.ts).toBe('1.0')
+    expect(props.userId).toBe('U1')
+    expect(props.text).toBe('hi')
+  })
+
+  it('OMITS each optional field when absent (no explicit-undefined props, missing-optional safe)', () => {
+    const props = searchMatchToRowProps({ ts: '1.0', userId: 'U1', text: 'hi', channelId: 'C1' })
+    expect('userName' in props).toBe(false)
+    expect('customEmoji' in props).toBe(false)
+    expect('channelName' in props).toBe(false)
+    // No thread coords / images on a search match ⇒ a non-interactive, image-less row (parity).
+    expect('onOpenThread' in props).toBe(false)
+    expect('images' in props).toBe(false)
+  })
+
+  it('falls back to the raw userId for the name when userName is unresolved (history fallback)', () => {
+    // The mapper omits userName; SlackMessageRow/authorName then falls back to userId — the SAME
+    // fallback a history row uses, so an unresolved search row is not a degraded variant.
+    const props = searchMatchToRowProps({ ts: '1.0', userId: 'U9', text: 'x', channelId: 'C1' })
+    expect(props.userName).toBeUndefined()
+    expect(authorName(props.userId ?? '', props.userName)).toBe('U9')
   })
 })
 
