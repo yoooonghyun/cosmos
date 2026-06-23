@@ -153,8 +153,14 @@ export interface ConfluencePage<T> {
  *   reconnect_needed — refresh failed; prompt re-connect (FR-A10, SC-007).
  *   rate_limited     — Atlassian 429; honor Retry-After (FR-X07).
  *   network          — transient network/HTTP error; recoverable Retry (FR-X07).
- *   write_not_authorized — the stored token lacks `write:confluence-content`; the
- *                      create was not attempted (no client call). Reconnect to grant it.
+ *   write_not_authorized — the stored token lacks the granular write scope for the
+ *                      attempted write (`write:page:confluence` for create/update,
+ *                      `write:comment:confluence` for a comment); the write was not
+ *                      attempted (no client call). Reconnect to grant it.
+ *   version_conflict — an update raced a concurrent edit: the page version moved
+ *                      underneath the read-then-write window so Confluence rejected
+ *                      the stale version (HTTP 409 / 400-version). Recoverable —
+ *                      re-read the page and try the update again (no clobber).
  */
 export type ConfluenceErrorKind =
   | 'not_connected'
@@ -162,6 +168,7 @@ export type ConfluenceErrorKind =
   | 'rate_limited'
   | 'network'
   | 'write_not_authorized'
+  | 'version_conflict'
 
 /** A failed Confluence read (FR-X07). Carries NO secret (FR-X02, SC-009). */
 export interface ConfluenceError {
@@ -240,13 +247,66 @@ export interface ConfluenceCreateResult {
   title: string
 }
 
-/** The single (granular) OAuth scope a Confluence page-create requires. */
+/**
+ * Params for updating an existing page (confluence-mcp-write-v1, FR-002). All
+ * non-secret — the token is attached in main, never carried here.
+ *   pageId         — the id of the page to update (required).
+ *   title          — the new (or unchanged) page title (required by the v2 update).
+ *   body           — OPTIONAL plain text. When a non-empty body is supplied it
+ *                    replaces the page body (converted to storage XHTML by main).
+ *                    When absent or empty/whitespace the existing body is PRESERVED
+ *                    (the client re-reads + re-sends the current storage body) to
+ *                    avoid an accidental content wipe (§C3).
+ *   versionMessage — OPTIONAL short change note recorded on the new version.
+ */
+export interface ConfluenceUpdateParams {
+  pageId: string
+  title: string
+  body?: string
+  versionMessage?: string
+}
+
+/** Success data for an update: the page id, (new) title, and the new version number. */
+export interface ConfluenceUpdateResult {
+  id: string
+  title: string
+  /** The new (incremented) version number after the update (FR-009). */
+  version: number
+}
+
+/** Params for adding a footer comment to a page (confluence-mcp-write-v1, comment FR). Non-secret. */
+export interface ConfluenceCommentParams {
+  /** The id of the page to comment on (required). */
+  pageId: string
+  /** The comment text as plain text (converted to storage XHTML by main); required. */
+  body: string
+}
+
+/** Success data for a comment: the new comment id + the page it was added to. */
+export interface ConfluenceCommentResult {
+  id: string
+  pageId: string
+}
+
+/** The granular OAuth scope a Confluence page create/update requires. */
 export const CONFLUENCE_WRITE_SCOPE = 'write:page:confluence'
 
-/** User-facing message when a create is attempted without the write scope (reconnect to grant it). */
+/** The granular OAuth scope a Confluence footer-comment create requires. */
+export const CONFLUENCE_COMMENT_SCOPE = 'write:comment:confluence'
+
+/** User-facing message when a page write is attempted without the page-write scope (reconnect to grant it). */
 export const CONFLUENCE_WRITE_NOT_AUTHORIZED_MESSAGE =
-  'cosmos is not authorized to create Confluence pages yet. Disconnect and reconnect ' +
-  'Confluence to grant write access, then try again.'
+  'cosmos is not authorized to create or edit Confluence pages yet. Disconnect and ' +
+  'reconnect Confluence to grant write access, then try again.'
+
+/** User-facing message when a comment is attempted without the comment-write scope (reconnect to grant it). */
+export const CONFLUENCE_COMMENT_NOT_AUTHORIZED_MESSAGE =
+  'cosmos is not authorized to comment on Confluence pages yet. Disconnect and ' +
+  'reconnect Confluence to grant comment access, then try again.'
+
+/** User-facing message for a stale-version update conflict (re-read the page, then retry). */
+export const CONFLUENCE_VERSION_CONFLICT_MESSAGE =
+  'The page changed since it was read — re-read it and try the update again.'
 
 /* ------------------------------------------------------------------------- *
  * Read-only MCP tool contract (FR-C06, FR-X01)
@@ -264,7 +324,11 @@ export const ConfluenceTool = {
   /** Get one page's detail (title, space, body). */
   GetPage: 'confluence_get_page',
   /** Create a new page (MUTATES Confluence). */
-  CreatePage: 'confluence_create_page'
+  CreatePage: 'confluence_create_page',
+  /** Update an existing page's title and/or body (MUTATES Confluence). */
+  UpdatePage: 'confluence_update_page',
+  /** Add a footer comment to a page (MUTATES Confluence). */
+  CreateComment: 'confluence_create_comment'
 } as const
 
 export type ConfluenceToolName = (typeof ConfluenceTool)[keyof typeof ConfluenceTool]
@@ -277,7 +341,9 @@ export type ConfluenceToolName = (typeof ConfluenceTool)[keyof typeof Confluence
 export const ConfluenceOp = {
   SearchContent: 'searchContent',
   GetPage: 'getPage',
-  CreatePage: 'createPage'
+  CreatePage: 'createPage',
+  UpdatePage: 'updatePage',
+  CreateComment: 'createComment'
 } as const
 
 export type ConfluenceOpName = (typeof ConfluenceOp)[keyof typeof ConfluenceOp]

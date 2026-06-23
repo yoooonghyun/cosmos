@@ -22,15 +22,22 @@
  */
 
 import type {
+  ConfluenceCommentParams,
+  ConfluenceCommentResult,
   ConfluenceCreateParams,
   ConfluenceCreateResult,
   ConfluenceError,
   ConfluencePage,
   ConfluencePageDetail,
   ConfluenceResult,
-  ConfluenceSearchResult
+  ConfluenceSearchResult,
+  ConfluenceUpdateParams,
+  ConfluenceUpdateResult
 } from '../../shared/confluence'
-import { decodeUnicodeEscapes } from '../../shared/confluence'
+import {
+  CONFLUENCE_VERSION_CONFLICT_MESSAGE,
+  decodeUnicodeEscapes
+} from '../../shared/confluence'
 import { confluenceApiBase } from './atlassianConfig'
 import { confluenceWebUrl } from './confluenceWebUrl'
 import { plainTextToStorage } from './atlassianText'
@@ -375,6 +382,202 @@ export class ConfluenceClient {
     const title = typeof r.body.title === 'string' && r.body.title !== '' ? r.body.title : params.title
     return { ok: true, data: { id, title } }
   }
+
+  /**
+   * Read the current version number + storage body of a page for an UPDATE
+   * (confluence-mcp-write-v1, FR-009a, plan §C1). The v2 update is optimistic-locked and
+   * replaces content wholesale, so it needs the CURRENT `version.number` (to submit
+   * current+1) and, for a title-only / no-body update, the current STORAGE body to re-send.
+   *
+   * Reads `GET /wiki/api/v2/pages/{id}?body-format=storage&version=true` — NOT the public
+   * `getPage` (which requests `body-format=view`, a server-rendered HTML that is NOT a valid
+   * re-submittable storage body, and whose DTO drops the version). The storage body is read
+   * from `body.storage.value`. Failures map via the existing error path. Pure w.r.t. the
+   * token (never returned). Returns the version + storage body on success, or a typed error.
+   */
+  private async readForUpdate(
+    auth: ConfluenceCallAuth,
+    pageId: string
+  ): Promise<ConfluenceResult<{ versionNumber: number; storageBody: string }>> {
+    const url =
+      `${this.base(auth.cloudId)}/wiki/api/v2/pages/${encodeURIComponent(pageId)}` +
+      `?body-format=storage&version=true`
+    const r = await this.call(url, auth.token)
+    if (!r.ok) {
+      return r.error
+    }
+    const version = isRecord(r.body.version) ? r.body.version : {}
+    const versionNumber = typeof version.number === 'number' ? version.number : NaN
+    if (!Number.isFinite(versionNumber)) {
+      return err('network', 'Confluence returned no current version number for the page.')
+    }
+    const body = isRecord(r.body.body) ? r.body.body : {}
+    const storage = isRecord(body.storage) ? body.storage : {}
+    const storageBody = typeof storage.value === 'string' ? storage.value : ''
+    return { ok: true, data: { versionNumber, storageBody } }
+  }
+
+  /**
+   * Update an existing page (confluence-mcp-write-v1, FR-009). First reads the current
+   * version + storage body (`readForUpdate`), then issues
+   * `PUT /wiki/api/v2/pages/{id}` with `{ id, status: 'current', title,
+   * body: { representation: 'storage', value }, version: { number: current+1, message? } }`.
+   *
+   * Body resolution (§C3): when `params.body` is a non-empty/non-whitespace string it is
+   * wrapped to storage XHTML via {@link plainTextToStorage} and replaces the body; otherwise
+   * (absent or empty/whitespace) the read storage body is re-sent UNCHANGED so a title-only
+   * update never wipes content.
+   *
+   * A stale-version rejection (HTTP 409, or 400 whose body indicates a version mismatch)
+   * maps to a recoverable `version_conflict` so the agent can re-read + retry (FR-009b);
+   * all other HTTP failures map via {@link mapConfluenceError}. A scope-less token is
+   * short-circuited by the manager BEFORE this is called. The token is never returned.
+   */
+  async updatePage(
+    auth: ConfluenceCallAuth,
+    params: ConfluenceUpdateParams
+  ): Promise<ConfluenceResult<ConfluenceUpdateResult>> {
+    const read = await this.readForUpdate(auth, params.pageId)
+    if (!read.ok) {
+      return read
+    }
+    const newVersion = read.data.versionNumber + 1
+    const hasNewBody = typeof params.body === 'string' && params.body.trim().length > 0
+    const value = hasNewBody ? plainTextToStorage(params.body as string) : read.data.storageBody
+    const payload = JSON.stringify({
+      id: params.pageId,
+      status: 'current',
+      title: params.title,
+      body: { representation: 'storage', value },
+      version: {
+        number: newVersion,
+        ...(typeof params.versionMessage === 'string' && params.versionMessage !== ''
+          ? { message: params.versionMessage }
+          : {})
+      }
+    })
+    const url = `${this.base(auth.cloudId)}/wiki/api/v2/pages/${encodeURIComponent(params.pageId)}`
+    const r = await this.callWrite(url, auth.token, 'PUT', payload)
+    if (!r.ok) {
+      // Map a stale-version conflict to a distinct, recoverable result (FR-009b, §C2).
+      if (r.status === 409 || (r.status === 400 && bodyIndicatesVersionConflict(r.rawBody))) {
+        return err('version_conflict', CONFLUENCE_VERSION_CONFLICT_MESSAGE)
+      }
+      return r.status === 429
+        ? mapConfluenceError(429, parseRetryAfter(r.retryAfter))
+        : mapConfluenceError(r.status)
+    }
+    const id =
+      typeof r.body.id === 'string'
+        ? r.body.id
+        : typeof r.body.id === 'number'
+          ? String(r.body.id)
+          : params.pageId
+    const title =
+      typeof r.body.title === 'string' && r.body.title !== '' ? r.body.title : params.title
+    const returnedVersion = isRecord(r.body.version) ? r.body.version : {}
+    const version =
+      typeof returnedVersion.number === 'number' ? returnedVersion.number : newVersion
+    return { ok: true, data: { id, title, version } }
+  }
+
+  /**
+   * Add a footer comment to a page (confluence-mcp-write-v1, comment FR). Issues
+   * `POST /wiki/api/v2/footer-comments` with `{ pageId, body: { representation: 'storage',
+   * value } }` where the plain-text comment is wrapped to storage XHTML via
+   * {@link plainTextToStorage}. Requires the `write:comment:confluence` scope (gated by the
+   * manager BEFORE this is called). Returns the new comment id + the page it was added to.
+   * HTTP failures map via {@link mapConfluenceError}. The token is never returned.
+   */
+  async createComment(
+    auth: ConfluenceCallAuth,
+    params: ConfluenceCommentParams
+  ): Promise<ConfluenceResult<ConfluenceCommentResult>> {
+    const payload = JSON.stringify({
+      pageId: params.pageId,
+      body: { representation: 'storage', value: plainTextToStorage(params.body) }
+    })
+    const url = `${this.base(auth.cloudId)}/wiki/api/v2/footer-comments`
+    const r = await this.call(url, auth.token, { method: 'POST', body: payload })
+    if (!r.ok) {
+      return r.error
+    }
+    const id =
+      typeof r.body.id === 'string'
+        ? r.body.id
+        : typeof r.body.id === 'number'
+          ? String(r.body.id)
+          : ''
+    if (id === '') {
+      return err('network', 'Confluence added the comment but returned no id.')
+    }
+    return { ok: true, data: { id, pageId: params.pageId } }
+  }
+
+  /**
+   * Issue a write request (PUT/POST) returning the parsed body AND the raw HTTP status /
+   * Retry-After / unparsed body so the caller can discriminate a version conflict
+   * (confluence-mcp-write-v1, §C2) before falling back to {@link mapConfluenceError}. Unlike
+   * the private {@link call}, this does NOT pre-map the error — it surfaces the status so
+   * `updatePage` can branch 409 / 400-version → `version_conflict`. The token is attached but
+   * never returned.
+   */
+  private async callWrite(
+    url: string,
+    token: string,
+    method: string,
+    body: string
+  ): Promise<
+    | { ok: true; body: Record<string, unknown> }
+    | { ok: false; status: number; retryAfter: string | null; rawBody: string }
+  > {
+    let res: ConfluenceHttpResponse
+    try {
+      res = await this.fetchImpl(url, {
+        method,
+        headers: {
+          authorization: `Bearer ${token}`,
+          accept: 'application/json',
+          'content-type': 'application/json'
+        },
+        body
+      })
+    } catch {
+      // A network failure has no HTTP status; signal status 0 → mapped to `network`.
+      return { ok: false, status: 0, retryAfter: null, rawBody: '' }
+    }
+    if (!res.ok) {
+      let rawBody = ''
+      try {
+        const parsed = await res.json()
+        rawBody = typeof parsed === 'string' ? parsed : JSON.stringify(parsed)
+      } catch {
+        // best effort — the version-conflict discriminator tolerates an empty body.
+      }
+      return { ok: false, status: res.status, retryAfter: res.headers.get('retry-after'), rawBody }
+    }
+    let parsed: unknown
+    try {
+      parsed = await res.json()
+    } catch {
+      // A 2xx with an unreadable/empty body still succeeded; treat as an empty object.
+      parsed = {}
+    }
+    return { ok: true, body: isRecord(parsed) ? parsed : {} }
+  }
+}
+
+/**
+ * Heuristic: does a 400 response body indicate a version/optimistic-locking conflict
+ * (confluence-mcp-write-v1, §C2)? Confluence usually returns 409 for a stale version, but
+ * may return 400 with a version-related message. Pure; tolerates any shape. Never throws.
+ */
+function bodyIndicatesVersionConflict(rawBody: string): boolean {
+  if (typeof rawBody !== 'string' || rawBody === '') {
+    return false
+  }
+  const lower = rawBody.toLowerCase()
+  return lower.includes('version') && (lower.includes('conflict') || lower.includes('match'))
 }
 
 /**

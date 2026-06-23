@@ -433,3 +433,262 @@ describe('ConfluenceClient.createPage', () => {
     expect(JSON.stringify(result)).not.toContain('at-test')
   })
 })
+
+describe('ConfluenceClient.updatePage (confluence-mcp-write-v1, FR-009/FR-009a/FR-009b)', () => {
+  interface Captured {
+    url: string
+    method?: string
+    body?: string
+  }
+
+  it('reads the current version+storage then PUTs version+1 with the NEW storage body (body replace)', async () => {
+    const calls: Captured[] = []
+    const fetchImpl: FetchLike = async (url, init) => {
+      calls.push({ url, method: init?.method, body: init?.body })
+      // First call: the read-for-update (storage body + version).
+      if (init?.method === undefined || init?.method === 'GET') {
+        return res({
+          id: '12345',
+          title: 'Old Title',
+          version: { number: 3 },
+          body: { storage: { value: '<p>old body</p>' } }
+        })
+      }
+      // Second call: the PUT.
+      return res({ id: '12345', title: 'New Title', version: { number: 4 } })
+    }
+    const client = new ConfluenceClient({ fetchImpl })
+    const result = await client.updatePage(auth, {
+      pageId: '12345',
+      title: 'New Title',
+      body: 'line one\nline two',
+      versionMessage: 'reworked'
+    })
+    expect(result.ok).toBe(true)
+    if (result.ok) {
+      expect(result.data).toEqual({ id: '12345', title: 'New Title', version: 4 })
+    }
+    // The read requests the STORAGE body + version (NOT body-format=view).
+    expect(calls[0].url).toContain('/wiki/api/v2/pages/12345')
+    expect(calls[0].url).toContain('body-format=storage')
+    expect(calls[0].url).toContain('version=true')
+    expect(calls[0].url).not.toContain('body-format=view')
+    // The PUT targets the page and carries version current+1 + the new storage body.
+    expect(calls[1].method).toBe('PUT')
+    expect(calls[1].url).toContain('/wiki/api/v2/pages/12345')
+    const payload = JSON.parse(calls[1].body ?? '{}')
+    expect(payload.id).toBe('12345')
+    expect(payload.status).toBe('current')
+    expect(payload.title).toBe('New Title')
+    expect(payload.body).toEqual({
+      representation: 'storage',
+      value: '<p>line one</p><p>line two</p>'
+    })
+    expect(payload.version).toEqual({ number: 4, message: 'reworked' })
+  })
+
+  it('preserves the existing storage body on a title-only update (no body)', async () => {
+    let putBody = ''
+    const fetchImpl: FetchLike = async (_url, init) => {
+      if (init?.method === 'PUT') {
+        putBody = init.body ?? ''
+        return res({ id: '12345', title: 'Renamed', version: { number: 8 } })
+      }
+      return res({
+        id: '12345',
+        title: 'Old',
+        version: { number: 7 },
+        body: { storage: { value: '<p>keep me</p>' } }
+      })
+    }
+    const client = new ConfluenceClient({ fetchImpl })
+    const result = await client.updatePage(auth, { pageId: '12345', title: 'Renamed' })
+    expect(result.ok).toBe(true)
+    if (result.ok) {
+      expect(result.data.version).toBe(8)
+    }
+    const payload = JSON.parse(putBody)
+    // The existing storage body is re-sent UNCHANGED — never wiped.
+    expect(payload.body).toEqual({ representation: 'storage', value: '<p>keep me</p>' })
+    expect(payload.version.number).toBe(8)
+    // No versionMessage supplied → no message key.
+    expect(payload.version.message).toBeUndefined()
+  })
+
+  it('treats an empty/whitespace body as absent (preserve existing — §C3, no wipe)', async () => {
+    let putBody = ''
+    const fetchImpl: FetchLike = async (_url, init) => {
+      if (init?.method === 'PUT') {
+        putBody = init.body ?? ''
+        return res({ id: '1', title: 'T', version: { number: 2 } })
+      }
+      return res({
+        id: '1',
+        title: 'T',
+        version: { number: 1 },
+        body: { storage: { value: '<p>do not wipe</p>' } }
+      })
+    }
+    const client = new ConfluenceClient({ fetchImpl })
+    const result = await client.updatePage(auth, { pageId: '1', title: 'T', body: '   ' })
+    expect(result.ok).toBe(true)
+    expect(JSON.parse(putBody).body.value).toBe('<p>do not wipe</p>')
+  })
+
+  it('maps a 409 on the PUT to version_conflict (FR-009b — re-read and retry)', async () => {
+    const fetchImpl: FetchLike = async (_url, init) => {
+      if (init?.method === 'PUT') {
+        return res({ errors: [{ title: 'Version mismatch' }] }, 409)
+      }
+      return res({ id: '1', title: 'T', version: { number: 1 }, body: { storage: { value: '<p>x</p>' } } })
+    }
+    const client = new ConfluenceClient({ fetchImpl })
+    const result = await client.updatePage(auth, { pageId: '1', title: 'T', body: 'new' })
+    expect(result.ok).toBe(false)
+    if (!result.ok) {
+      expect(result.kind).toBe('version_conflict')
+    }
+  })
+
+  it('maps a 400 whose body indicates a version mismatch to version_conflict', async () => {
+    const fetchImpl: FetchLike = async (_url, init) => {
+      if (init?.method === 'PUT') {
+        return res({ message: 'The version number does not match the latest version' }, 400)
+      }
+      return res({ id: '1', title: 'T', version: { number: 1 }, body: { storage: { value: '<p>x</p>' } } })
+    }
+    const client = new ConfluenceClient({ fetchImpl })
+    const result = await client.updatePage(auth, { pageId: '1', title: 'T', body: 'new' })
+    expect(result.ok).toBe(false)
+    if (!result.ok) {
+      expect(result.kind).toBe('version_conflict')
+    }
+  })
+
+  it('maps a non-version 400 on the PUT to a recoverable network error', async () => {
+    const fetchImpl: FetchLike = async (_url, init) => {
+      if (init?.method === 'PUT') {
+        return res({ message: 'title is required' }, 400)
+      }
+      return res({ id: '1', title: 'T', version: { number: 1 }, body: { storage: { value: '<p>x</p>' } } })
+    }
+    const client = new ConfluenceClient({ fetchImpl })
+    const result = await client.updatePage(auth, { pageId: '1', title: 'T', body: 'new' })
+    expect(result.ok).toBe(false)
+    if (!result.ok) {
+      expect(result.kind).toBe('network')
+    }
+  })
+
+  it('maps a 403 on the read-for-update to reconnect_needed (unknown/inaccessible page)', async () => {
+    const fetchImpl: FetchLike = async () => res({}, 403)
+    const client = new ConfluenceClient({ fetchImpl })
+    const result = await client.updatePage(auth, { pageId: 'nope', title: 'T' })
+    expect(result.ok).toBe(false)
+    if (!result.ok) {
+      expect(result.kind).toBe('reconnect_needed')
+    }
+  })
+
+  it('maps a 404 on the read-for-update to a recoverable network error (no crash)', async () => {
+    const fetchImpl: FetchLike = async () => res({}, 404)
+    const client = new ConfluenceClient({ fetchImpl })
+    const result = await client.updatePage(auth, { pageId: 'gone', title: 'T' })
+    expect(result.ok).toBe(false)
+    if (!result.ok) {
+      expect(result.kind).toBe('network')
+    }
+  })
+
+  it('maps a 429 on the PUT to rate_limited and honors Retry-After', async () => {
+    const fetchImpl: FetchLike = async (_url, init) => {
+      if (init?.method === 'PUT') {
+        return res({}, 429, '9')
+      }
+      return res({ id: '1', title: 'T', version: { number: 1 }, body: { storage: { value: '<p>x</p>' } } })
+    }
+    const client = new ConfluenceClient({ fetchImpl })
+    const result = await client.updatePage(auth, { pageId: '1', title: 'T', body: 'new' })
+    expect(result.ok).toBe(false)
+    if (!result.ok) {
+      expect(result.kind).toBe('rate_limited')
+      expect(result.retryAfterSeconds).toBe(9)
+    }
+  })
+
+  it('returns network when the read returns no version number (defensive)', async () => {
+    const fetchImpl: FetchLike = async () => res({ id: '1', title: 'T', body: { storage: { value: '<p>x</p>' } } })
+    const client = new ConfluenceClient({ fetchImpl })
+    const result = await client.updatePage(auth, { pageId: '1', title: 'T' })
+    expect(result.ok).toBe(false)
+    if (!result.ok) {
+      expect(result.kind).toBe('network')
+    }
+  })
+
+  it('never attaches a token to the result (SC-009)', async () => {
+    const fetchImpl: FetchLike = async (_url, init) =>
+      init?.method === 'PUT'
+        ? res({ id: '1', title: 'T', version: { number: 2 } })
+        : res({ id: '1', title: 'T', version: { number: 1 }, body: { storage: { value: '<p>x</p>' } } })
+    const client = new ConfluenceClient({ fetchImpl })
+    const result = await client.updatePage(auth, { pageId: '1', title: 'T', body: 'new' })
+    expect(JSON.stringify(result)).not.toContain('at-test')
+  })
+})
+
+describe('ConfluenceClient.createComment (confluence-mcp-write-v1, comment FR)', () => {
+  it('POSTs /footer-comments with the pageId + storage body and returns the comment id', async () => {
+    let captured: { url: string; method?: string; body?: string } = { url: '' }
+    const fetchImpl: FetchLike = async (url, init) => {
+      captured = { url, method: init?.method, body: init?.body }
+      return res({ id: 'c-99', pageId: '12345' }, 201)
+    }
+    const client = new ConfluenceClient({ fetchImpl })
+    const result = await client.createComment(auth, { pageId: '12345', body: 'first\nsecond' })
+    expect(result.ok).toBe(true)
+    if (result.ok) {
+      expect(result.data).toEqual({ id: 'c-99', pageId: '12345' })
+    }
+    expect(captured.url).toContain('/wiki/api/v2/footer-comments')
+    expect(captured.method).toBe('POST')
+    const payload = JSON.parse(captured.body ?? '{}')
+    expect(payload.pageId).toBe('12345')
+    expect(payload.body).toEqual({
+      representation: 'storage',
+      value: '<p>first</p><p>second</p>'
+    })
+  })
+
+  it('maps a 403 to reconnect_needed and a 404 to network (no crash)', async () => {
+    const c403 = new ConfluenceClient({ fetchImpl: async () => res({}, 403) })
+    const r403 = await c403.createComment(auth, { pageId: '1', body: 'x' })
+    expect(r403.ok).toBe(false)
+    if (!r403.ok) {
+      expect(r403.kind).toBe('reconnect_needed')
+    }
+    const c404 = new ConfluenceClient({ fetchImpl: async () => res({}, 404) })
+    const r404 = await c404.createComment(auth, { pageId: 'gone', body: 'x' })
+    expect(r404.ok).toBe(false)
+    if (!r404.ok) {
+      expect(r404.kind).toBe('network')
+    }
+  })
+
+  it('returns network when Confluence returns no comment id', async () => {
+    const fetchImpl: FetchLike = async () => res({ pageId: '1' }, 201)
+    const client = new ConfluenceClient({ fetchImpl })
+    const result = await client.createComment(auth, { pageId: '1', body: 'x' })
+    expect(result.ok).toBe(false)
+    if (!result.ok) {
+      expect(result.kind).toBe('network')
+    }
+  })
+
+  it('never attaches a token to the result (SC-009)', async () => {
+    const fetchImpl: FetchLike = async () => res({ id: 'c1', pageId: '1' }, 201)
+    const client = new ConfluenceClient({ fetchImpl })
+    const result = await client.createComment(auth, { pageId: '1', body: 'x' })
+    expect(JSON.stringify(result)).not.toContain('at-test')
+  })
+})

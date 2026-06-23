@@ -17,14 +17,16 @@ import { encodeBridgeMessage } from '../shared/bridge'
 import { ConfluenceOp, type ConfluenceResult } from '../shared/confluence'
 import {
   validateConfluenceBridgeCall,
+  validateConfluenceComment,
   validateConfluenceCreate,
   validateConfluenceGetPage,
-  validateConfluenceSearch
+  validateConfluenceSearch,
+  validateConfluenceUpdate
 } from '../shared/validate'
 
 type WarnFn = (message: string, ...args: unknown[]) => void
 
-/** The subset of ConfluenceManager the bridge invokes (two reads + the page-create write). */
+/** The subset of ConfluenceManager the bridge invokes (two reads + the page-create/update/comment writes). */
 export interface ConfluenceBridgeManager {
   searchContent(params: { query: string; cursor?: string }): Promise<ConfluenceResult<unknown>>
   getPage(params: { pageId: string }): Promise<ConfluenceResult<unknown>>
@@ -34,6 +36,13 @@ export interface ConfluenceBridgeManager {
     body: string
     parentId?: string
   }): Promise<ConfluenceResult<unknown>>
+  updatePage(params: {
+    pageId: string
+    title: string
+    body?: string
+    versionMessage?: string
+  }): Promise<ConfluenceResult<unknown>>
+  createComment(params: { pageId: string; body: string }): Promise<ConfluenceResult<unknown>>
 }
 
 export interface ConfluenceBridgeDeps {
@@ -151,6 +160,14 @@ export class ConfluenceBridge {
       case ConfluenceOp.CreatePage: {
         const p = validateConfluenceCreate(params, this.warn)
         return p ? this.manager.createPage(p) : invalidParams
+      }
+      case ConfluenceOp.UpdatePage: {
+        const p = validateConfluenceUpdate(params, this.warn)
+        return p ? this.manager.updatePage(p) : invalidParams
+      }
+      case ConfluenceOp.CreateComment: {
+        const p = validateConfluenceComment(params, this.warn)
+        return p ? this.manager.createComment(p) : invalidParams
       }
       default:
         return invalidParams

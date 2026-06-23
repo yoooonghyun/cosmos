@@ -721,17 +721,19 @@ export function JiraPanel({ active }: { active: boolean }): React.JSX.Element {
             </div>
 
             {/* Ticket-detail dock (#86, FR-001…FR-006). Mounted only when a ticket is open;
-                `activeTabId` is non-null here (a tab is always seeded). Click-away scrim only in
-                drawer mode (`@[32rem]/jirabody:hidden`); the side-by-side mode needs no scrim. */}
+                `activeTabId` is non-null here (a tab is always seeded). An ALWAYS-overlay
+                absolute right-drawer (matching the Calendar dock): it floats over the
+                still-full-width list at EVERY width and never squeezes it. The click-away scrim
+                is always present (closes the dock at any size). */}
             {detailIssueKey != null && activeTabId != null && (
               <>
                 <button
                   type="button"
                   aria-label="Close ticket detail"
-                  className="absolute inset-0 z-10 bg-black/40 @[32rem]/jirabody:hidden"
+                  className="absolute inset-0 z-10 bg-black/40"
                   onClick={closeDetail}
                 />
-                <div className="absolute inset-y-0 right-0 z-20 w-full max-w-[22rem] border-l border-border bg-card shadow-lg @[32rem]/jirabody:relative @[32rem]/jirabody:w-[clamp(18rem,42%,28rem)] @[32rem]/jirabody:shrink-0 @[32rem]/jirabody:shadow-none">
+                <div className="absolute inset-y-0 right-0 z-20 w-full max-w-[28rem] border-l border-border bg-card shadow-lg">
                   <JiraDetailDock
                     tabId={activeTabId}
                     issueKey={detailIssueKey}

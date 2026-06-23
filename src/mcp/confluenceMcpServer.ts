@@ -218,6 +218,61 @@ async function main(): Promise<void> {
       )
   )
 
+  // WRITE tool: update an existing page. MUTATES Confluence and reaches ConfluenceManager's
+  // scope-gated `updatePage` (gated on `write:page:confluence`). The token never reaches this
+  // process — main attaches it, reads the current version, and submits version+1.
+  server.registerTool(
+    ConfluenceTool.UpdatePage,
+    {
+      title: 'Update a Confluence page',
+      description:
+        'MUTATES Confluence: replace an EXISTING page\'s title and/or body. Pass the ' +
+        '`pageId` and a non-empty `title`. Optionally pass a `body` (plain text — line ' +
+        'breaks are preserved) to replace the page content; OMIT `body` (or pass an empty ' +
+        'one) to keep the current body unchanged (a title-only edit never wipes content). ' +
+        'Optionally pass a short `versionMessage` change note. Returns the page id, title, ' +
+        'and the new version number, or a structured error (page not found / no permission; ' +
+        'version conflict — the page changed since it was read, re-read it and try again; ' +
+        'write not authorized — reconnect Confluence to grant write access; reconnect needed).',
+      inputSchema: {
+        pageId: z.string(),
+        title: z.string(),
+        body: z.string().optional(),
+        versionMessage: z.string().optional()
+      }
+    },
+    async ({ pageId, title, body, versionMessage }) =>
+      toToolResult(
+        await bridge.call(ConfluenceOp.UpdatePage, {
+          pageId,
+          title,
+          ...(body !== undefined ? { body } : {}),
+          ...(versionMessage !== undefined ? { versionMessage } : {})
+        })
+      )
+  )
+
+  // WRITE tool: add a footer comment to a page. MUTATES Confluence and reaches
+  // ConfluenceManager's scope-gated `createComment` (gated on the SEPARATE
+  // `write:comment:confluence` scope). The token never reaches this process — main attaches it.
+  server.registerTool(
+    ConfluenceTool.CreateComment,
+    {
+      title: 'Comment on a Confluence page',
+      description:
+        'MUTATES Confluence: add a footer comment to an EXISTING page. Pass the `pageId` ' +
+        'and a non-empty `body` (plain text — line breaks are preserved). Returns the new ' +
+        'comment id, or a structured error (page not found / no permission; comment not ' +
+        'authorized — reconnect Confluence to grant comment access; reconnect needed).',
+      inputSchema: {
+        pageId: z.string(),
+        body: z.string()
+      }
+    },
+    async ({ pageId, body }) =>
+      toToolResult(await bridge.call(ConfluenceOp.CreateComment, { pageId, body }))
+  )
+
   const transport = new StdioServerTransport()
   await server.connect(transport)
 }

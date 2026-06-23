@@ -99,4 +99,55 @@ describe('mapTerminalKey', () => {
   it('Option+Left with a normal keyCode (37) still maps to word-left (229 guard is exact, not over-broad)', () => {
     expect(mapTerminalKey(key({ key: 'ArrowLeft', altKey: true, keyCode: 37 }))).toBe('\x1b[1;3D')
   })
+
+  // --- composing guard (event-tracked, non-sticky IME composition check) ---
+  // Covers the macOS/Electron interrupt-keydown: Option+Left fires with isComposing=false
+  // and keyCode=37 (not 229) while compositionstart has fired but compositionend has not.
+  // Both legacy guards miss it; composing=true (tracked via DOM events in TerminalPanel)
+  // is the only non-sticky, always-correct signal.
+
+  it('Option+Left with composing=true → null (defer; fixes "트" corruption on macOS interrupt-keydown)', () => {
+    expect(mapTerminalKey(key({ key: 'ArrowLeft', altKey: true, isComposing: false, keyCode: 37, composing: true }))).toBeNull()
+  })
+
+  it('Option+Right with composing=true → null', () => {
+    expect(mapTerminalKey(key({ key: 'ArrowRight', altKey: true, isComposing: false, keyCode: 39, composing: true }))).toBeNull()
+  })
+
+  it('Cmd+Left with composing=true → null (line-start also deferred during active composition)', () => {
+    expect(mapTerminalKey(key({ key: 'ArrowLeft', metaKey: true, isComposing: false, keyCode: 37, composing: true }))).toBeNull()
+  })
+
+  it('Cmd+Right with composing=true → null', () => {
+    expect(mapTerminalKey(key({ key: 'ArrowRight', metaKey: true, isComposing: false, keyCode: 39, composing: true }))).toBeNull()
+  })
+
+  it('Option+Left with composing=false → word-left sequence (guard clears immediately on compositionend)', () => {
+    expect(mapTerminalKey(key({ key: 'ArrowLeft', altKey: true, isComposing: false, keyCode: 37, composing: false }))).toBe('\x1b[1;3D')
+  })
+
+  it('Option+Left with composing omitted → word-left sequence (absent = no active composition)', () => {
+    expect(mapTerminalKey(key({ key: 'ArrowLeft', altKey: true, isComposing: false, keyCode: 37 }))).toBe('\x1b[1;3D')
+  })
+
+  // --- regression: Shift+Enter must work after Korean composition ends ---
+  // The textareaValue-based guard was sticky: after compositionend the textarea still
+  // held "테스트" (xterm only clears it on blur/CR/ETX), so Shift+Enter was permanently
+  // blocked. The composing flag clears on compositionend so these chords work again.
+
+  it('Shift+Enter with composing=false → CSI-u newline (not blocked after composition ends)', () => {
+    expect(mapTerminalKey(key({ key: 'Enter', shiftKey: true, composing: false }))).toBe('\x1b[13;2u')
+  })
+
+  it('Option+Enter with composing=false → CSI-u alt-newline (not blocked after composition ends)', () => {
+    expect(mapTerminalKey(key({ key: 'Enter', altKey: true, composing: false }))).toBe('\x1b[13;3u')
+  })
+
+  it('Shift+Enter with composing=true → null (defer to xterm during active composition)', () => {
+    expect(mapTerminalKey(key({ key: 'Enter', shiftKey: true, composing: true }))).toBeNull()
+  })
+
+  it('Option+Enter with composing=true → null (defer to xterm during active composition)', () => {
+    expect(mapTerminalKey(key({ key: 'Enter', altKey: true, composing: true }))).toBeNull()
+  })
 })

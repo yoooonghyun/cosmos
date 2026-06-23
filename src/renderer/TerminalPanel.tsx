@@ -223,6 +223,17 @@ function TerminalView({
       window.cosmos.pty.sendInput({ paneId, data })
     })
 
+    // Track active DOM composition sessions on xterm's textarea so mapTerminalKey can
+    // defer motion/newline chords while Korean (or other CJK) composition is in progress.
+    // compositionstart → true; compositionend → false. This ref has no stickiness:
+    // it clears immediately when composition ends, unlike term.textarea.value which xterm
+    // only clears on blur or CR/ETX (causing Shift+Enter to stay blocked after composition).
+    const compositionActiveRef = { current: false }
+    const onCompositionStart = (): void => { compositionActiveRef.current = true }
+    const onCompositionEnd = (): void => { compositionActiveRef.current = false }
+    term.textarea?.addEventListener('compositionstart', onCompositionStart)
+    term.textarea?.addEventListener('compositionend', onCompositionEnd)
+
     // macOS readline chords (Cmd/Option+Arrow line/word motion, Shift/Option+Enter soft
     // newline) that xterm doesn't translate. mapTerminalKey returns the bytes to send (we
     // suppress xterm's default by returning false), or null to let xterm handle the key
@@ -239,7 +250,13 @@ function TerminalView({
         ctrlKey: e.ctrlKey,
         type: e.type,
         isComposing: e.isComposing,
-        keyCode: e.keyCode
+        keyCode: e.keyCode,
+        // composing: true iff a DOM compositionstart has fired without a matching
+        // compositionend. On macOS/Electron the interrupt-keydown (Option+Left) fires
+        // with isComposing=false and keyCode=37 — both legacy guards miss it — but
+        // compositionstart has already fired and compositionend has not yet, so this
+        // ref is reliably true throughout the active composition window.
+        composing: compositionActiveRef.current
       })
       if (seq === null) {
         return true
@@ -288,6 +305,8 @@ function TerminalView({
       offExit()
       inputDisposable.dispose()
       unregister()
+      term.textarea?.removeEventListener('compositionstart', onCompositionStart)
+      term.textarea?.removeEventListener('compositionend', onCompositionEnd)
       window.removeEventListener('resize', onWindowResize)
       resizeObserver.disconnect()
       if (resizeTimer) {

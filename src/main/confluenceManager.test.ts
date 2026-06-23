@@ -46,6 +46,8 @@ function makeClient(overrides?: Partial<ConfluenceClient>): ConfluenceClient {
     defaultFeed: vi.fn(ok),
     getPage: vi.fn(async () => ({ ok: true, data: { id: '1', title: 't', body: '' } })),
     createPage: vi.fn(async () => ({ ok: true, data: { id: '777', title: 'Notes' } })),
+    updatePage: vi.fn(async () => ({ ok: true, data: { id: '777', title: 'Notes', version: 4 } })),
+    createComment: vi.fn(async () => ({ ok: true, data: { id: 'c1', pageId: '777' } })),
     ...overrides
   } as unknown as ConfluenceClient
 }
@@ -53,6 +55,11 @@ function makeClient(overrides?: Partial<ConfluenceClient>): ConfluenceClient {
 const writeTokens: StoredTokenSet = {
   ...connectedTokens,
   scopes: ['read:page:confluence', 'write:page:confluence', 'offline_access']
+}
+
+const commentTokens: StoredTokenSet = {
+  ...connectedTokens,
+  scopes: ['read:page:confluence', 'write:comment:confluence', 'offline_access']
 }
 
 const refreshOk = async (): Promise<TokenExchangeResult> => ({
@@ -264,5 +271,115 @@ describe('ConfluenceManager.createPage (write scope short-circuit)', () => {
     if (!result.ok) {
       expect(result.kind).toBe('write_not_authorized')
     }
+  })
+})
+
+describe('ConfluenceManager.updatePage (write scope short-circuit, confluence-mcp-write-v1)', () => {
+  it('short-circuits to write_not_authorized when the token lacks the page-write scope (no client call)', async () => {
+    const { store } = makeFakeStore(connectedTokens)
+    const client = makeClient()
+    const { manager } = makeManager({ store, client })
+    const result = await manager.updatePage({ pageId: '12345', title: 'Revised' })
+    expect(result.ok).toBe(false)
+    if (!result.ok) {
+      expect(result.kind).toBe('write_not_authorized')
+    }
+    expect(client.updatePage).not.toHaveBeenCalled()
+  })
+
+  it('routes the update through the client when the page-write scope is present (happy path)', async () => {
+    const { store } = makeFakeStore(writeTokens)
+    const client = makeClient()
+    const { manager } = makeManager({ store, client })
+    const result = await manager.updatePage({ pageId: '777', title: 'Notes', body: 'new' })
+    expect(result.ok).toBe(true)
+    if (result.ok) {
+      expect(result.data).toEqual({ id: '777', title: 'Notes', version: 4 })
+    }
+    expect(client.updatePage).toHaveBeenCalledWith(
+      { token: 'at-1', cloudId: 'cloud-9' },
+      { pageId: '777', title: 'Notes', body: 'new' }
+    )
+  })
+
+  it('refreshes transparently on expiry then updates (FR-A09)', async () => {
+    const { store, current } = makeFakeStore(writeTokens, true)
+    const refresh = vi.fn(refreshOk)
+    const client = makeClient()
+    const { manager } = makeManager({ store, client, refresh })
+    const result = await manager.updatePage({ pageId: '777', title: 'Notes' })
+    expect(result.ok).toBe(true)
+    expect(current()?.accessToken).toBe('at-2')
+    expect(manager.getStatus().state).toBe('connected')
+  })
+
+  it('a refresh failure on expiry flips to reconnect_needed (FR-A10)', async () => {
+    const { store } = makeFakeStore(writeTokens, true)
+    const refresh = vi.fn(async (): Promise<TokenExchangeResult> => {
+      throw new Error('invalid_grant')
+    })
+    const { manager } = makeManager({ store, refresh })
+    const result = await manager.updatePage({ pageId: '777', title: 'Notes' })
+    expect(result.ok).toBe(false)
+    if (!result.ok) {
+      expect(result.kind).toBe('reconnect_needed')
+    }
+    expect(manager.getStatus().state).toBe('reconnect_needed')
+  })
+
+  it('propagates a client version_conflict result (no clobber)', async () => {
+    const { store } = makeFakeStore(writeTokens)
+    const client = makeClient({
+      updatePage: vi.fn<ConfluenceClient['updatePage']>(async () => ({
+        ok: false,
+        kind: 'version_conflict',
+        message: 'The page changed since it was read — re-read it and try the update again.'
+      }))
+    })
+    const { manager } = makeManager({ store, client })
+    const result = await manager.updatePage({ pageId: '777', title: 'Notes' })
+    expect(result.ok).toBe(false)
+    if (!result.ok) {
+      expect(result.kind).toBe('version_conflict')
+    }
+  })
+})
+
+describe('ConfluenceManager.createComment (separate comment scope, confluence-mcp-write-v1)', () => {
+  it('reports the comment capability from the stored scopes (separate from page write)', () => {
+    expect(
+      makeManager({ store: makeFakeStore(commentTokens).store }).manager.getCommentCapability()
+    ).toBe(true)
+    // A page-write token does NOT grant the comment scope.
+    expect(
+      makeManager({ store: makeFakeStore(writeTokens).store }).manager.getCommentCapability()
+    ).toBe(false)
+  })
+
+  it('short-circuits to write_not_authorized when the token lacks the comment scope (no client call)', async () => {
+    const { store } = makeFakeStore(writeTokens)
+    const client = makeClient()
+    const { manager } = makeManager({ store, client })
+    const result = await manager.createComment({ pageId: '777', body: 'looks good' })
+    expect(result.ok).toBe(false)
+    if (!result.ok) {
+      expect(result.kind).toBe('write_not_authorized')
+    }
+    expect(client.createComment).not.toHaveBeenCalled()
+  })
+
+  it('routes the comment through the client when the comment scope is present (happy path)', async () => {
+    const { store } = makeFakeStore(commentTokens)
+    const client = makeClient()
+    const { manager } = makeManager({ store, client })
+    const result = await manager.createComment({ pageId: '777', body: 'looks good' })
+    expect(result.ok).toBe(true)
+    if (result.ok) {
+      expect(result.data).toEqual({ id: 'c1', pageId: '777' })
+    }
+    expect(client.createComment).toHaveBeenCalledWith(
+      { token: 'at-1', cloudId: 'cloud-9' },
+      { pageId: '777', body: 'looks good' }
+    )
   })
 })

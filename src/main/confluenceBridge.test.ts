@@ -8,6 +8,8 @@ function makeManager(overrides?: Partial<ConfluenceBridgeManager>): ConfluenceBr
     searchContent: vi.fn(ok),
     getPage: vi.fn(ok),
     createPage: vi.fn(ok),
+    updatePage: vi.fn(ok),
+    createComment: vi.fn(ok),
     ...overrides
   }
 }
@@ -90,5 +92,59 @@ describe('ConfluenceBridge.handleCall (FR-X01, FR-X04, FR-X05, SC-009)', () => {
     const result = await makeBridge(manager).handleCall('deletePage', {})
     expect(result.ok).toBe(false)
     expect(manager.searchContent).not.toHaveBeenCalled()
+  })
+
+  it('routes a valid updatePage op to the manager, threading optional body/versionMessage', async () => {
+    const manager = makeManager()
+    await makeBridge(manager).handleCall(ConfluenceOp.UpdatePage, {
+      pageId: '12345',
+      title: 'Revised',
+      body: 'new content',
+      versionMessage: 'typo fix'
+    })
+    expect(manager.updatePage).toHaveBeenCalledWith({
+      pageId: '12345',
+      title: 'Revised',
+      body: 'new content',
+      versionMessage: 'typo fix'
+    })
+  })
+
+  it('routes a title-only updatePage (no body) to the manager', async () => {
+    const manager = makeManager()
+    await makeBridge(manager).handleCall(ConfluenceOp.UpdatePage, { pageId: '1', title: 'Renamed' })
+    expect(manager.updatePage).toHaveBeenCalledWith({ pageId: '1', title: 'Renamed' })
+  })
+
+  it('returns a structured error for an invalid update (missing pageId) without calling the manager', async () => {
+    const manager = makeManager()
+    const result = await makeBridge(manager).handleCall(ConfluenceOp.UpdatePage, { title: 'X' })
+    expect(result.ok).toBe(false)
+    if (!result.ok) {
+      expect(result.kind).toBe('network')
+    }
+    expect(manager.updatePage).not.toHaveBeenCalled()
+  })
+
+  it('routes a valid createComment op to the manager (body shaping)', async () => {
+    const manager = makeManager()
+    await makeBridge(manager).handleCall(ConfluenceOp.CreateComment, {
+      pageId: '12345',
+      body: 'looks good'
+    })
+    expect(manager.createComment).toHaveBeenCalledWith({ pageId: '12345', body: 'looks good' })
+  })
+
+  it('returns a structured error for an invalid comment (empty body) without calling the manager', async () => {
+    const manager = makeManager()
+    const result = await makeBridge(manager).handleCall(ConfluenceOp.CreateComment, {
+      pageId: '12345',
+      body: '   '
+    })
+    expect(result.ok).toBe(false)
+    if (!result.ok) {
+      expect(result.kind).toBe('network')
+    }
+    expect(manager.createComment).not.toHaveBeenCalled()
   })
 })

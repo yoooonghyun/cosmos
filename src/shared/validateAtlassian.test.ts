@@ -1,9 +1,11 @@
 import { describe, it, expect, vi } from 'vitest'
 import {
   validateConfluenceBridgeCall,
+  validateConfluenceComment,
   validateConfluenceCreate,
   validateConfluenceGetPage,
   validateConfluenceSearch,
+  validateConfluenceUpdate,
   validateJiraBridgeCall,
   validateJiraGetIssue,
   validateJiraSearch
@@ -200,6 +202,96 @@ describe('Confluence IPC validators (FR-C04, FR-X04, SC-009)', () => {
     it('warns + null on a non-object payload', () => {
       const warn = vi.fn()
       expect(validateConfluenceCreate(null, warn)).toBeNull()
+      expect(warn).toHaveBeenCalledOnce()
+    })
+  })
+
+  describe('validateConfluenceUpdate (confluence-mcp-write-v1, FR-006)', () => {
+    it('accepts the required pageId+title with an optional body+versionMessage (happy path)', () => {
+      const warn = vi.fn()
+      expect(
+        validateConfluenceUpdate(
+          { pageId: '123', title: 'Revised', body: 'new', versionMessage: 'fix' },
+          warn
+        )
+      ).toEqual({ pageId: '123', title: 'Revised', body: 'new', versionMessage: 'fix' })
+      expect(warn).not.toHaveBeenCalled()
+    })
+    it('accepts a title-only update (no body — missing optional must not error)', () => {
+      const warn = vi.fn()
+      expect(validateConfluenceUpdate({ pageId: '123', title: 'Renamed' }, warn)).toEqual({
+        pageId: '123',
+        title: 'Renamed'
+      })
+      expect(warn).not.toHaveBeenCalled()
+    })
+    it('accepts an empty-string body (preserve-semantics live in the manager, not the validator)', () => {
+      const warn = vi.fn()
+      expect(validateConfluenceUpdate({ pageId: '1', title: 'T', body: '' }, warn)).toEqual({
+        pageId: '1',
+        title: 'T',
+        body: ''
+      })
+      expect(warn).not.toHaveBeenCalled()
+    })
+    it('warns + null when required pageId is missing', () => {
+      const warn = vi.fn()
+      expect(validateConfluenceUpdate({ title: 'T' }, warn)).toBeNull()
+      expect(warn).toHaveBeenCalledOnce()
+    })
+    it('warns + null on a whitespace-only title', () => {
+      const warn = vi.fn()
+      expect(validateConfluenceUpdate({ pageId: '1', title: '   ' }, warn)).toBeNull()
+      expect(warn).toHaveBeenCalledOnce()
+    })
+    it('warns + null on a non-string body (invalid optional)', () => {
+      const warn = vi.fn()
+      expect(validateConfluenceUpdate({ pageId: '1', title: 'T', body: 42 }, warn)).toBeNull()
+      expect(warn).toHaveBeenCalledOnce()
+    })
+    it('warns + null on a non-string versionMessage (invalid optional)', () => {
+      const warn = vi.fn()
+      expect(
+        validateConfluenceUpdate({ pageId: '1', title: 'T', versionMessage: 5 }, warn)
+      ).toBeNull()
+      expect(warn).toHaveBeenCalledOnce()
+    })
+    it('ignores unknown/extra fields', () => {
+      const warn = vi.fn()
+      expect(
+        validateConfluenceUpdate({ pageId: '1', title: 'T', spaceKey: 'ENG', evil: true }, warn)
+      ).toEqual({ pageId: '1', title: 'T' })
+      expect(warn).not.toHaveBeenCalled()
+    })
+    it('warns + null on a non-object payload (never throws)', () => {
+      const warn = vi.fn()
+      expect(validateConfluenceUpdate(null, warn)).toBeNull()
+      expect(warn).toHaveBeenCalledOnce()
+    })
+  })
+
+  describe('validateConfluenceComment (confluence-mcp-write-v1, comment FR)', () => {
+    it('accepts the required pageId+body (happy path)', () => {
+      const warn = vi.fn()
+      expect(validateConfluenceComment({ pageId: '123', body: 'looks good' }, warn)).toEqual({
+        pageId: '123',
+        body: 'looks good'
+      })
+      expect(warn).not.toHaveBeenCalled()
+    })
+    it('warns + null when required pageId is missing', () => {
+      const warn = vi.fn()
+      expect(validateConfluenceComment({ body: 'x' }, warn)).toBeNull()
+      expect(warn).toHaveBeenCalledOnce()
+    })
+    it('warns + null on a whitespace-only body', () => {
+      const warn = vi.fn()
+      expect(validateConfluenceComment({ pageId: '1', body: '   ' }, warn)).toBeNull()
+      expect(warn).toHaveBeenCalledOnce()
+    })
+    it('warns + null on a non-object payload (never throws)', () => {
+      const warn = vi.fn()
+      expect(validateConfluenceComment(undefined, warn)).toBeNull()
       expect(warn).toHaveBeenCalledOnce()
     })
   })

@@ -15,6 +15,8 @@
  */
 
 import type {
+  ConfluenceCommentParams,
+  ConfluenceCommentResult,
   ConfluenceConnectionStatus,
   ConfluenceCreateParams,
   ConfluenceCreateResult,
@@ -24,9 +26,13 @@ import type {
   ConfluencePageDetail,
   ConfluenceResult,
   ConfluenceSearchParams,
-  ConfluenceSearchResult
+  ConfluenceSearchResult,
+  ConfluenceUpdateParams,
+  ConfluenceUpdateResult
 } from '../shared/confluence'
 import {
+  CONFLUENCE_COMMENT_NOT_AUTHORIZED_MESSAGE,
+  CONFLUENCE_COMMENT_SCOPE,
   CONFLUENCE_WRITE_NOT_AUTHORIZED_MESSAGE,
   CONFLUENCE_WRITE_SCOPE
 } from '../shared/confluence'
@@ -273,9 +279,9 @@ export class ConfluenceManager {
   }
 
   /**
-   * Whether the stored token grants `write:confluence-content`. Read from the
-   * persisted `StoredTokenSet.scopes`. False when not connected or when the scope is
-   * absent (a read-only-era token), so a create short-circuits to
+   * Whether the stored token grants `write:page:confluence` (page create/update). Read
+   * from the persisted `StoredTokenSet.scopes`. False when not connected or when the
+   * scope is absent (a read-only-era token), so a create/update short-circuits to
    * `write_not_authorized` WITHOUT calling the client.
    */
   getWriteCapability(): boolean {
@@ -284,10 +290,22 @@ export class ConfluenceManager {
   }
 
   /**
-   * Create a page (the single Confluence write). Short-circuits to
-   * `write_not_authorized` when the stored token lacks the write scope (no client
-   * call); otherwise routes through `run()` so the same proactive/reactive refresh +
-   * `reconnect_needed` handling as reads applies.
+   * Whether the stored token grants `write:comment:confluence` (footer comments). Read
+   * from the persisted `StoredTokenSet.scopes`. False when not connected or when the
+   * scope is absent (a token granted before the comment scope was added), so a comment
+   * short-circuits to `write_not_authorized` WITHOUT calling the client — the user must
+   * reconnect to grant the new comment consent.
+   */
+  getCommentCapability(): boolean {
+    const tokens = this.deps.tokenStore.load()
+    return Array.isArray(tokens?.scopes) && tokens.scopes.includes(CONFLUENCE_COMMENT_SCOPE)
+  }
+
+  /**
+   * Create a page (a Confluence write). Short-circuits to `write_not_authorized` when
+   * the stored token lacks the page-write scope (no client call); otherwise routes
+   * through `run()` so the same proactive/reactive refresh + `reconnect_needed` handling
+   * as reads applies.
    */
   createPage(params: ConfluenceCreateParams): Promise<ConfluenceResult<ConfluenceCreateResult>> {
     if (!this.getWriteCapability()) {
@@ -296,12 +314,50 @@ export class ConfluenceManager {
     return this.run((auth) => this.deps.client.createPage(auth, params))
   }
 
-  /** The structured scope-gap result returned for a create without the write scope. */
+  /**
+   * Update an existing page (confluence-mcp-write-v1). Mirrors `createPage`:
+   * short-circuits to `write_not_authorized` when the token lacks the page-write scope
+   * (no client call); otherwise routes through `run()`. The client reads the current
+   * version + body and submits version+1; a stale-version race surfaces as
+   * `version_conflict` (FR-009b) — no clobber, no crash.
+   */
+  updatePage(params: ConfluenceUpdateParams): Promise<ConfluenceResult<ConfluenceUpdateResult>> {
+    if (!this.getWriteCapability()) {
+      return Promise.resolve(this.writeNotAuthorized())
+    }
+    return this.run((auth) => this.deps.client.updatePage(auth, params))
+  }
+
+  /**
+   * Add a footer comment to a page (confluence-mcp-write-v1). Gated on the SEPARATE
+   * `write:comment:confluence` scope: short-circuits to `write_not_authorized` (with the
+   * comment-specific reconnect message) when absent (no client call); otherwise routes
+   * through `run()`.
+   */
+  createComment(
+    params: ConfluenceCommentParams
+  ): Promise<ConfluenceResult<ConfluenceCommentResult>> {
+    if (!this.getCommentCapability()) {
+      return Promise.resolve(this.commentNotAuthorized())
+    }
+    return this.run((auth) => this.deps.client.createComment(auth, params))
+  }
+
+  /** The structured scope-gap result returned for a page write without the page-write scope. */
   private writeNotAuthorized(): ConfluenceResult<never> {
     return {
       ok: false,
       kind: 'write_not_authorized',
       message: CONFLUENCE_WRITE_NOT_AUTHORIZED_MESSAGE
+    }
+  }
+
+  /** The structured scope-gap result returned for a comment without the comment-write scope. */
+  private commentNotAuthorized(): ConfluenceResult<never> {
+    return {
+      ok: false,
+      kind: 'write_not_authorized',
+      message: CONFLUENCE_COMMENT_NOT_AUTHORIZED_MESSAGE
     }
   }
 }

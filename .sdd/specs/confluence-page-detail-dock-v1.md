@@ -11,6 +11,15 @@ carry over; only the layout (full-panel overlay → two-pane dock) changes.
 **Related design (to author next)**: `.sdd/designs/confluence-page-detail-dock-v1.md` (designer owns dock chrome,
 divider, selected-row marker, close affordance, the ~50% width treatment).
 
+**Scope amendment (post-build, user-directed)**: the NATIVE search/default-feed list now ALSO opens the dock. The
+original spec (FR-012 / OQ-2) deliberately left the native base's own search → page-detail drill-in as a separate
+full-region `view.kind === 'page'` flow. Per a direct user request ("페이지 전환대신 dock" — clicking ANY Confluence
+document, native or generated, should open the right-side dock rather than swap the whole region), the native
+`ContentList` row click now calls the SAME `setGenUiPage({pageId,title})` overlay the generated-UI path uses. The
+full-region native page view (`view.kind === 'page'` header back-row + `<PageDetail>` body) is REMOVED — nothing sets
+`view.kind === 'page'` anymore (the `ConfluenceView` `'page'` variant is retained only for type-shape parity with the
+shared `confluenceViewContext` mapper). FR-012 and OQ-2 below are revised accordingly.
+
 ---
 
 ## Grounding
@@ -157,7 +166,7 @@ ticket-detail dock** (`jira-ticket-detail-dock-v1`): the same two-pane shell, re
 
 | ID     | Requirement |
 |--------|-------------|
-| FR-001 | Clicking a document row that carries a non-empty page id MUST open that page's detail in a **right-side dock** within the active tab, and the document **list MUST remain mounted and visible on the left** (it MUST NOT be replaced or hidden by the detail). (Traces: "Open a document in a right-side dock"; mirrors the Slack thread dock + Jira ticket-detail dock two-pane.) |
+| FR-001 | Clicking a document row that carries a non-empty page id MUST open that page's detail in a **right-side dock** within the active tab, and the document **list MUST remain mounted and visible on the left** (it MUST NOT be replaced or hidden by the detail). This applies to BOTH a generated-UI `SearchResultList` row AND a NATIVE search/default-feed `ContentList` row (scope amendment) — both call the same `setGenUiPage` dock overlay. (Traces: "Open a document in a right-side dock"; mirrors the Slack thread dock + Jira ticket-detail dock two-pane.) |
 | FR-002 | The dock MUST occupy **approximately half the panel width** when open, with the list pane sharing the remaining space; neither pane may collapse to an unusable width (a sensible minimum applies to each). The exact split/min is fixed in the design (see OQ-1). (Traces: "about half the panel width".) |
 | FR-003 | The dock body MUST render the page detail by **reusing the existing native `PageDetail` component verbatim** (title, space, sanitized body with content images / emoji / checkboxes, and its own loading / empty-body / error / reconnect states). No new detail-rendering component, no main-side surface builder, no change to how the body is rendered. (Traces: "the SAME detail content"; the design pivot of `confluence-page-detail-nav-v1` — native reuse.) |
 | FR-004 | The open-detail action MUST remain a **renderer-local nav action** (`CONFLUENCE_OPEN_DETAIL_ACTION`, non-`confluence.*`) intercepted by the panel's `ActiveTabSurface` `onAction` seam, returning handled, and NEVER forwarded to main or the agent. A row with no/empty page id MUST stay INERT (no cursor, no hover, no keyboard activation, no emit). Any OTHER action MUST still flow through unchanged. (Traces: "Stay read-only & renderer-local"; unchanged from `confluence-page-detail-nav-v1` FR-001/002/003.) |
@@ -168,7 +177,7 @@ ticket-detail dock** (`jira-ticket-detail-dock-v1`): the same two-pane shell, re
 | FR-009 | The dock layout MUST be **responsive to the panel's own width** (a container query, not the viewport): at/above a breakpoint the dock sits **side-by-side** with the narrowed list; below it the dock becomes a **right-drawer overlay** (with a click-away scrim) so it never squeezes the list into illegibility. (Traces: "neither pane may collapse"; mirrors the Slack/Jira/calendar `@container/*body` 32rem breakpoint — the design tunes the exact breakpoint for the ~50% width, OQ-1.) |
 | FR-010 | The dock + its open/selected state MUST be **scoped to the active tab and reset on a tab switch / new tab**, so an open dock never bleeds across tabs. (Traces: per-tab consistency; unchanged from `confluence-page-detail-nav-v1` FR-014 — the existing `useEffect(…, [activeTabId])` reset of `genUiPage`.) |
 | FR-011 | The open-detail operation MUST be **read-only**: no new OAuth scope, no write path, no token/secret on any IPC payload, type, bridge frame, MCP result, or A2UI surface. The detail read is the existing renderer `getPage` invoke (main attaches the token). (Traces: "Stay read-only"; unchanged invariant.) |
-| FR-012 | All existing Confluence panel surfaces MUST remain present and behave unchanged: the NL `PromptComposer` (and its bottom dock), the **native search/default-feed browser base including its OWN existing search-result → page-detail drill-in (`view.kind === 'page'` with `ChevronLeft`)**, per-tab tabs, refresh, and pagination. This feature changes ONLY the generated-UI-list click presentation. (Traces: non-regression; mirrors `confluence-page-detail-nav-v1` FR-015. The native base's own page-detail drill-in is OUT of scope — see OQ-2.) |
+| FR-012 | All existing Confluence panel surfaces MUST remain present and behave unchanged: the NL `PromptComposer` (and its bottom dock), the **native search/default-feed browser base**, per-tab tabs, refresh, and pagination. **REVISED (scope amendment):** the native base's OWN search-result/feed row click now opens the SAME right-side dock (it no longer swaps the whole region to a `view.kind === 'page'` view); that full-region native page flow (header `ChevronLeft` back row + `<PageDetail>` body) is REMOVED. Both native and generated-UI rows therefore share one dock presentation (FR-001/FR-005/FR-006/FR-007 apply to both). (Traces: non-regression for everything except the deliberately-changed native drill-in; see OQ-2.) |
 
 ## Edge Cases & Constraints
 
@@ -213,13 +222,12 @@ ticket-detail dock** (`jira-ticket-detail-dock-v1`): the same two-pane shell, re
   breakpoint values in the dock design. Not blocking — any value that reads as "about half" with a sane list minimum
   satisfies FR-002.
 
-- [ ] **OQ-2 — Replace the full-panel overlay entirely vs. keep it as a fallback.** **Recommendation: replace it
-  entirely** — the `genUiPage` full-panel branch (`ConfluencePanel.tsx:597-627`) becomes the dock; there is no value in
-  keeping the old whole-region presentation as a fallback (it is the exact thing the user is asking to change), and
-  keeping both would mean two open-detail UIs. The NATIVE-base browser's OWN page-detail drill-in
-  (`view.kind === 'page'`, the full-region flow with `ChevronLeft`) is a SEPARATE, pre-existing flow and is left
-  UNCHANGED (FR-012) — only the generated-UI-list click migrates to the dock. Confirm only if the user wants the native
-  base's drill-in also converted to a dock (out of scope for v1).
+- [x] **OQ-2 — Replace the full-panel overlay entirely vs. keep it as a fallback. RESOLVED.** The `genUiPage`
+  full-panel overlay became the dock. **Additionally (user-directed scope amendment):** the NATIVE-base browser's OWN
+  page-detail drill-in (the former full-region `view.kind === 'page'` flow with `ChevronLeft`) was ALSO migrated to the
+  dock — the user explicitly asked that clicking ANY document (native or generated) open the right-side dock instead of
+  swapping the region. The native `ContentList.onOpen` now calls `setGenUiPage`; the full-region native page header +
+  body branches were removed. There is now exactly ONE open-detail UI (the dock) for both row sources.
 
 - [ ] **OQ-3 — Resizable dock?** **Recommendation: NO for v1 — fixed ~50%.** A user-draggable divider is extra
   surface area the user did not ask for; the responsive container-query split already keeps both panes sane. Defer a

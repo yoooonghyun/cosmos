@@ -35,6 +35,10 @@ export interface TerminalKeyEvent {
    * xterm's CompositionHelper.keydown() must run to commit/finalize the pending
    * syllable; intercepting mid-composition leaves the textarea stale and causes
    * every subsequent keystroke to re-emit the last composed syllable.
+   *
+   * NOTE: on macOS/Electron the browser clears `isComposing` on the very keydown
+   * that interrupts an active composition (e.g. Option+Left), so this flag alone is
+   * not sufficient — see `textareaValue` below for the authoritative guard.
    */
   isComposing?: boolean
   /**
@@ -46,8 +50,36 @@ export interface TerminalKeyEvent {
    * CompositionHelper.keydown() runs, the textarea stays stale, and every later keystroke
    * re-emits the last composed syllable (the Korean "마지막 문자로 치환" corruption). So we
    * treat keyCode 229 as an additional "composition active" signal and defer to xterm.
+   *
+   * NOTE: for navigation keys that INTERRUPT composition (Option+Left/Right, Cmd+Left/Right),
+   * the browser emits the key's own keyCode (e.g. 37 for ArrowLeft), NOT 229 — so this
+   * guard also misses the interrupt case. Use `textareaValue` as the definitive check.
    */
   keyCode?: number
+  /**
+   * Whether a DOM composition session is currently active, tracked via explicit
+   * `compositionstart` / `compositionend` listeners on `term.textarea` in TerminalPanel.
+   *
+   * This is the AUTHORITATIVE "is composition active right now?" signal. It is set to
+   * `true` when `compositionstart` fires and back to `false` when `compositionend` fires
+   * — with no stickiness. Contrast with `term.textarea.value`, which xterm only clears on
+   * blur or CR/ETX: after a Korean composition ends the textarea still holds the committed
+   * text ("테스트"), so a textareaValue check would permanently block Shift+Enter and other
+   * chords until the next blur — a regression observed after the previous fix.
+   *
+   * Why this correctly fixes the Option+Left corruption (verified against xterm source):
+   *   During the interrupt-keydown (Option+Left pressed mid-composition), `compositionstart`
+   *   has fired but `compositionend` has NOT yet fired (compositionend fires AFTER the
+   *   keydown that interrupts it). So `composing` is true → we return null → xterm's
+   *   `_keyDown` is not short-circuited → `_compositionHelper.keydown()` runs at line 1032
+   *   → `_finalizeComposition(false)` commits the pending syllables correctly.
+   *   Once `compositionend` fires the ref immediately flips false → all chords (Shift+Enter,
+   *   Option+Arrow, Cmd+Arrow) work normally again.
+   *
+   * Pass `compositionActiveRef.current` from TerminalPanel. Omitting / undefined is
+   * treated the same as false (no active composition, proceed normally).
+   */
+  composing?: boolean
 }
 
 export const TERMINAL_KEY_SEQUENCES = {
@@ -92,16 +124,27 @@ export const TERMINAL_KEY_SEQUENCES = {
  * existing terminal input behavior is preserved.
  */
 export function mapTerminalKey(e: TerminalKeyEvent): string | null {
-  // IME guard: if a composition is active (isComposing, OR keyCode 229 which also covers
-  // the commit-keydown where isComposing has already flipped false), never intercept —
-  // defer to xterm so
-  // CoreBrowserTerminal._keyDown reaches _compositionHelper.keydown() which
-  // commits/finalizes the pending syllable. Without this, returning false from
-  // the custom handler causes _keyDown to early-return at line 1025–1027 before
-  // the CompositionHelper runs, leaving _isComposing=true and the textarea stale;
-  // every subsequent keystroke then diffs against the stale value and re-emits
-  // the last composed syllable (the Korean IME "트" corruption).
-  if (e.isComposing || e.keyCode === 229) {
+  // IME guard: defer to xterm whenever a DOM composition session is active.
+  //
+  // Primary signal:
+  //   composing — set true on compositionstart, false on compositionend (tracked in
+  //   TerminalPanel via a ref on term.textarea). This is the only signal that is both
+  //   non-sticky (clears as soon as compositionend fires, unlike textarea.value which
+  //   xterm only clears on blur/CR/ETX) AND present during the interrupt-keydown (unlike
+  //   DOM isComposing, which macOS/Electron clears before the Option+Left keydown fires).
+  //   See TerminalKeyEvent.composing JSDoc for the full xterm source trace.
+  //
+  // Belt-and-suspenders:
+  //   isComposing — catches mid-composition character keydowns on non-macOS paths where
+  //   the browser still reports true.
+  //   keyCode === 229 — catches character IME commit-keydowns where isComposing already
+  //   flipped false but 229 is still emitted (non-navigation IME entry).
+  //
+  // Without deferring, returning false causes CoreBrowserTerminal._keyDown to early-return
+  // at lines 1025-1027, skipping _compositionHelper.keydown() at line 1032. That prevents
+  // _finalizeComposition(false) from running, leaving the textarea stale and causing
+  // compositionend to re-emit only the last syllable ("트" corruption).
+  if (e.composing || e.isComposing || e.keyCode === 229) {
     return null
   }
 

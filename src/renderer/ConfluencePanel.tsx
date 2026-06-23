@@ -22,7 +22,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { A2UIProvider, type A2UIAction } from '@a2ui-sdk/react/0.9'
-import { BookText, ChevronLeft, Loader2, Search, X } from 'lucide-react'
+import { BookText, Loader2, Search, X } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Badge } from '@/components/ui/badge'
@@ -111,16 +111,24 @@ function PageDetailSkeleton(): React.JSX.Element {
 }
 
 /* ------------------------------------------------------------------------- *
- * Navigation state (search list <-> page detail)
+ * Navigation state (search list)
  * ------------------------------------------------------------------------- */
 
+/**
+ * The native base always shows the search list now: clicking a document row opens it in
+ * the right-side DOCK (confluence-page-detail-dock-v1) instead of swapping the whole region
+ * to a page view, so `view` only ever holds `{kind:'search'}` at runtime. The `{kind:'page'}`
+ * variant is retained ONLY for type-shape parity with `confluenceViewContext`
+ * (`viewContextCapture.ts` mirrors this union); the open page is carried by the `genUiPage`
+ * dock overlay, which that mapper reads with precedence.
+ */
 type ConfluenceView = { kind: 'search' } | { kind: 'page'; pageId: string; title: string }
 
 /**
  * The native-base browser nav held PER-TAB (bug panel-shared-tab-nav-state-v1): the
- * `view` (search list vs page detail), the in-progress `searchText`, and the submitted
- * `query` (empty => the default feed). Each tab keeps its own so a page detail / search
- * query in one tab does not bleed into another tab's base.
+ * `view` (search list), the in-progress `searchText`, and the submitted `query` (empty =>
+ * the default feed). Each tab keeps its own so a search query in one tab does not bleed into
+ * another tab's base.
  */
 interface ConfluenceNav {
   view: ConfluenceView
@@ -383,13 +391,13 @@ export function ConfluencePanel({ active }: { active: boolean }): React.JSX.Elem
     ...(restoredConfluencePanel ? { initial: restoredConfluencePanel } : {})
   })
 
-  // confluence-page-detail-nav-v1: clicking a row in a GENERATED-UI `SearchResultList`
-  // opens that page's full detail by REUSING the panel's existing native page-detail browser
-  // — NOT by composing/pushing a separate A2UI surface. The clicked row drives a renderer-
-  // local overlay `{ pageId, title }` that renders the SAME native `PageDetail` component
-  // (which reads via `window.cosmos.confluence.getPage`) + the SAME native back row over the
-  // generative host. "Back" clears the overlay → the generated list (or native base) returns
-  // verbatim, with no re-fetch and no surface round-trip. Held PER active tab and reset on a
+  // confluence-page-detail-dock-v1: the open page-detail DOCK target `{ pageId, title }`.
+  // BOTH a GENERATED-UI `SearchResultList` row (via `handleSurfaceAction`) AND a NATIVE
+  // search/feed `ContentList` row (via its `onOpen`) set this — clicking either opens the page
+  // in the right-side dock BESIDE the still-mounted list, reusing the SAME native `PageDetail`
+  // component (which reads via `window.cosmos.confluence.getPage`). There is no longer a native
+  // full-region page view: closing the dock (X / scrim → `closeGenUiPage`) returns the list to
+  // full width with no re-fetch and no surface round-trip. Held PER active tab and reset on a
   // tab switch so an open detail never bleeds across tabs.
   const [genUiPage, setGenUiPage] = useState<{ pageId: string; title: string } | null>(null)
   useEffect(() => {
@@ -398,8 +406,8 @@ export function ConfluencePanel({ active }: { active: boolean }): React.JSX.Elem
   // confluence-link-404-v1 #100: the open page detail's canonical web URL, lifted out of
   // `PageDetail` so the "Open in Confluence" external-link affordance renders on the DETAIL'S
   // TOP TITLE (the back-row header) rather than the body title. Only one detail header is on
-  // screen at a time (native `view.kind === 'page'` OR the `genUiPage` overlay), so one piece
-  // of state suffices; `PageDetail` clears it (undefined) on unmount/loading/error.
+  // screen at a time (the `genUiPage` dock), so one piece of state suffices; `PageDetail`
+  // clears it (undefined) on unmount/loading/error.
   const [detailWebUrl, setDetailWebUrl] = useState<string | undefined>(undefined)
   // The native-base browser nav is held PER-TAB, keyed by the active tab id
   // (bug panel-shared-tab-nav-state-v1), so each tab keeps its own view + search + query.
@@ -410,9 +418,12 @@ export function ConfluencePanel({ active }: { active: boolean }): React.JSX.Elem
     clearAll: clearAllNav
   } = usePerTabNav<ConfluenceNav>(activeTabId, CONFLUENCE_NAV_DEFAULT)
   // Keep the live view + overlay in sync for the send-time view-context capture (above).
+  // The native base no longer has a full-region page view; `view` stays a `{kind:'search'}`
+  // here. It is still tracked so the send-time view-context capture (confluenceViewContext)
+  // keeps its shared shape with the other panels — the open page is now carried by the
+  // `genUiPage` dock overlay, which that mapper reads with precedence.
   viewRef.current = view
   genUiPageRef.current = genUiPage
-  const setView = useCallback((view: ConfluenceView) => setNav((prev) => ({ ...prev, view })), [setNav])
   const setSearchText = useCallback(
     (searchText: string) => setNav((prev) => ({ ...prev, searchText })),
     [setNav]
@@ -623,55 +634,39 @@ export function ConfluencePanel({ active }: { active: boolean }): React.JSX.Elem
         ) : (
           // confluence-page-detail-dock-v1: the connected content region is a
           // `@container/confluencebody` TWO-PANE — the document list (native base / spinner /
-          // generative A2UI host) stays mounted on the LEFT (`min-w-0 flex-1`); when a
-          // generated-UI row is clicked, the native `PageDetail` opens in a RIGHT-side DOCK
-          // BESIDE the list (~half the panel width) instead of a whole-region view swap. The
+          // generative A2UI host) stays mounted on the LEFT (`min-w-0 flex-1`); when a row is
+          // clicked (a native search/feed row OR a generated-UI row), the native `PageDetail`
+          // opens in a RIGHT-side DOCK BESIDE the list (~half the panel width) instead of a
+          // whole-region view swap. The
           // list narrows to share the space; below the breakpoint the dock is a right-drawer
           // overlay over the list with a click-away scrim. Mirrors the Slack thread dock + Jira
           // ticket-detail dock. The dock + selected-row state is the existing per-tab `genUiPage`.
           <div className="@container/confluencebody relative flex min-h-0 flex-1">
             <div className="flex min-w-0 flex-1 flex-col">
-            {/* Native search/page browser — the base shown at zero tabs AND on an
-                uncomposed (new `+`) active tab (FR-017). */}
+            {/* Native search browser — the base shown at zero tabs AND on an uncomposed
+                (new `+`) active tab (FR-017). A row click opens the right-side dock; there is
+                no native full-region page view. */}
             {showNativeBase && (
               <>
-                {view.kind === 'search' && (
-                  <div className="border-b border-border p-2">
-                    <form onSubmit={submitSearch} className="relative">
-                      <Search className="pointer-events-none absolute left-2.5 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground" />
-                      <Input
-                        value={searchText}
-                        onChange={(e) => setSearchText(e.target.value)}
-                        placeholder="(mention = currentUser() or watcher = currentUser() or favourite = currentUser()) and type = page order by lastmodified desc"
-                        className="h-8 pl-8 text-sm"
-                        aria-label="Search Confluence content"
-                      />
-                    </form>
-                  </div>
-                )}
-
-                {view.kind === 'page' && (
-                  <div className="flex items-center gap-1.5 border-b border-border px-2 py-1.5">
-                    <Button
-                      type="button"
-                      variant="ghost"
-                      size="icon-sm"
-                      aria-label="Back"
-                      onClick={() => setView({ kind: 'search' })}
-                    >
-                      <ChevronLeft className="size-4" />
-                    </Button>
-                    <span className="min-w-0 truncate text-sm font-medium text-foreground">
-                      {/* #100: the "Open in Confluence" link lives on this TOP header title
-                          (not the body title). `detailWebUrl` is lifted up from `PageDetail`. */}
-                      <PageDetailTitle title={view.title} webUrl={detailWebUrl} />
-                    </span>
-                  </div>
-                )}
+                {/* The search input is always present on the native base now: clicking a
+                    document row opens it in the right-side DOCK (confluence-page-detail-dock-v1)
+                    rather than swapping the whole region to a page view, so the list (and its
+                    search box) stay mounted. There is no longer a native full-region page view. */}
+                <div className="border-b border-border p-2">
+                  <form onSubmit={submitSearch} className="relative">
+                    <Search className="pointer-events-none absolute left-2.5 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground" />
+                    <Input
+                      value={searchText}
+                      onChange={(e) => setSearchText(e.target.value)}
+                      placeholder="(mention = currentUser() or watcher = currentUser() or favourite = currentUser()) and type = page order by lastmodified desc"
+                      className="h-8 pl-8 text-sm"
+                      aria-label="Search Confluence content"
+                    />
+                  </form>
+                </div>
 
                 <div className="min-h-0 flex-1">
-                  {view.kind === 'search' &&
-                    (query === '' ? (
+                  {query === '' ? (
                       <ContentList
                         key="default-feed"
                         reloadKey="default-feed"
@@ -680,7 +675,7 @@ export function ConfluencePanel({ active }: { active: boolean }): React.JSX.Elem
                         }
                         emptyLabel="No mentions, watched, or favorited pages yet."
                         onOpen={(result) =>
-                          setView({ kind: 'page', pageId: result.id, title: result.title })
+                          setGenUiPage({ pageId: result.id, title: result.title })
                         }
                         onReconnect={() => void refreshStatus()}
                       />
@@ -696,19 +691,11 @@ export function ConfluencePanel({ active }: { active: boolean }): React.JSX.Elem
                         }
                         emptyLabel="No content matches this query."
                         onOpen={(result) =>
-                          setView({ kind: 'page', pageId: result.id, title: result.title })
+                          setGenUiPage({ pageId: result.id, title: result.title })
                         }
                         onReconnect={() => void refreshStatus()}
                       />
-                    ))}
-                  {view.kind === 'page' && (
-                    <PageDetail
-                      key={view.pageId}
-                      pageId={view.pageId}
-                      onReconnect={() => void refreshStatus()}
-                      onWebUrl={setDetailWebUrl}
-                    />
-                  )}
+                    )}
                 </div>
               </>
             )}
@@ -755,21 +742,21 @@ export function ConfluencePanel({ active }: { active: boolean }): React.JSX.Elem
 
             {/* confluence-page-detail-dock-v1: the right-side page-detail DOCK (FR-001/FR-003).
                 A row in a GENERATED-UI list was clicked → the SAME native `PageDetail` (reads
-                via `window.cosmos.confluence.getPage`) opens HERE, BESIDE the still-mounted list,
-                instead of a whole-region view swap. Width is ~HALF the panel
-                (`clamp(20rem,50%,40rem)`, spec OQ-1 — wider than the 42% Slack/Jira docks per the
-                user's "화면 반정도"). Below `@[40rem]/confluencebody` it is an absolute right-drawer
-                overlaying the list (does not squeeze it, scrim closes); at/above it docks
-                side-by-side and the list narrows. Close (X / scrim) → `closeGenUiPage`. */}
+                via `window.cosmos.confluence.getPage`) opens HERE, floating OVER the still-mounted
+                list, instead of a whole-region view swap. An ALWAYS-overlay absolute right-drawer
+                (matching the Calendar dock): it floats over the still-full-width list at EVERY
+                width and never squeezes it. Width is ~HALF the panel (`w-1/2`, spec OQ-1 / the
+                user's "화면 반정도"). The click-away scrim is always present (closes at any size).
+                Close (X / scrim) → `closeGenUiPage`. */}
             {genUiPage && (
               <>
-                {/* Narrow-mode scrim: closes the dock on click; hidden side-by-side. */}
+                {/* Click-away scrim: closes the dock on click. Always present. */}
                 <div
-                  className="absolute inset-0 z-10 bg-black/40 transition-opacity duration-200 @[40rem]/confluencebody:hidden"
+                  className="absolute inset-0 z-10 bg-black/40 transition-opacity duration-200"
                   aria-hidden="true"
                   onClick={closeGenUiPage}
                 />
-                <div className="absolute inset-y-0 right-0 z-20 flex w-full max-w-[30rem] translate-x-0 flex-col border-l border-border bg-card shadow-lg transition-transform duration-200 ease-out motion-reduce:transition-none @[40rem]/confluencebody:relative @[40rem]/confluencebody:w-[clamp(20rem,50%,40rem)] @[40rem]/confluencebody:max-w-none @[40rem]/confluencebody:shrink-0 @[40rem]/confluencebody:shadow-none">
+                <div className="absolute inset-y-0 right-0 z-20 flex w-1/2 translate-x-0 flex-col border-l border-border bg-card shadow-lg transition-transform duration-200 ease-out motion-reduce:transition-none">
                   {/* Dock frame header — the EXISTING back-row header (PageDetailTitle + the
                       "Open in Confluence" `detailWebUrl` lift, #100), with the leading Back arrow
                       swapped for a trailing ghost `icon-sm` X close (the Slack/Jira/calendar dock

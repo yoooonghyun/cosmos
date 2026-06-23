@@ -5,12 +5,14 @@
  */
 
 import type {
+  ConfluenceCommentParams,
   ConfluenceCreateParams,
   ConfluenceDefaultFeedParams,
   ConfluenceGetPageParams,
   ConfluenceOpName,
   ConfluencePageDetail,
-  ConfluenceSearchParams
+  ConfluenceSearchParams,
+  ConfluenceUpdateParams
 } from '../confluence'
 import { ConfluenceOp } from '../confluence'
 import {
@@ -172,6 +174,71 @@ export function validateConfluenceCreate(
     body: raw.body,
     ...(typeof raw.parentId === 'string' && raw.parentId !== '' ? { parentId: raw.parentId } : {})
   }
+}
+
+/**
+ * Validate `confluence_update_page` params (confluence-mcp-write-v1, FR-006). Required:
+ * `pageId` is a non-empty string and `title` is a non-empty, non-whitespace string.
+ * Optional: `body` is a string when present (the §C3 "empty body preserves the existing
+ * body" semantics live in the manager/client, NOT here — the validator only type-checks);
+ * `versionMessage` is a string when present. A missing required field updates nothing
+ * (warn + return null). Carries no secret. Pure; never throws.
+ */
+export function validateConfluenceUpdate(
+  raw: unknown,
+  warn: WarnFn = defaultWarn
+): ConfluenceUpdateParams | null {
+  if (!isObject(raw)) {
+    warn('[confluence] ignoring update — params is not an object:', raw)
+    return null
+  }
+  if (!isNonEmptyString(raw.pageId)) {
+    warn('[confluence] ignoring update — required "pageId" must be a non-empty string:', raw)
+    return null
+  }
+  if (typeof raw.title !== 'string' || raw.title.trim().length === 0) {
+    warn('[confluence] ignoring update — required "title" must be a non-empty, non-whitespace string:', raw)
+    return null
+  }
+  if (raw.body !== undefined && typeof raw.body !== 'string') {
+    warn('[confluence] ignoring update — optional "body" must be a string when present:', raw)
+    return null
+  }
+  if (raw.versionMessage !== undefined && typeof raw.versionMessage !== 'string') {
+    warn('[confluence] ignoring update — optional "versionMessage" must be a string when present:', raw)
+    return null
+  }
+  return {
+    pageId: raw.pageId,
+    title: raw.title,
+    ...(typeof raw.body === 'string' ? { body: raw.body } : {}),
+    ...(typeof raw.versionMessage === 'string' ? { versionMessage: raw.versionMessage } : {})
+  }
+}
+
+/**
+ * Validate `confluence_create_comment` params (confluence-mcp-write-v1, comment FR).
+ * Required: `pageId` is a non-empty string and `body` is a non-empty, non-whitespace
+ * string (an empty comment adds nothing). A missing required field comments nothing
+ * (warn + return null). Carries no secret. Pure; never throws.
+ */
+export function validateConfluenceComment(
+  raw: unknown,
+  warn: WarnFn = defaultWarn
+): ConfluenceCommentParams | null {
+  if (!isObject(raw)) {
+    warn('[confluence] ignoring comment — params is not an object:', raw)
+    return null
+  }
+  if (!isNonEmptyString(raw.pageId)) {
+    warn('[confluence] ignoring comment — required "pageId" must be a non-empty string:', raw)
+    return null
+  }
+  if (typeof raw.body !== 'string' || raw.body.trim().length === 0) {
+    warn('[confluence] ignoring comment — required "body" must be a non-empty, non-whitespace string:', raw)
+    return null
+  }
+  return { pageId: raw.pageId, body: raw.body }
 }
 
 /** A validated Confluence bridge call: a known `op` plus its raw params object. */
