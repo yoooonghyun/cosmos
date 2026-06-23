@@ -238,7 +238,8 @@ function TerminalView({
         shiftKey: e.shiftKey,
         ctrlKey: e.ctrlKey,
         type: e.type,
-        isComposing: e.isComposing
+        isComposing: e.isComposing,
+        keyCode: e.keyCode
       })
       if (seq === null) {
         return true

@@ -37,6 +37,17 @@ export interface TerminalKeyEvent {
    * every subsequent keystroke to re-emit the last composed syllable.
    */
   isComposing?: boolean
+  /**
+   * The legacy `KeyboardEvent.keyCode`. While an IME is mid-composition the browser
+   * fires keydown with keyCode 229 ("process" key) — and crucially it does so even on
+   * the keydown that COMMITS the syllable, where `isComposing` has already flipped back
+   * to false. `isComposing` alone therefore misses that commit-keydown: if Option+Left
+   * lands on it we'd intercept (return false), xterm early-returns before
+   * CompositionHelper.keydown() runs, the textarea stays stale, and every later keystroke
+   * re-emits the last composed syllable (the Korean "마지막 문자로 치환" corruption). So we
+   * treat keyCode 229 as an additional "composition active" signal and defer to xterm.
+   */
+  keyCode?: number
 }
 
 export const TERMINAL_KEY_SEQUENCES = {
@@ -81,14 +92,16 @@ export const TERMINAL_KEY_SEQUENCES = {
  * existing terminal input behavior is preserved.
  */
 export function mapTerminalKey(e: TerminalKeyEvent): string | null {
-  // IME guard: if a composition is active, never intercept — defer to xterm so
+  // IME guard: if a composition is active (isComposing, OR keyCode 229 which also covers
+  // the commit-keydown where isComposing has already flipped false), never intercept —
+  // defer to xterm so
   // CoreBrowserTerminal._keyDown reaches _compositionHelper.keydown() which
   // commits/finalizes the pending syllable. Without this, returning false from
   // the custom handler causes _keyDown to early-return at line 1025–1027 before
   // the CompositionHelper runs, leaving _isComposing=true and the textarea stale;
   // every subsequent keystroke then diffs against the stale value and re-emits
   // the last composed syllable (the Korean IME "트" corruption).
-  if (e.isComposing) {
+  if (e.isComposing || e.keyCode === 229) {
     return null
   }
 

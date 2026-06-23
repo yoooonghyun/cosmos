@@ -87,4 +87,16 @@ describe('mapTerminalKey', () => {
   it('Option+Left not composing → word-left sequence (normal motion still works)', () => {
     expect(mapTerminalKey(key({ key: 'ArrowLeft', altKey: true, isComposing: false }))).toBe('\x1b[1;3D')
   })
+
+  it('Option+Left on IME commit-keydown (keyCode 229, isComposing already false) → null (defer so CompositionHelper commits; fixes "마지막 문자로 치환" recurrence)', () => {
+    expect(mapTerminalKey(key({ key: 'ArrowLeft', altKey: true, isComposing: false, keyCode: 229 }))).toBeNull()
+  })
+
+  it('Option+Right on IME commit-keydown (keyCode 229) → null', () => {
+    expect(mapTerminalKey(key({ key: 'ArrowRight', altKey: true, isComposing: false, keyCode: 229 }))).toBeNull()
+  })
+
+  it('Option+Left with a normal keyCode (37) still maps to word-left (229 guard is exact, not over-broad)', () => {
+    expect(mapTerminalKey(key({ key: 'ArrowLeft', altKey: true, keyCode: 37 }))).toBe('\x1b[1;3D')
+  })
 })
