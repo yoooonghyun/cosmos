@@ -2297,7 +2297,10 @@ app.whenReady().then(() => {
 })
 
 app.on('window-all-closed', () => {
-  ptyManager?.killAll()
+  // session-resume-relaunch-v3: synchronous group teardown so the SIGKILL escalation reaps every
+  // MCP-server child before the app may exit — a clean close leaves ZERO `out/main/mcp/*Server.js`
+  // orphans.
+  ptyManager?.killAllSync()
   ptyManager = null
   uiBridge?.stop()
   uiBridge = null
@@ -2324,8 +2327,10 @@ app.on('window-all-closed', () => {
 })
 
 // Final safety net: never orphan any PTY or the bridge sockets when quitting.
+// session-resume-relaunch-v3: `killAllSync` (group SIGHUP → bounded grace → SIGKILL survivors) so
+// claude AND its MCP-server children are reaped before the app exits.
 app.on('before-quit', () => {
-  ptyManager?.killAll()
+  ptyManager?.killAllSync()
   uiBridge?.stop()
   slackBridge?.stop()
   jiraBridge?.stop()
@@ -2338,7 +2343,11 @@ app.on('before-quit', () => {
 // for quit sequences where `before-quit` is missed (some app.quit() / dock-quit paths). Reaping
 // the PTYs here releases each `claude`'s `~/.claude/sessions/<pid>.json` registry entry so the next
 // launch can resume the recorded ids without colliding with an orphan. Idempotent — a second
-// killAll over an already-empty session map is a no-op.
+// teardown over an already-empty session map is a no-op.
+//
+// session-resume-relaunch-v3: `killAllSync` group-tears-down (SIGHUP → bounded grace → SIGKILL) so
+// the embedded `claude` AND its MCP-server children are reaped, leaving no `out/main/mcp/*Server.js`
+// orphans on a clean quit.
 //
 // NOTE: we deliberately do NOT kill the PTYs on `powerMonitor` `suspend` (Mac sleep). Sleep is the
 // case where the user WANTS the session to still be there on wake; suspending the host does not
@@ -2348,7 +2357,7 @@ app.on('before-quit', () => {
 // recovered at next launch by the `onSessionInUse` path (kill the holder / remove the stale file,
 // then re-`--resume` the SAME id), so resumability is preserved without a fresh id.
 app.on('will-quit', () => {
-  ptyManager?.killAll()
+  ptyManager?.killAllSync()
 })
 
 // session-resume-relaunch-v1 (orphan prevention, part a): on macOS sleep, surface the registry

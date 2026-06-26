@@ -37,6 +37,11 @@ import type {
   PtyResizePayload
 } from '../shared/ipc'
 import { isAlreadyInUseError } from './sessionLockRecovery'
+import {
+  GROUP_KILL_GRACE_MS,
+  groupKillPhase,
+  type ProcessGroupKiller
+} from './processGroupKill'
 
 /** The node-pty `spawn` signature — injectable so tests run without a real PTY. */
 export type SpawnPtyFn = (
@@ -113,6 +118,32 @@ const RESUME_FAILURE_WINDOW_MS = 4000
 
 const DEFAULT_COLS = 80
 const DEFAULT_ROWS = 24
+
+/**
+ * session-resume-relaunch-v3: the real process-group killer wired to `process.kill`. A NEGATIVE pid
+ * targets the whole process group (`man 2 kill`), so this reaps the PTY leader (`claude`) AND every
+ * MCP-server child sharing its pgid. Best-effort: ESRCH (already gone) / EPERM are swallowed so a
+ * teardown never throws. The pid > 1 safety gate lives in `processGroupKill.canGroupKill`, applied
+ * before either method is called.
+ */
+const DEFAULT_GROUP_KILLER: ProcessGroupKiller = {
+  killGroup: (pid, signal) => {
+    try {
+      process.kill(-pid, signal)
+    } catch {
+      // group already gone / not permitted — best-effort
+    }
+  },
+  isGroupAlive: (pid) => {
+    try {
+      process.kill(-pid, 0)
+      return true
+    } catch (err) {
+      // ESRCH → the whole group is gone. EPERM → alive but not ours (treat as alive).
+      return (err as NodeJS.ErrnoException)?.code === 'EPERM'
+    }
+  }
+}
 
 /**
  * session-resume-relaunch-v1: how many trailing bytes of PTY output to retain per session for the
@@ -225,14 +256,27 @@ export class PtyManager {
   private readonly spawn: SpawnPtyFn
   /** Injectable clock (ms) for the resume-failure window; defaults to Date.now. */
   private readonly now: () => number
+  /**
+   * session-resume-relaunch-v3: signals the whole PROCESS GROUP of a PTY leader so `claude` AND its
+   * MCP-server children are reaped (a leader-only `proc.kill()` orphans the children). Injectable so
+   * the group-kill path is unit-testable without real processes; defaults to the real
+   * `process.kill(-pid, sig)` (negative pid = the process group).
+   */
+  private readonly groupKiller: ProcessGroupKiller
 
-  constructor(sinks: PtyManagerSinks, options: PtyManagerOptions, now: () => number = Date.now) {
+  constructor(
+    sinks: PtyManagerSinks,
+    options: PtyManagerOptions,
+    now: () => number = Date.now,
+    groupKiller: ProcessGroupKiller = DEFAULT_GROUP_KILLER
+  ) {
     this.sinks = sinks
     this.options = options
     this.defaultCols = options.cols ?? DEFAULT_COLS
     this.defaultRows = options.rows ?? DEFAULT_ROWS
     this.spawn = options.spawn ?? ((c, a, o) => pty.spawn(c, a, o))
     this.now = now
+    this.groupKiller = groupKiller
   }
 
   /** True when a live PTY process is attached for `paneId` (panel-tabs v1, FR-021). */
@@ -425,6 +469,9 @@ export class PtyManager {
    * teardown on app quit / renderer reload (edge case: do not orphan the PTY).
    * Detaches the session first so its exit handler does not re-emit. No-op if the
    * pane is unknown.
+   *
+   * session-resume-relaunch-v3: tears down the whole PROCESS GROUP (claude + its MCP-server
+   * children), with a SIGKILL escalation after a short grace for any child that ignores SIGHUP.
    */
   kill(paneId: string): void {
     const session = this.sessions.get(paneId)
@@ -432,34 +479,95 @@ export class PtyManager {
       return
     }
     this.sessions.delete(paneId)
-    // Mark intentional BEFORE killing so the captured `onExit` handler suppresses
-    // the SIGHUP exit node-pty fires for an intentional kill (restart-pty-cwd).
-    session.disposed = true
-    try {
-      session.proc.kill()
-    } catch {
-      // Already dead; nothing to do.
-    }
+    this.teardownSession(session)
   }
 
   /**
    * Kill EVERY pane's process and clear the map, without emitting exit events.
    * Used for full teardown on app quit / window close / renderer reload so no
    * `claude` session is orphaned (panel-tabs v1, FR-023 teardown).
+   *
+   * session-resume-relaunch-v3: each session is group-torn-down (claude + MCP children) with the
+   * SIGKILL escalation, so a clean quit/close leaves ZERO `out/main/mcp/*Server.js` orphans.
    */
   killAll(): void {
-    for (const session of this.sessions.values()) {
-      // Mark intentional BEFORE killing so each captured `onExit` handler
-      // suppresses the SIGHUP exit node-pty fires for an intentional kill — on a
-      // renderer reload the window survives, so an emitted exit would reach the
-      // reloaded, restored pane (restart-pty-cwd).
+    // Snapshot first: `teardownSession` → `proc.kill()` can fire the captured `onExit` synchronously
+    // (the fake pty, and real node-pty's intentional-kill SIGHUP), which deletes from `this.sessions`
+    // — mutating the map mid-iteration would skip panes. Iterate a stable copy instead.
+    const sessions = [...this.sessions.values()]
+    for (const session of sessions) {
+      this.teardownSession(session)
+    }
+    this.sessions.clear()
+  }
+
+  /**
+   * session-resume-relaunch-v3: synchronous, bounded group teardown for the app-QUIT path
+   * (`will-quit`/`before-quit`), where there is no event loop turn left to await an async grace.
+   * Sends SIGHUP to every session's group, performs a tight BUSY-WAIT for the grace window, then
+   * SIGKILLs any group still alive. Returns immediately if there are no sessions. Bounded by
+   * `GROUP_KILL_GRACE_MS` so quit is never blocked indefinitely.
+   */
+  killAllSync(): void {
+    // Snapshot first (see killAll): `proc.kill()` can synchronously delete from `this.sessions`.
+    const sessions = [...this.sessions.values()]
+    const groups: number[] = []
+    for (const session of sessions) {
       session.disposed = true
+      const pid = session.proc.pid
+      // Graceful: SIGHUP the whole group (claude exits; MCP children get the signal too).
+      groupKillPhase(pid, this.groupKiller, false)
+      // Also close the pty fd via node-pty (sends SIGHUP to the leader, harmless duplicate).
       try {
         session.proc.kill()
       } catch {
-        // Already dead; nothing to do.
+        // already dead
       }
+      groups.push(pid)
     }
     this.sessions.clear()
+    if (groups.length === 0) {
+      return
+    }
+    // Tight, bounded busy-wait for the grace window — we cannot yield the loop during quit.
+    const deadline = this.now() + GROUP_KILL_GRACE_MS
+    // eslint-disable-next-line no-empty
+    while (this.now() < deadline) {}
+    // Escalate: SIGKILL any group that ignored the SIGHUP (an MCP child that doesn't self-exit).
+    for (const pid of groups) {
+      groupKillPhase(pid, this.groupKiller, true)
+    }
+  }
+
+  /**
+   * session-resume-relaunch-v3: tear down ONE session's process group. Marks `disposed` BEFORE any
+   * signal so the captured `onExit` still suppresses the spurious "claude exited (signal 1)" of an
+   * intentional kill (restart-pty-cwd). Sends SIGHUP to the group + closes the pty fd, then after a
+   * short async grace SIGKILLs any surviving group member (an MCP child that ignored SIGHUP). The
+   * grace is a `setTimeout` (the dispose/reload paths can yield the loop, unlike app-quit which uses
+   * {@link killAllSync}).
+   */
+  private teardownSession(session: PtySession): void {
+    // Mark intentional BEFORE killing so the captured `onExit` handler suppresses the SIGHUP exit
+    // node-pty fires for an intentional kill — on a renderer reload the window survives, so an
+    // emitted exit would reach the reloaded, restored pane (restart-pty-cwd).
+    session.disposed = true
+    const pid = session.proc.pid
+    // Graceful group SIGHUP (claude + its MCP-server children share the pgid).
+    groupKillPhase(pid, this.groupKiller, false)
+    // node-pty's own kill closes the pty fd (also SIGHUPs the leader — a harmless duplicate).
+    try {
+      session.proc.kill()
+    } catch {
+      // Already dead; nothing to do.
+    }
+    // Escalate after a short grace: SIGKILL any group member still alive (e.g. an MCP server that
+    // ignores SIGHUP). Best-effort; the timer is unref'd so it never keeps the process alive.
+    const timer = setTimeout(() => {
+      groupKillPhase(pid, this.groupKiller, true)
+    }, GROUP_KILL_GRACE_MS)
+    if (typeof timer.unref === 'function') {
+      timer.unref()
+    }
   }
 }

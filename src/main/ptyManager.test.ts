@@ -41,7 +41,9 @@ const spawned: FakePty[] = []
 
 function makeFakePty(command: string): FakePty {
   const fake: FakePty = {
-    pid: spawned.length + 1,
+    // Base at 1000 so every fake pid is > 1 and passes `canGroupKill`'s safety gate (it rejects
+    // pid <= 1 to avoid `process.kill(-0/-1, ...)`). Real claude pids are large; this mirrors that.
+    pid: spawned.length + 1000,
     command,
     written: [],
     resizes: [],
@@ -85,6 +87,7 @@ vi.mock('node-pty', () => ({
 
 import * as pty from 'node-pty'
 import { PtyManager } from './ptyManager'
+import type { ProcessGroupKiller } from './processGroupKill'
 import type { PtyDataPayload, PtyExitPayload } from '../shared/ipc'
 
 /** Capture the args/cwd each spawn was called with (session-persistence-v1 D2). */
@@ -103,21 +106,47 @@ const PRESENT_CMD = process.execPath
 /** A bare name virtually guaranteed absent from PATH so the pre-check fails. */
 const ABSENT_CMD = 'definitely-not-a-real-binary-xyzzy'
 
+/**
+ * A SAFE, recording group-killer for tests. The real `process.kill(-pid, ...)` would signal a real
+ * OS process GROUP — catastrophic with the fakes' pids. This records the group
+ * signals and reports each group dead after its first SIGHUP, so the SIGKILL escalation is a no-op
+ * (matching the fake pty, which dies synchronously). Returned so a test can assert group teardown.
+ */
+function makeGroupKiller(): {
+  groupKiller: ProcessGroupKiller
+  groupSignals: Array<{ pid: number; signal: NodeJS.Signals }>
+} {
+  const groupSignals: Array<{ pid: number; signal: NodeJS.Signals }> = []
+  const hupped = new Set<number>()
+  const groupKiller: ProcessGroupKiller = {
+    killGroup: (pid, signal) => {
+      groupSignals.push({ pid, signal })
+      if (signal === 'SIGHUP') hupped.add(pid)
+    },
+    isGroupAlive: (pid) => !hupped.has(pid) // dead once SIGHUP'd → no escalation
+  }
+  return { groupKiller, groupSignals }
+}
+
 function makeManager(command = PRESENT_CMD): {
   manager: PtyManager
   data: PtyDataPayload[]
   exit: PtyExitPayload[]
+  groupSignals: Array<{ pid: number; signal: NodeJS.Signals }>
 } {
   const data: PtyDataPayload[] = []
   const exit: PtyExitPayload[] = []
+  const { groupKiller, groupSignals } = makeGroupKiller()
   const manager = new PtyManager(
     {
       onData: (p) => data.push(p),
       onExit: (p) => exit.push(p)
     },
-    { cwd: '/tmp', command }
+    { cwd: '/tmp', command },
+    Date.now,
+    groupKiller
   )
-  return { manager, data, exit }
+  return { manager, data, exit, groupSignals }
 }
 
 beforeEach(() => {
@@ -258,6 +287,16 @@ describe('PtyManager dispose isolation (panel-tabs v1, FR-023)', () => {
     expect(() => manager.kill('ghost')).not.toThrow()
     expect(manager.isRunning('a')).toBe(true)
   })
+
+  // session-resume-relaunch-v3: dispose must group-SIGHUP the pane's PROCESS GROUP (claude + its MCP
+  // children), not just the leader — a leader-only kill orphans the MCP grandchildren.
+  it('group-SIGHUPs the disposed pane and never signals another pane group', () => {
+    const { manager, groupSignals } = makeManager()
+    manager.start('a') // fake pid 1
+    manager.start('b') // fake pid 2
+    manager.kill('a')
+    expect(groupSignals).toEqual([{ pid: spawned[0].pid, signal: 'SIGHUP' }])
+  })
 })
 
 describe('PtyManager killAll (teardown)', () => {
@@ -272,6 +311,54 @@ describe('PtyManager killAll (teardown)', () => {
     expect(manager.isRunning('b')).toBe(false)
     expect(manager.isRunning('c')).toBe(false)
     expect(exit).toEqual([])
+  })
+
+  // session-resume-relaunch-v3: killAll group-SIGHUPs EVERY pane's process group so claude + its MCP
+  // children are all reaped (a clean close leaves zero out/main/mcp/*Server.js orphans).
+  it('group-SIGHUPs every pane group on killAll', () => {
+    const { manager, groupSignals } = makeManager()
+    manager.start('a')
+    manager.start('b')
+    manager.killAll()
+    const huppedPids = groupSignals.filter((s) => s.signal === 'SIGHUP').map((s) => s.pid).sort()
+    expect(huppedPids).toEqual([spawned[0].pid, spawned[1].pid].sort())
+  })
+
+  // session-resume-relaunch-v3: killAllSync (app-quit path) group-SIGHUPs every group; the SIGKILL
+  // escalation only fires for a group still alive after the grace (here the fakes die on SIGHUP, so
+  // escalation is a no-op — proving we never SIGKILL an already-dead group).
+  it('killAllSync group-SIGHUPs every pane and escalates only survivors', () => {
+    const { manager, groupSignals } = makeManager()
+    manager.start('a')
+    manager.start('b')
+    manager.killAllSync()
+    // Each group got SIGHUP; none got SIGKILL (all reported dead post-SIGHUP).
+    expect(groupSignals.filter((s) => s.signal === 'SIGHUP')).toHaveLength(2)
+    expect(groupSignals.filter((s) => s.signal === 'SIGKILL')).toHaveLength(0)
+    expect(manager.isRunning('a')).toBe(false)
+    expect(manager.isRunning('b')).toBe(false)
+  })
+
+  // session-resume-relaunch-v3: an MCP child that ignores SIGHUP (group stays alive past the grace)
+  // is reaped by the SIGKILL escalation on the quit path.
+  it('killAllSync SIGKILLs a group that survives the SIGHUP grace', () => {
+    const groupSignals: Array<{ pid: number; signal: NodeJS.Signals }> = []
+    const stubbornKiller: ProcessGroupKiller = {
+      killGroup: (pid, signal) => groupSignals.push({ pid, signal }),
+      isGroupAlive: () => true // group ignores SIGHUP — still alive at the grace deadline
+    }
+    const manager = new PtyManager(
+      { onData: () => {}, onExit: () => {} },
+      { cwd: '/tmp', command: PRESENT_CMD },
+      Date.now,
+      stubbornKiller
+    )
+    manager.start('a')
+    manager.killAllSync()
+    expect(groupSignals).toEqual([
+      { pid: spawned[0].pid, signal: 'SIGHUP' },
+      { pid: spawned[0].pid, signal: 'SIGKILL' }
+    ])
   })
 })
 
@@ -368,6 +455,7 @@ function makeResumeManager(now: () => number = Date.now): {
   const exit: PtyExitPayload[] = []
   const resumeFailures: string[] = []
   const inUse: Array<{ paneId: string; sessionId: string }> = []
+  const { groupKiller } = makeGroupKiller()
   const manager = new PtyManager(
     {
       onData: () => {},
@@ -376,7 +464,8 @@ function makeResumeManager(now: () => number = Date.now): {
       onSessionInUse: (paneId, sessionId) => inUse.push({ paneId, sessionId })
     },
     { cwd: '/work', command: PRESENT_CMD, args: ['--mcp-config', '/cfg'] },
-    now
+    now,
+    groupKiller
   )
   return { manager, exit, resumeFailures, inUse }
 }
