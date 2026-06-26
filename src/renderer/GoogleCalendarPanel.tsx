@@ -824,13 +824,22 @@ export function GoogleCalendarPanel({ active }: { active: boolean }): React.JSX.
           connected state. Transient: X or scrim click clears it. */}
       {genUiEvent && (
         <>
-          {/* Click-away scrim: closes the dock on click. Always present. */}
+          {/* Click-away scrim (glass-dock-v1): closes the dock on click. For the liquid-glass
+              dock the scrim is FAINT — the old bg-black/40 darkened the very content the glass
+              should reveal through its blur, so it drops to bg-black/15 (a gentle modal cue)
+              that lets the frosted month grid read THROUGH the glass while still signalling the
+              dock is modal/click-away. Always present. */}
           <div
-            className="absolute inset-0 z-10 bg-black/40 transition-opacity duration-200"
+            className="absolute inset-0 z-10 bg-black/15 transition-opacity duration-200"
             aria-hidden="true"
             onClick={closeDetail}
           />
-          <div className="absolute inset-y-0 right-0 z-20 w-full max-w-[22rem] translate-x-0 border-l border-border bg-card shadow-lg transition-transform duration-200 ease-out motion-reduce:transition-none">
+          {/* glass-dock-v1: the drawer wears the reusable `glass-dock` material (translucent +
+              backdrop-blur frosted glass) instead of the opaque bg-card. The inner EventDetail
+              root is bg-transparent so this is the SINGLE fill (two stacked opaque surfaces
+              would defeat the blur). The glass-dock utility supplies its own border color +
+              depth/edge shadow, so we keep only the border-l side + the entry transition. */}
+          <div className="glass-dock absolute inset-y-0 right-0 z-20 w-full max-w-[22rem] translate-x-0 border-l transition-transform duration-200 ease-out motion-reduce:transition-none">
             <EventDetail
               event={genUiEvent}
               {...(activeLegend ? { calendars: activeLegend } : {})}

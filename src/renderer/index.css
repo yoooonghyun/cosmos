@@ -92,6 +92,15 @@
      the old blue. Consumable as bg-/text-/ring-/before:bg-brand-accent. */
   --color-brand-accent: var(--brand-accent);
   --color-brand-accent-foreground: var(--brand-accent-foreground);
+
+  /* liquid-glass detail-dock material (glass-dock-v1) — the translucent frosted
+     surface every always-overlay detail dock (Calendar/Slack/Jira/Confluence) wears.
+     These are the tunable knobs the `glass-dock` @utility consumes; their per-mode
+     values live in `:root` / `.dark`. Surfaces NEVER inline these alphas — they apply
+     the one `glass-dock` class so all four docks stay one material. */
+  --color-glass-dock-fill: var(--glass-dock-fill);
+  --color-glass-dock-edge: var(--glass-dock-edge);
+  --color-glass-dock-highlight: var(--glass-dock-highlight);
 }
 
 /*
@@ -196,8 +205,57 @@
   }
 }
 
+/*
+ * glass-dock — Apple "liquid glass" / visionOS surface treatment for the always-overlay
+ * detail docks (glass-dock-v1). ONE reusable material so Calendar/Slack/Jira/Confluence
+ * docks read identically: swap the drawer's `bg-card` for `glass-dock` and they're done
+ * (the dock's inner content root must drop its own `bg-card` to bg-transparent so this is
+ * the single fill — two stacked opaque surfaces would defeat the blur).
+ *
+ * The look = four stacked layers, all token-driven (no raw hex; works in dark AND light):
+ *   1. backdrop-filter: blur + slight saturate → the panel content behind is FROSTED, not
+ *      hidden. saturate lifts the muted cosmos palette so the glass reads luminous, not gray.
+ *   2. a translucent FILL (`--glass-dock-fill`, a low-alpha card tint) → gives the glass body
+ *      while staying see-through; tuned per mode so text on it keeps card-level contrast.
+ *   3. a hairline EDGE (`--glass-dock-edge`, translucent border) + an inset TOP HIGHLIGHT
+ *      (`--glass-dock-highlight`, via box-shadow inset) → the luminous specular rim that sells
+ *      the "glass" depth (light catches the top edge).
+ *   4. a soft drop shadow for float/depth over the scrim.
+ *
+ * Defined as a Tailwind v4 `@utility` (same layered cascade as Tailwind utilities, like
+ * `scrollbar-hover-only`/`prose-cosmos`) so it composes via a single class token and can be
+ * kept as a shared constant for the other docks. It is a STATIC material — no animation — so
+ * it is motion-safe by construction; the dock's own enter transition is untouched. Includes a
+ * `@supports not (backdrop-filter)` fallback that bumps the fill to near-opaque card so a
+ * non-blur engine still gets a legible solid surface (Electron/Chromium supports it, but the
+ * fallback keeps the utility safe to reuse anywhere).
+ */
+@utility glass-dock {
+  background-color: var(--glass-dock-fill);
+  backdrop-filter: blur(20px) saturate(160%);
+  -webkit-backdrop-filter: blur(20px) saturate(160%);
+  border-color: var(--glass-dock-edge);
+  /* inset top-edge specular highlight + a soft outer depth shadow in one shorthand. */
+  box-shadow:
+    inset 0 1px 0 0 var(--glass-dock-highlight),
+    inset 1px 0 0 0 var(--glass-dock-edge),
+    -12px 0 32px -12px rgb(0 0 0 / 0.5);
+}
+@supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  @utility glass-dock {
+    /* No blur engine → fall back to a near-opaque card so content stays legible. */
+    background-color: color-mix(in oklab, var(--card) 92%, transparent);
+  }
+}
+
 :root {
   --radius: 0.5rem;
+
+  /* glass-dock-v1 light values. Fill = a high-key translucent card so dark text on it stays
+     legible; edge/highlight are whites that read as a luminous rim on the light surface. */
+  --glass-dock-fill: color-mix(in oklab, var(--card) 62%, transparent);
+  --glass-dock-edge: rgb(255 255 255 / 0.55);
+  --glass-dock-highlight: rgb(255 255 255 / 0.7);
 
   --background: #ffffff;
   --foreground: #1e1e1e;
@@ -269,6 +327,15 @@
 }
 
 .dark {
+  /* glass-dock-v1 dark values. The cosmos dark card (#1b1b1c) is near-black, so a plain
+     low-alpha card tint reads as muddy gray glass; we tint toward a slightly lifted neutral
+     and keep a low alpha so the frosted panel content shows through. edge/highlight are
+     low-alpha whites — the luminous specular rim that gives the dark glass its visionOS depth
+     without washing out the dark surface. Fill alpha (~58%) keeps card-foreground text legible. */
+  --glass-dock-fill: color-mix(in oklab, color-mix(in oklab, var(--card) 80%, #ffffff) 58%, transparent);
+  --glass-dock-edge: rgb(255 255 255 / 0.14);
+  --glass-dock-highlight: rgb(255 255 255 / 0.22);
+
   /* cosmos VS Code-style palette (see spec). */
   --background: #1e1e1e;
   --foreground: #e0e0e0;

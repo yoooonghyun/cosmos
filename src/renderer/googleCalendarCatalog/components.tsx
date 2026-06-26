@@ -1298,7 +1298,9 @@ export function EventDetail({
       : (event.calendarId ?? '')
 
   return (
-    <div className="flex h-full min-w-0 flex-col bg-card">
+    // glass-dock-v1: bg-transparent (NOT bg-card) so the owning dock's `glass-dock` material
+    // is the single fill — a stacked opaque card here would defeat the frosted backdrop-blur.
+    <div className="flex h-full min-w-0 flex-col bg-transparent">
       {/* Header (sticky, non-scrolling) — icon + the title (design §1.3). The title IS the
           external "open in Google Calendar" affordance: when a non-secret http(s) `htmlLink`
           is present it renders as an <a target=_blank> (routed to shell.openExternal by the
