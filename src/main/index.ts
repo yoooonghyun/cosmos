@@ -13,6 +13,7 @@ import {
   ipcMain,
   Menu,
   nativeImage,
+  powerMonitor,
   safeStorage,
   shell,
   type IpcMainEvent,
@@ -56,6 +57,7 @@ import {
 } from '../shared/ipc'
 import { matchShortcut } from './shortcutMatch'
 import { resolvePaneSpawn, type ResolvedPaneSpawn } from './paneSpawn'
+import { recoverSessionLock, type SessionLockEnv } from './sessionLockRecovery'
 import type { SlackConnectionStatus } from '../shared/slack'
 import type { JiraConnectionStatus } from '../shared/jira'
 import { JiraAdapterSource } from '../shared/jira'
@@ -447,6 +449,68 @@ function dirExistsOnDisk(absDir: string): boolean {
 }
 
 /**
+ * session-resume-relaunch-v1: the live {@link SessionLockEnv} backing the "already in use"
+ * recovery. claude tracks every running interactive session in `~/.claude/sessions/<pid>.json`
+ * (`{ pid, sessionId, cwd, ... }`); a `--resume`/`--session-id` spawn is rejected when an entry
+ * names the id with a still-alive pid. This env reads that registry, probes pid liveness
+ * (`process.kill(pid, 0)`), and frees the id by killing the orphan / removing a stale file. All
+ * side-effects are best-effort and never throw (the resolver tolerates partial failure).
+ */
+const claudeSessionLockEnv: SessionLockEnv = {
+  listRegistryFiles: () => {
+    const dir = join(app.getPath('home'), '.claude', 'sessions')
+    try {
+      return readdirSync(dir)
+        .filter((name) => name.endsWith('.json'))
+        .map((name) => join(dir, name))
+    } catch {
+      return [] // no registry dir / unreadable → nothing to recover
+    }
+  },
+  readEntry: (filePath) => {
+    try {
+      const parsed: unknown = JSON.parse(readFileSync(filePath).toString('utf8'))
+      if (
+        typeof parsed === 'object' &&
+        parsed !== null &&
+        typeof (parsed as { pid?: unknown }).pid === 'number' &&
+        typeof (parsed as { sessionId?: unknown }).sessionId === 'string'
+      ) {
+        const e = parsed as { pid: number; sessionId: string }
+        return { pid: e.pid, sessionId: e.sessionId }
+      }
+    } catch {
+      // unreadable / unparsable / foreign-shaped → skip
+    }
+    return null
+  },
+  isAlive: (pid) => {
+    try {
+      // Signal 0 performs the permission/existence check without delivering a signal.
+      process.kill(pid, 0)
+      return true
+    } catch (err) {
+      // ESRCH → dead. EPERM → alive but not ours (treat as alive so we never remove a live entry).
+      return (err as NodeJS.ErrnoException)?.code === 'EPERM'
+    }
+  },
+  killPid: (pid) => {
+    try {
+      process.kill(pid, 'SIGTERM')
+    } catch {
+      // already gone / not permitted → best-effort
+    }
+  },
+  removeFile: (filePath) => {
+    try {
+      rmSync(filePath, { force: true })
+    } catch {
+      // best-effort
+    }
+  }
+}
+
+/**
  * Enrich a renderer-sent snapshot's terminal tabs with their MAIN-owned sessionId
  * + cwd from `terminalSessionMap` before persisting (D2/FR-019). The renderer sends
  * terminal tabs WITHOUT sessionId/cwd (it never sees them); a tab whose pane has no
@@ -808,6 +872,35 @@ function createPtyManager(window: BrowserWindow, sandboxDir: string): PtyManager
         terminalSessionMap.set(paneId, { sessionId, cwd })
         console.warn(`[session] resume failed for pane ${paneId}; starting a fresh session`)
         ptyManager?.start(paneId, { args: ['--session-id', sessionId], resume: false, cwd })
+      },
+      // session-resume-relaunch-v1: claude REJECTED the recorded id with "Session ID <id> is
+      // already in use" — a LIVE ORPHAN claude (survived a prior un-clean cosmos exit: macOS sleep,
+      // force-quit, SIGKILL) or a stale `~/.claude/sessions/<pid>.json` holds it. Free the id (kill
+      // the orphan / remove the stale file) and re-`--resume` the SAME id ONCE in its recorded cwd.
+      // NEVER mint a fresh id (that orphans the conversation — the bug this whole feature fixes).
+      // Guard: only attempt recovery when THIS process has no live PTY for the pane (the manager
+      // already deleted the dead session before firing), so we can only ever kill a true orphan,
+      // never a sibling pane's just-spawned claude.
+      onSessionInUse: (paneId, sessionId) => {
+        if (ptyManager?.isRunning(paneId)) {
+          return // a live session re-attached in the meantime — do not touch any holder
+        }
+        const recovery = recoverSessionLock(sessionId, claudeSessionLockEnv)
+        if (!recovery.retry) {
+          // No registry entry actually holds the id (holder already exited, or the rejection came
+          // from elsewhere). Surface the exit normally so the pane is not left silently dead.
+          console.warn(`[session] "${sessionId}" reported in use but no holder found; not retrying`)
+          ptyManager?.start(paneId, { args: ['--resume', sessionId], resume: true })
+          return
+        }
+        const prior = terminalSessionMap.get(paneId)
+        const cwd = prior?.cwd ?? sandboxDir
+        console.warn(
+          `[session] freed in-use session ${sessionId} for pane ${paneId} (${recovery.kind}); retrying resume`
+        )
+        // Re-`--resume` the SAME id in the recorded cwd. The id is preserved end-to-end, so the
+        // conversation is restored, not lost.
+        ptyManager?.start(paneId, { args: ['--resume', sessionId], resume: true, cwd })
       }
     },
     {
@@ -2166,4 +2259,28 @@ app.on('before-quit', () => {
   confluenceBridge?.stop()
   googleCalendarBridge?.stop()
   agentRunner?.dispose()
+})
+
+// session-resume-relaunch-v1 (orphan prevention, part a): `will-quit` is a SECOND teardown net
+// for quit sequences where `before-quit` is missed (some app.quit() / dock-quit paths). Reaping
+// the PTYs here releases each `claude`'s `~/.claude/sessions/<pid>.json` registry entry so the next
+// launch can resume the recorded ids without colliding with an orphan. Idempotent — a second
+// killAll over an already-empty session map is a no-op.
+//
+// NOTE: we deliberately do NOT kill the PTYs on `powerMonitor` `suspend` (Mac sleep). Sleep is the
+// case where the user WANTS the session to still be there on wake; suspending the host does not
+// quit cosmos, so the natural UX is "wake → keep using the same live claude". Killing on suspend
+// would force an exit banner on every wake. The unavoidable residual — a hard SIGKILL/force-quit of
+// cosmos, or claude dying without cleanup — leaves a live orphan or stale registry file; that is
+// recovered at next launch by the `onSessionInUse` path (kill the holder / remove the stale file,
+// then re-`--resume` the SAME id), so resumability is preserved without a fresh id.
+app.on('will-quit', () => {
+  ptyManager?.killAll()
+})
+
+// session-resume-relaunch-v1 (orphan prevention, part a): on macOS sleep, surface the registry
+// snapshot in the log so a wake-time collision is diagnosable, but leave the live sessions running
+// (see the will-quit note above for why we don't kill on suspend).
+powerMonitor.on('suspend', () => {
+  console.log('[session] system suspend; embedded claude sessions left running for wake')
 })

@@ -363,19 +363,22 @@ function makeResumeManager(now: () => number = Date.now): {
   manager: PtyManager
   exit: PtyExitPayload[]
   resumeFailures: string[]
+  inUse: Array<{ paneId: string; sessionId: string }>
 } {
   const exit: PtyExitPayload[] = []
   const resumeFailures: string[] = []
+  const inUse: Array<{ paneId: string; sessionId: string }> = []
   const manager = new PtyManager(
     {
       onData: () => {},
       onExit: (p) => exit.push(p),
-      onResumeFailure: (paneId) => resumeFailures.push(paneId)
+      onResumeFailure: (paneId) => resumeFailures.push(paneId),
+      onSessionInUse: (paneId, sessionId) => inUse.push({ paneId, sessionId })
     },
     { cwd: '/work', command: PRESENT_CMD, args: ['--mcp-config', '/cfg'] },
     now
   )
-  return { manager, exit, resumeFailures }
+  return { manager, exit, resumeFailures, inUse }
 }
 
 describe('PtyManager per-pane args (session-persistence-v1 D2, FR-019/FR-020)', () => {
@@ -440,6 +443,63 @@ describe('PtyManager resume-failure detection (session-persistence-v1 OQ-1/FR-02
     t = 1100
     spawned[spawned.length - 1].exitCb?.({ exitCode: 1 })
     expect(resumeFailures).toEqual([])
+    expect(exit).toHaveLength(1)
+  })
+})
+
+describe('PtyManager "already in use" detection (session-resume-relaunch-v1)', () => {
+  // The orphan-on-relaunch case: a --resume spawn that printed claude's "Session ID <id> is
+  // already in use" and died early must route to onSessionInUse (carrying the SAME id to free +
+  // retry), NOT onResumeFailure (which mints a fresh id) and NOT a bare onExit.
+  it('fires onSessionInUse (with the rejected id) when the spawn printed "already in use" and exited early', () => {
+    let t = 1000
+    const { manager, exit, resumeFailures, inUse } = makeResumeManager(() => t)
+    manager.start('p1', { args: ['--resume', 'sess-IN-USE'], resume: true })
+    // claude prints the rejection to the PTY, then exits non-zero shortly after.
+    spawned[spawned.length - 1].dataCb?.('Error: Session ID sess-IN-USE is already in use.\r\n')
+    t = 1200 // inside the failure window
+    spawned[spawned.length - 1].exitCb?.({ exitCode: 1 })
+    expect(inUse).toEqual([{ paneId: 'p1', sessionId: 'sess-IN-USE' }])
+    expect(resumeFailures).toEqual([]) // must NOT take the fresh-mint path
+    expect(exit).toEqual([]) // suppressed so the renderer doesn't flash "claude exited"
+  })
+
+  // It also detects the rejection for a --session-id spawn (the idempotent reuse branch), parsing
+  // the id from that flag.
+  it('detects the rejection for a --session-id spawn and carries that id', () => {
+    let t = 1000
+    const { manager, inUse } = makeResumeManager(() => t)
+    manager.start('p1', { args: ['--session-id', 'sess-reuse'], resume: false })
+    spawned[spawned.length - 1].dataCb?.('Session ID sess-reuse is already in use')
+    t = 1100
+    spawned[spawned.length - 1].exitCb?.({ exitCode: 1 })
+    expect(inUse).toEqual([{ paneId: 'p1', sessionId: 'sess-reuse' }])
+  })
+
+  // A --resume that fails WITHOUT the in-use phrase is a normal resume-failure (fresh-mint path),
+  // not an in-use recovery — the two must not be conflated.
+  it('does NOT fire onSessionInUse for a resume failure that lacks the in-use phrase', () => {
+    let t = 1000
+    const { manager, resumeFailures, inUse } = makeResumeManager(() => t)
+    manager.start('p1', { args: ['--resume', 'sess-1'], resume: true })
+    spawned[spawned.length - 1].dataCb?.('No conversation found with session ID: sess-1')
+    t = 1200
+    spawned[spawned.length - 1].exitCb?.({ exitCode: 1 })
+    expect(inUse).toEqual([])
+    expect(resumeFailures).toEqual(['p1']) // genuine resume failure → fresh mint
+  })
+
+  // A late exit (outside the window) carrying the phrase in stale scrollback is NOT a startup
+  // rejection — treat as a normal exit so a long-running session that happened to print the words
+  // is never mis-recovered.
+  it('does NOT fire onSessionInUse on a late exit outside the failure window', () => {
+    let t = 1000
+    const { manager, exit, inUse } = makeResumeManager(() => t)
+    manager.start('p1', { args: ['--resume', 'sess-1'], resume: true })
+    spawned[spawned.length - 1].dataCb?.('Session ID sess-1 is already in use')
+    t = 1000 + 60_000 // long after startup
+    spawned[spawned.length - 1].exitCb?.({ exitCode: 1 })
+    expect(inUse).toEqual([])
     expect(exit).toHaveLength(1)
   })
 })
