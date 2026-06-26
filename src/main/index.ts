@@ -882,16 +882,27 @@ function registerIpcHandlers(): void {
   // restart after exit re-spawns in the correct folder (not the sandbox default).
   // ptyManager.restart reads from its own dead session map after an exit and would
   // fall back to sandbox; paneSpawnFor reads terminalSessionMap which survives exits.
+  //
+  // session-resume-relaunch-v1 (THE FIX): a restart MUST CONTINUE the pane's recorded
+  // `claude` session (same session id) — NOT mint a fresh one. This handler is the path a
+  // user takes to recover a terminal whose PTY died on Mac sleep/wake (the PTY exits, the
+  // renderer shows the exit banner, the user clicks Restart). Minting `randomUUID()` here —
+  // the previous behaviour — overwrote `terminalSessionMap[paneId]` with an EMPTY session
+  // that has no conversation on disk, ORPHANING the original conversation (content "lost",
+  // and the next save persisted the empty fresh id so `--resume` later found nothing). This
+  // violated FR-019 (stable session id) / FR-020 (resume the recorded session). Re-using the
+  // recorded id with `--session-id` (CREATE-OR-CONTINUE — continues a populated session, and
+  // never prints "No conversation found" on an empty one) preserves the conversation across
+  // a restart. Only a pane with NO recorded session (never started / already disposed) mints
+  // a fresh id. The whole resolution (reuse-vs-mint + the stale-cwd guard) lives in the pure,
+  // node-tested `resolvePaneSpawn`, so this handler simply delegates — no override cwd, so a
+  // recorded pane takes the idempotent reuse branch in its recorded cwd.
   ipcMain.on(PtyChannel.Restart, (_event: IpcMainEvent, raw: unknown) => {
     const payload = validateRestart(raw)
     if (!payload) {
       return // invalid -> warned + ignored (SC-005)
     }
-    const recorded = terminalSessionMap.get(payload.paneId)
-    const cwd = recorded?.cwd ?? sandboxDirCached
-    const sessionId = randomUUID()
-    terminalSessionMap.set(payload.paneId, { sessionId, cwd })
-    ptyManager?.start(payload.paneId, { args: ['--session-id', sessionId], resume: false, cwd })
+    ptyManager?.start(payload.paneId, paneSpawnFor(payload.paneId, sandboxDirCached))
   })
 
   // panel-tabs v1 FR-023: dispose/kill the addressed pane's PTY on tab close. No

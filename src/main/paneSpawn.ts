@@ -125,19 +125,36 @@ export function resolvePaneSpawn(
   // the record is preserved, so a transient miss never erases the chosen folder.)
   const existing = sessionMap.get(paneId)
   if (existing && !(overrideCwd && overrideCwd.length > 0)) {
-    // Re-attach in the SAME recorded cwd, but mint a FRESH session id. Reusing
-    // `existing.sessionId` collided: in the StrictMode double-start, Start#1's claude (which
-    // holds that id) is still terminating when Start#2 spawns, so claude rejects the spawn with
-    // "Session ID <id> is already in use". A freshly minted `--session-id` avoids that collision
-    // (and the "No conversation found" case — a fresh id always create-or-continues). The cwd —
-    // the thing we must preserve to fix the sandbox bug — is kept unchanged; the only cost is the
-    // dev-only loss of an empty/just-restored session's continuity, which is acceptable (the
-    // renderer keeps the restored scrollback as read-only history).
+    // Re-attach the SAME recorded session id in the SAME recorded cwd (idempotent re-start).
+    //
+    // session-resume-relaunch-v1 (THE FIX): this branch MUST keep `existing.sessionId`, not mint a
+    // fresh one. The genuine restore-from-disk Start#1 (the resume branch above) consumed the
+    // resumeMap entry and recorded the ORIGINAL session id; a cwd-less Start#2 for the SAME pane
+    // (React StrictMode dev double-start, a renderer-reload re-issue, etc.) lands here. Minting a
+    // FRESH id at this point — the previous behaviour — overwrote `sessionMap[paneId]` with an
+    // EMPTY session that has no conversation on disk, which `enrichSnapshotForSave` then persisted,
+    // ORPHANING the original conversation: the content was "lost" AND `--resume <persisted-id>`
+    // later found nothing (FR-019 stable-id / FR-020 resume violated). Reusing the original id
+    // preserves resumability.
+    //
+    // FLAG — `--session-id`, NOT `--resume`: `--session-id <uuid>` is CREATE-OR-CONTINUE — it
+    // attaches to the id whether or not a conversation already exists. A populated session (the
+    // genuine-restore case) CONTINUES; an empty one (a fresh pick minted-then-killed by Start#1
+    // before any conversation existed) create-or-continues without the "No conversation found with
+    // session ID" error that `--resume` would print to the terminal. `resume:false` (no
+    // resume-failure window — there is nothing to "fail to resume"). The genuine restore-from-disk
+    // path (the resumeMap branch above) still uses `--resume` because there we DO have a prior
+    // conversation persisted across app restarts and want the resume-failure fallback armed.
+    //
+    // COLLISION NOTE: in a StrictMode double-start, Start#1's claude (which holds this id) may still
+    // be terminating when Start#2 spawns, so claude can momentarily reject the re-spawn with
+    // "Session ID <id> is already in use". That is a TRANSIENT, dev-only race that surfaces a
+    // recoverable terminal error — and critically the PERSISTED id stays correct, so the next
+    // start/relaunch resumes the conversation. The old "mint a fresh id" workaround traded that
+    // transient race for a PERMANENT orphaning of the conversation, which is the bug this fixes.
     const exists = dirExists(existing.cwd)
     const spawnCwd = exists ? existing.cwd : sandboxDir
-    const sessionId = mintSessionId()
-    sessionMap.set(paneId, { sessionId, cwd: existing.cwd })
-    return { args: ['--session-id', sessionId], resume: false, cwd: spawnCwd }
+    return { args: ['--session-id', existing.sessionId], resume: false, cwd: spawnCwd }
   }
   // Fresh path: a non-empty chosen directory overrides the default sandbox cwd (FR-004).
   const cwd = overrideCwd && overrideCwd.length > 0 ? overrideCwd : sandboxDir

@@ -166,32 +166,34 @@ describe('resolvePaneSpawn', () => {
     expect(sessionMap.get('p1')).toEqual({ sessionId: 'sess-2', cwd: PICKED })
   })
 
-  // terminal-cwd-sandbox-v1 (THE BUG): a restored tab's `pty:start` fires TWICE for the same
+  // session-resume-relaunch-v1 (THE BUG): a restored tab's `pty:start` fires TWICE for the same
   // paneId — React StrictMode in dev mounts → disposes → remounts. Start #1 finds the resume
-  // entry, resumes in the picked cwd, and SINGLE-CONSUMES the resume entry. The dispose between
-  // the two starts no longer clears `terminalSessionMap` (index.ts fix), so the session RECORD
-  // survives. Start #2 (same paneId, NO overrideCwd, no resume entry) must NOT downgrade to a
-  // fresh session in the sandbox — it must RE-ATTACH the same session in the SAME picked cwd.
-  // Pre-fix the resolver fell to the fresh branch and minted a sandbox session, permanently
-  // overwriting the recorded folder. This test FAILS without the new reuse branch (Start #2 would
-  // yield cwd=SANDBOX) and proves the fix (cwd stays the picked folder, same session id).
+  // entry, resumes the ORIGINAL session in the picked cwd, and SINGLE-CONSUMES the resume entry.
+  // The dispose between the two starts no longer clears `terminalSessionMap` (index.ts fix), so the
+  // session RECORD survives. Start #2 (same paneId, NO overrideCwd, no resume entry) must
+  // RE-ATTACH THE SAME ORIGINAL session id in the SAME picked cwd — NOT mint a fresh id and NOT
+  // re-sandbox.
   //
-  // FLAG: the reuse branch uses `--session-id <existing>` (NOT `--resume`). The recorded session
-  // could have been minted-then-killed THIS launch with no conversation yet; `--resume` would
-  // print "No conversation found with session ID: <id>" to the terminal, whereas `--session-id`
-  // is create-or-continue and never errors. (The genuine restore-from-disk Start #1 still resumes.)
-  it('idempotent re-start: Start#2 (same paneId, no override) re-attaches the picked cwd via --session-id, NOT the sandbox (StrictMode double-start)', () => {
+  // ROOT CAUSE this guards: the prior reuse branch MINTED A FRESH session id here, overwriting the
+  // record with an EMPTY session that has no conversation on disk. `enrichSnapshotForSave` then
+  // persisted that fresh id, so on the next relaunch the conversation was "lost" (orphaned) AND
+  // `--resume <persisted-id>` found nothing. Reusing the ORIGINAL id preserves resumability
+  // (FR-019 stable id / FR-020 resume).
+  //
+  // FLAG: the reuse branch uses `--session-id <ORIGINAL>` (NOT `--resume`). `--session-id` is
+  // create-or-continue: a populated session continues, an empty one never prints "No conversation
+  // found with session ID: <id>". (The genuine restore-from-disk Start #1 still uses `--resume`.)
+  it('idempotent re-start: Start#2 (same paneId, no override) re-attaches the ORIGINAL session id in the picked cwd (StrictMode double-start, resumability preserved)', () => {
     const PICKED = '/Users/me/a2tui'
     const resumeMap = new Map<string, PaneSessionRecord>([
       ['p1', { sessionId: 'sess-resume', cwd: PICKED }]
     ])
     const sessionMap = new Map<string, PaneSessionRecord>()
-    let n = 0
-    const mint = vi.fn(() => `sess-fresh-${++n}`)
+    const mint = vi.fn(() => 'sess-fresh-SHOULD-NOT-BE-USED')
     const dirExists = vi.fn(() => true)
 
     // Start #1: GENUINE restore-from-disk — resume in the picked cwd; single-consumes the resume
-    // entry, records the cwd. This path keeps `--resume` (a prior conversation exists on disk).
+    // entry, records the ORIGINAL id. This path keeps `--resume` (a prior conversation exists).
     const start1 = resolvePaneSpawn('p1', SANDBOX, resumeMap, sessionMap, mint, undefined, dirExists)
     expect(start1).toEqual({ args: ['--resume', 'sess-resume'], resume: true, cwd: PICKED })
     expect(resumeMap.has('p1')).toBe(false) // single-consumed
@@ -199,26 +201,24 @@ describe('resolvePaneSpawn', () => {
 
     // (StrictMode dispose runs here — index.ts no longer clears sessionMap, so the record survives.)
 
-    // Start #2: same paneId, NO resume entry, NO override. Re-attach the picked cwd with a FRESH
-    // session id — reusing 'sess-resume' would collide with Start#1's still-terminating claude
-    // ("Session ID is already in use").
+    // Start #2: same paneId, NO resume entry, NO override. Re-attach the SAME ORIGINAL id so the
+    // conversation is preserved — never mint a fresh id (which would orphan it) and never sandbox.
     const start2 = resolvePaneSpawn('p1', SANDBOX, resumeMap, sessionMap, mint, undefined, dirExists)
     expect(start2.resume).toBe(false)
     expect(start2.cwd).toBe(PICKED) // cwd preserved
-    expect(start2.cwd).not.toBe(SANDBOX) // <-- the cwd bug: pre-fix this was SANDBOX
+    expect(start2.cwd).not.toBe(SANDBOX)
     expect(start2.args[0]).toBe('--session-id')
     expect(start2.args).not.toContain('--resume') // never "No conversation found"
-    expect(start2.args[1]).not.toBe('sess-resume') // FRESH id — no "already in use" collision
-    expect(mint).toHaveBeenCalledTimes(1)
-    expect(sessionMap.get('p1')).toEqual({ sessionId: start2.args[1], cwd: PICKED })
+    expect(start2.args[1]).toBe('sess-resume') // <-- THE FIX: the ORIGINAL id, not a fresh one
+    expect(mint).not.toHaveBeenCalled() // no fresh id minted — the conversation is preserved
+    expect(sessionMap.get('p1')).toEqual({ sessionId: 'sess-resume', cwd: PICKED })
   })
 
-  // terminal-cwd-sandbox-v1: the SAME idempotent re-start protects a FRESHLY-PICKED tab too. Its
+  // session-resume-relaunch-v1: the SAME idempotent re-start protects a FRESHLY-PICKED tab too. Its
   // first start is a fresh spawn that records the picked cwd; a StrictMode remount (no resume
-  // entry, no override) must re-attach that recorded session in the picked cwd, not re-sandbox it.
-  // The reuse uses `--session-id` (the fresh session has no conversation yet — `--resume` would
-  // error), and reuses (does not re-mint) the same id.
-  it('idempotent re-start of a freshly-picked tab: re-start re-attaches the recorded picked cwd via --session-id', () => {
+  // entry, no override) must re-attach that recorded session in the picked cwd, keeping the SAME id
+  // (reusing it via `--session-id` create-or-continues an as-yet-empty session without error).
+  it('idempotent re-start of a freshly-picked tab: re-start re-attaches the recorded session id + picked cwd via --session-id', () => {
     const PICKED = '/Users/me/project'
     const { resumeMap, sessionMap } = makeMaps()
     let n = 0
@@ -229,15 +229,15 @@ describe('resolvePaneSpawn', () => {
     expect(first).toEqual({ args: ['--session-id', 'sess-1'], resume: false, cwd: PICKED })
 
     // StrictMode remount: no override, sessionMap record survives → re-attach the picked cwd with
-    // a FRESH session id (reusing 'sess-1' would collide with the still-terminating first claude).
+    // the SAME id (create-or-continue; reusing 'sess-1' preserves whatever conversation now exists).
     const second = resolvePaneSpawn('p1', SANDBOX, resumeMap, sessionMap, mint)
     expect(second.resume).toBe(false)
     expect(second.cwd).toBe(PICKED) // cwd preserved, NOT re-sandboxed
     expect(second.cwd).not.toBe(SANDBOX)
     expect(second.args).not.toContain('--resume') // never "No conversation found" on empty session
-    expect(second.args[1]).not.toBe('sess-1') // fresh id — no "already in use" collision
-    expect(mint).toHaveBeenCalledTimes(2)
-    expect(sessionMap.get('p1')).toEqual({ sessionId: second.args[1], cwd: PICKED })
+    expect(second.args[1]).toBe('sess-1') // SAME id — the conversation continues
+    expect(mint).toHaveBeenCalledTimes(1) // only the first start minted; the re-start reuses
+    expect(sessionMap.get('p1')).toEqual({ sessionId: 'sess-1', cwd: PICKED })
   })
 
   // restart-pty-cwd-v1 must still win on a re-start: an explicit folder pick (overrideCwd) on a
@@ -260,24 +260,62 @@ describe('resolvePaneSpawn', () => {
     expect(sessionMap.get('p1')?.cwd).toBe(SECOND)
   })
 
-  // terminal-cwd-sandbox-v1: the stale-cwd guard still applies to the idempotent reuse branch —
+  // session-resume-relaunch-v1: the stale-cwd guard still applies to the idempotent reuse branch —
   // if the recorded folder no longer resolves the SPAWN falls back to the sandbox while the RECORD
-  // keeps the chosen folder (non-destructive), so a transient miss never erases it.
-  it('idempotent re-start falls the SPAWN back to sandbox when the recorded cwd is gone, preserving the record', () => {
+  // keeps the chosen folder (non-destructive), so a transient miss never erases it. The SESSION ID
+  // is preserved regardless (only the spawn cwd falls back), so the conversation stays resumable.
+  it('idempotent re-start falls the SPAWN back to sandbox when the recorded cwd is gone, preserving the record AND the session id', () => {
     const GONE = '/persisted/gone'
     const { resumeMap, sessionMap } = makeMaps()
     sessionMap.set('p1', { sessionId: 'sess-keep', cwd: GONE })
-    const mint = vi.fn(() => 'sess-new')
+    const mint = vi.fn(() => 'sess-new-SHOULD-NOT-BE-USED')
     const dirExists = vi.fn((d: string) => d === SANDBOX)
     const result = resolvePaneSpawn('p1', SANDBOX, resumeMap, sessionMap, mint, undefined, dirExists)
-    // Reuse branch mints a FRESH `--session-id` (create-or-continue, no collision); the SPAWN
-    // falls back to sandbox because the recorded folder is gone.
+    // Reuse branch keeps the SAME `--session-id` (create-or-continue, conversation preserved); the
+    // SPAWN falls back to sandbox because the recorded folder is gone.
     expect(result.args[0]).toBe('--session-id')
-    expect(result.args[1]).toBe('sess-new')
+    expect(result.args[1]).toBe('sess-keep') // SAME id — never re-minted
     expect(result.resume).toBe(false)
     expect(result.cwd).toBe(SANDBOX)
-    // The record keeps the chosen folder so a reappearing folder restores next launch.
-    expect(sessionMap.get('p1')).toEqual({ sessionId: 'sess-new', cwd: GONE })
+    expect(mint).not.toHaveBeenCalled()
+    // The record keeps the chosen folder + the original id so a reappearing folder restores next launch.
+    expect(sessionMap.get('p1')).toEqual({ sessionId: 'sess-keep', cwd: GONE })
+  })
+
+  // session-resume-relaunch-v1 (THE REGRESSION, end-to-end branch selection): on a genuine
+  // quit→relaunch OR a Mac sleep/wake→restart recovery, the pane MUST continue the ORIGINAL
+  // claude session, NEVER replace it with a fresh `--session-id`. This asserts the full sequence
+  // that the two symptoms (content lost + resume impossible) both stem from a fresh-id substitution.
+  it('relaunch + restart-recovery keeps the ORIGINAL session id across the whole lifecycle (no fresh id ever substituted)', () => {
+    const CWD = '/Users/me/work'
+    const ORIGINAL = 'sess-original-conversation'
+    // session:load seeds the resume map from the persisted tab (index.ts session:load handler).
+    const resumeMap = new Map<string, PaneSessionRecord>([['p1', { sessionId: ORIGINAL, cwd: CWD }]])
+    const sessionMap = new Map<string, PaneSessionRecord>()
+    const mint = vi.fn(() => 'sess-FRESH-must-never-appear')
+    const dirExists = vi.fn(() => true)
+
+    // Relaunch: the first pty:start RESUMES the original conversation in its persisted cwd.
+    const relaunch = resolvePaneSpawn('p1', SANDBOX, resumeMap, sessionMap, mint, undefined, dirExists)
+    expect(relaunch).toEqual({ args: ['--resume', ORIGINAL], resume: true, cwd: CWD })
+    expect(sessionMap.get('p1')?.sessionId).toBe(ORIGINAL)
+
+    // Mac sleep/wake later kills the PTY; the user clicks Restart (index.ts PtyChannel.Restart now
+    // delegates to paneSpawnFor with NO override). The resume entry was already consumed, so this
+    // is the idempotent reuse branch — it MUST continue the ORIGINAL id, not start fresh.
+    const restart = resolvePaneSpawn('p1', SANDBOX, resumeMap, sessionMap, mint, undefined, dirExists)
+    expect(restart.resume).toBe(false)
+    expect(restart.args).toEqual(['--session-id', ORIGINAL]) // continue, do not orphan
+    expect(restart.cwd).toBe(CWD)
+
+    // A SECOND restart still continues the same conversation — the id is a stable invariant.
+    const restart2 = resolvePaneSpawn('p1', SANDBOX, resumeMap, sessionMap, mint, undefined, dirExists)
+    expect(restart2.args).toEqual(['--session-id', ORIGINAL])
+
+    // Across the entire lifecycle a fresh id was NEVER minted — the persisted id stays ORIGINAL, so
+    // every future relaunch can `--resume` the real conversation (both symptoms fixed at the root).
+    expect(mint).not.toHaveBeenCalled()
+    expect(sessionMap.get('p1')).toEqual({ sessionId: ORIGINAL, cwd: CWD })
   })
 
   it('does not affect a different pane (per-pane independence, FR-007)', () => {
