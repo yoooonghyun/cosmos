@@ -51,6 +51,15 @@ export interface SessionLockEnv {
   readEntry(filePath: string): { pid: number; sessionId: string } | null
   /** True when `pid` is a currently-running process (e.g. `process.kill(pid, 0)` succeeds). */
   isAlive(pid: number): boolean
+  /**
+   * Defense-in-depth (session-resume-relaunch-v2): true when `pid` belongs to THIS cosmos process
+   * or one of its live children — a holder we must NEVER kill (it is not an orphan from a previous
+   * launch). The exact-id registry match already makes a wrong target near-impossible (a sibling
+   * app like a Claude Code or fin-agent session holds a DIFFERENT id, so it is never selected), but
+   * this guard ensures we also never kill our own just-spawned child should it transiently register
+   * the same id. Optional — defaults to "not ours" so existing callers/tests are unaffected.
+   */
+  isOwnProcess?(pid: number): boolean
   /** Terminate `pid` (e.g. SIGTERM then, if needed, the OS reaps it). Best-effort; never throws. */
   killPid(pid: number): void
   /** Remove a stale registry file. Best-effort; never throws. */
@@ -108,6 +117,15 @@ export type SessionLockRecovery =
       retry: true
     }
   | {
+      /**
+       * The live holder of the id is THIS cosmos or one of its own children — never killed
+       * (session-resume-relaunch-v2 safety). The caller waits/retries rather than freeing it.
+       */
+      kind: 'own-process'
+      pid: number
+      retry: false
+    }
+  | {
       /** No registry entry names the id — the rejection is not a recoverable holder. */
       kind: 'no-holder'
       retry: false
@@ -115,8 +133,17 @@ export type SessionLockRecovery =
 
 /**
  * Recover the recorded `sessionId` so the caller can resume it: free a LIVE orphan (kill) or a
- * STALE registry file (remove), and report whether a retry is warranted. Pure decision +
- * injected side-effects; never throws, never mints a fresh id.
+ * STALE registry file (remove). Pure decision + injected side-effects; never throws, never mints a
+ * fresh id.
+ *
+ * NOTE on the `no-holder` case (session-resume-relaunch-v2): "no holder" does NOT mean "give up".
+ * Empirically (claude 2.1.150) `claude --resume <id>` only rejects "already in use" while a LIVE
+ * holder exists; with no live holder it resumes cleanly. So an in-use rejection followed by a
+ * `no-holder` scan means the orphan is in the DYING-HOLDER RACE — it was force-killed (its pty died
+ * with the old cosmos), removed its registry entry, but has not fully RELEASED the id yet. The
+ * caller must keep RE-ATTEMPTING the same-id resume on a short backoff (re-running this each
+ * attempt) until the orphan finishes exiting — never minting a fresh id. {@link planResumeRetry}
+ * encodes that decision.
  *
  * The caller MUST only invoke this for an id that THIS process is NOT itself currently running
  * (no live PTY for it) — that gate is what makes killing the holder safe (it is an orphan from a
@@ -131,6 +158,12 @@ export function recoverSessionLock(
     return { kind: 'no-holder', retry: false }
   }
   if (env.isAlive(holder.pid)) {
+    // Safety: never kill THIS cosmos or its own live children (session-resume-relaunch-v2). The
+    // exact-id match almost never selects a non-orphan, but if the live holder is ours we wait
+    // rather than kill — the backoff loop re-attempts the resume.
+    if (env.isOwnProcess?.(holder.pid)) {
+      return { kind: 'own-process', pid: holder.pid, retry: false }
+    }
     // The orphaned claude from the previous (un-clean) cosmos exit is still holding the id.
     // Killing it frees the id; also drop its registry file so the scan is immediately clean.
     env.killPid(holder.pid)
@@ -141,4 +174,65 @@ export function recoverSessionLock(
   // actually held; removing the stale file makes the next scan agree.
   env.removeFile(holder.filePath)
   return { kind: 'removed-stale', pid: holder.pid, retry: true }
+}
+
+/**
+ * Backoff schedule for the in-use resume retry (session-resume-relaunch-v2). Each entry is the
+ * delay (ms) to wait BEFORE the next same-id `--resume` attempt. The total budget (~1.75s here)
+ * comfortably outlasts the dying-orphan window (the orphan exits within a few hundred ms of its
+ * pty dying), while staying short enough that a genuinely unrecoverable id surfaces quickly.
+ * Exported so the wiring + tests share one source of truth.
+ */
+export const RESUME_RETRY_BACKOFF_MS: readonly number[] = [250, 250, 250, 500, 500]
+
+/** The decision {@link planResumeRetry} returns for ONE in-use rejection. */
+export type ResumeRetryPlan =
+  | {
+      /** Retry the SAME-id `--resume` after `delayMs`. `freedHolder` is true when this attempt
+       *  killed/removed a holder (so the id should be free almost immediately). */
+      action: 'retry'
+      delayMs: number
+      freedHolder: boolean
+    }
+  | {
+      /** The backoff budget is exhausted and the id is still rejected — surface failure. NEVER
+       *  mint a fresh id on this path; the caller reports a clear, recoverable error instead. */
+      action: 'give-up'
+    }
+
+/**
+ * Decide what to do after an in-use `--resume` rejection on attempt #`attempt` (0-based: the
+ * initial spawn that just failed is attempt 0, so the FIRST call here plans attempt 1).
+ *
+ * Pure: it runs the side-effecting {@link recoverSessionLock} (which may kill an orphan / remove a
+ * stale file) and then consults the fixed backoff schedule. The id is ALWAYS preserved — there is
+ * no fresh-mint branch. We give up only once every scheduled backoff slot has been used and the
+ * holder is still not gone — at which point the caller surfaces a recoverable error.
+ *
+ * Why retry even on `no-holder`: the dying-orphan race (see {@link recoverSessionLock}). The scan
+ * can race the orphan's exit and see nothing, yet the id is still mid-release; waiting one backoff
+ * slot and re-attempting the resume is exactly what lets it succeed.
+ *
+ * @param sessionId  the recorded id being recovered (preserved across all attempts)
+ * @param attempt    1-based index of the retry being planned (1 = first retry after the initial
+ *                   failed spawn). Caller increments this per attempt.
+ * @param env        the live/injected registry env
+ * @param backoff    the backoff schedule (defaults to {@link RESUME_RETRY_BACKOFF_MS})
+ */
+export function planResumeRetry(
+  sessionId: string,
+  attempt: number,
+  env: SessionLockEnv,
+  backoff: readonly number[] = RESUME_RETRY_BACKOFF_MS
+): ResumeRetryPlan {
+  // attempt is 1-based; the delay for retry #N is backoff[N-1].
+  if (attempt < 1 || attempt > backoff.length) {
+    return { action: 'give-up' }
+  }
+  const recovery = recoverSessionLock(sessionId, env)
+  return {
+    action: 'retry',
+    delayMs: backoff[attempt - 1],
+    freedHolder: recovery.retry
+  }
 }

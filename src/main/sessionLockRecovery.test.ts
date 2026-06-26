@@ -3,6 +3,8 @@ import {
   isAlreadyInUseError,
   findRegistryHolder,
   recoverSessionLock,
+  planResumeRetry,
+  RESUME_RETRY_BACKOFF_MS,
   type SessionLockEnv
 } from './sessionLockRecovery'
 
@@ -32,7 +34,8 @@ describe('isAlreadyInUseError', () => {
 /** Build a SessionLockEnv over an in-memory registry for deterministic tests. */
 function makeEnv(
   entries: Array<{ file: string; pid: number; sessionId: string }>,
-  alivePids: Set<number>
+  alivePids: Set<number>,
+  ownPids: Set<number> = new Set()
 ): {
   env: SessionLockEnv
   killed: number[]
@@ -45,6 +48,7 @@ function makeEnv(
     listRegistryFiles: () => entries.map((e) => e.file),
     readEntry: (filePath) => byFile.get(filePath) ?? null,
     isAlive: (pid) => alivePids.has(pid),
+    isOwnProcess: (pid) => ownPids.has(pid),
     killPid: (pid) => {
       killed.push(pid)
     },
@@ -140,5 +144,76 @@ describe('recoverSessionLock', () => {
     expect(result.kind).toBe('killed-orphan')
     expect(killed).toEqual([200]) // the sibling's live claude (pid 100) is never killed
     expect(removed).toEqual(['/s/200.json'])
+  })
+
+  // session-resume-relaunch-v2 safety: when the live holder is THIS cosmos / its own child, we must
+  // NEVER kill it. Report `own-process` (no retry signal — the caller waits) and touch nothing.
+  it('NEVER kills a holder that is this process or its own child (own-process)', () => {
+    const { env, killed, removed } = makeEnv(
+      [{ file: '/s/300.json', pid: 300, sessionId: 'sess-ours' }],
+      new Set([300]),
+      new Set([300]) // pid 300 is ours
+    )
+    const result = recoverSessionLock('sess-ours', env)
+    expect(result).toEqual({ kind: 'own-process', pid: 300, retry: false })
+    expect(killed).toEqual([]) // never kill our own process
+    expect(removed).toEqual([])
+  })
+})
+
+describe('planResumeRetry (session-resume-relaunch-v2 — dying-holder backoff)', () => {
+  // THE RACE: an in-use rejection whose scan finds NO live holder (the orphan exited mid-release).
+  // We must STILL retry the same id on a backoff slot — never give up to a fresh mint.
+  it('retries the SAME id on a backoff slot even when no holder is found (dying-holder race)', () => {
+    const { env, killed, removed } = makeEnv([], new Set())
+    const plan = planResumeRetry('sess-x', 1, env)
+    expect(plan).toEqual({ action: 'retry', delayMs: RESUME_RETRY_BACKOFF_MS[0], freedHolder: false })
+    expect(killed).toEqual([]) // nothing to kill — just wait for the dying orphan to release
+    expect(removed).toEqual([])
+  })
+
+  // When a live orphan IS still present, the same plan call frees it (kill) and reports freedHolder.
+  it('frees a live orphan and retries quickly (freedHolder=true)', () => {
+    const { env, killed } = makeEnv(
+      [{ file: '/s/9.json', pid: 9, sessionId: 'sess-x' }],
+      new Set([9])
+    )
+    const plan = planResumeRetry('sess-x', 1, env)
+    expect(plan).toEqual({ action: 'retry', delayMs: RESUME_RETRY_BACKOFF_MS[0], freedHolder: true })
+    expect(killed).toEqual([9])
+  })
+
+  // Each attempt uses the next backoff slot; the total budget is the schedule length.
+  it('uses the matching backoff delay per attempt across the schedule', () => {
+    const { env } = makeEnv([], new Set())
+    for (let n = 1; n <= RESUME_RETRY_BACKOFF_MS.length; n++) {
+      const plan = planResumeRetry('sess-x', n, env)
+      expect(plan.action).toBe('retry')
+      if (plan.action === 'retry') {
+        expect(plan.delayMs).toBe(RESUME_RETRY_BACKOFF_MS[n - 1])
+      }
+    }
+  })
+
+  // Once the budget is exhausted (attempt beyond the schedule), give up — but the caller still
+  // NEVER mints a fresh id (it surfaces a recoverable error and leaves the recorded id intact).
+  it('gives up after the backoff budget is exhausted', () => {
+    const { env } = makeEnv([], new Set())
+    const beyond = RESUME_RETRY_BACKOFF_MS.length + 1
+    expect(planResumeRetry('sess-x', beyond, env)).toEqual({ action: 'give-up' })
+  })
+
+  it('gives up for an invalid (non-positive) attempt number', () => {
+    const { env } = makeEnv([], new Set())
+    expect(planResumeRetry('sess-x', 0, env)).toEqual({ action: 'give-up' })
+  })
+
+  // The race resolves: early attempts find no holder (orphan mid-exit), a later attempt succeeds
+  // because the resume itself attaches (modeled here as the holder being gone the whole time — the
+  // plan keeps returning 'retry' within budget, which is exactly what lets the eventual resume win).
+  it('keeps retrying within budget so a late-released id can still be resumed (never fresh)', () => {
+    const { env } = makeEnv([], new Set())
+    const plans = [1, 2, 3].map((n) => planResumeRetry('sess-x', n, env))
+    expect(plans.every((p) => p.action === 'retry')).toBe(true)
   })
 })

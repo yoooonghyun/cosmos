@@ -35,6 +35,7 @@ import {
 } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { randomUUID } from 'node:crypto'
+import { execFileSync } from 'node:child_process'
 import {
   AgentChannel,
   ConfluenceChannelName,
@@ -57,7 +58,11 @@ import {
 } from '../shared/ipc'
 import { matchShortcut } from './shortcutMatch'
 import { resolvePaneSpawn, type ResolvedPaneSpawn } from './paneSpawn'
-import { recoverSessionLock, type SessionLockEnv } from './sessionLockRecovery'
+import {
+  planResumeRetry,
+  RESUME_RETRY_BACKOFF_MS,
+  type SessionLockEnv
+} from './sessionLockRecovery'
 import type { SlackConnectionStatus } from '../shared/slack'
 import type { JiraConnectionStatus } from '../shared/jira'
 import { JiraAdapterSource } from '../shared/jira'
@@ -434,6 +439,68 @@ function paneSpawnFor(
 }
 
 /**
+ * session-resume-relaunch-v2: how many in-use retries this pane has used in the CURRENT recovery
+ * sequence (paneId → attempt count). Reset to 0 when a non-retry `pty:start`/`pty:restart` for the
+ * pane begins a fresh sequence, and cleared on dispose. Lets the re-entrant `onSessionInUse` (each
+ * failed `--resume` fires it again) count attempts across the async backoff without a fresh mint.
+ */
+const terminalResumeAttempts = new Map<string, number>()
+
+/**
+ * session-resume-relaunch-v2: one step of the in-use SAME-ID resume backoff. Called every time a
+ * `--resume <id>` attempt is rejected "already in use" (re-entrant: each failed retry fires
+ * `onSessionInUse` again). It plans the next attempt via the pure {@link planResumeRetry} (which
+ * also kills a still-alive orphan / removes a stale registry file), and either schedules a delayed
+ * same-id re-`--resume` or — once the backoff budget is exhausted — surfaces a recoverable error.
+ * The id is NEVER replaced with a fresh one on this path (that is the content-loss bug this fixes).
+ */
+function onSessionInUseForPane(paneId: string, sessionId: string): void {
+  // A live session re-attached for this pane in the meantime (e.g. a later start won the race) —
+  // do not touch any holder or schedule a retry against a now-live pane.
+  if (ptyManager?.isRunning(paneId)) {
+    terminalResumeAttempts.delete(paneId)
+    return
+  }
+  const nextAttempt = (terminalResumeAttempts.get(paneId) ?? 0) + 1
+  terminalResumeAttempts.set(paneId, nextAttempt)
+
+  const plan = planResumeRetry(sessionId, nextAttempt, claudeSessionLockEnv)
+  if (plan.action === 'give-up') {
+    // Budget exhausted and the id is still held/rejected. Do NOT mint fresh (that orphans the
+    // conversation). Surface a clear, recoverable error so the user can retry manually; the
+    // recorded id stays correct so a later relaunch (after the holder finally dies) resumes it.
+    terminalResumeAttempts.delete(paneId)
+    console.warn(
+      `[session] could not free in-use session ${sessionId} for pane ${paneId} after ${RESUME_RETRY_BACKOFF_MS.length} attempts; leaving id intact for a later resume`
+    )
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send(PtyChannel.Exit, {
+        paneId,
+        error:
+          'This terminal’s previous Claude session is still shutting down (its id is briefly in use). It was not changed — reopen or restart this tab in a moment to resume it.'
+      })
+    }
+    return
+  }
+
+  const prior = terminalSessionMap.get(paneId)
+  const cwd = prior?.cwd ?? sandboxDirCached
+  console.warn(
+    `[session] in-use resume retry #${nextAttempt} for pane ${paneId} (id ${sessionId}, freedHolder=${plan.freedHolder}); waiting ${plan.delayMs}ms`
+  )
+  // Wait one backoff slot for the dying holder to finish releasing the id, then re-`--resume` the
+  // SAME id in the recorded cwd. A success leaves the pane live (no further onSessionInUse); a
+  // repeat rejection re-enters this function and advances the attempt counter.
+  setTimeout(() => {
+    if (ptyManager?.isRunning(paneId)) {
+      terminalResumeAttempts.delete(paneId)
+      return // already recovered/replaced
+    }
+    ptyManager?.start(paneId, { args: ['--resume', sessionId], resume: true, cwd })
+  }, plan.delayMs)
+}
+
+/**
  * restart-pty-cwd-v1: does `absDir` resolve to an existing directory on disk? Used by
  * `resolvePaneSpawn` to reject a stale persisted resume cwd (a deleted/renamed/moved repo)
  * before it reaches node-pty — resuming into a non-existent dir kills `claude` on spawn
@@ -492,6 +559,25 @@ const claudeSessionLockEnv: SessionLockEnv = {
     } catch (err) {
       // ESRCH → dead. EPERM → alive but not ours (treat as alive so we never remove a live entry).
       return (err as NodeJS.ErrnoException)?.code === 'EPERM'
+    }
+  },
+  // Defense-in-depth (session-resume-relaunch-v2): true when `pid` is THIS process or one of its
+  // direct children — the latter being the embedded `claude` we spawned (ppid === our pid). An
+  // ORPHAN from a previous launch was reparented (its old cosmos died), so its ppid is launchd (1),
+  // never us — hence it is correctly NOT "own". Best-effort via `ps`; any failure → false ("not
+  // ours"), preserving the prior behaviour so a transient ps error never blocks a real recovery.
+  isOwnProcess: (pid) => {
+    if (pid === process.pid) {
+      return true
+    }
+    try {
+      const ppid = execFileSync('ps', ['-o', 'ppid=', '-p', String(pid)], {
+        encoding: 'utf8',
+        timeout: 1000
+      }).trim()
+      return ppid === String(process.pid)
+    } catch {
+      return false
     }
   },
   killPid: (pid) => {
@@ -881,27 +967,7 @@ function createPtyManager(window: BrowserWindow, sandboxDir: string): PtyManager
       // Guard: only attempt recovery when THIS process has no live PTY for the pane (the manager
       // already deleted the dead session before firing), so we can only ever kill a true orphan,
       // never a sibling pane's just-spawned claude.
-      onSessionInUse: (paneId, sessionId) => {
-        if (ptyManager?.isRunning(paneId)) {
-          return // a live session re-attached in the meantime — do not touch any holder
-        }
-        const recovery = recoverSessionLock(sessionId, claudeSessionLockEnv)
-        if (!recovery.retry) {
-          // No registry entry actually holds the id (holder already exited, or the rejection came
-          // from elsewhere). Surface the exit normally so the pane is not left silently dead.
-          console.warn(`[session] "${sessionId}" reported in use but no holder found; not retrying`)
-          ptyManager?.start(paneId, { args: ['--resume', sessionId], resume: true })
-          return
-        }
-        const prior = terminalSessionMap.get(paneId)
-        const cwd = prior?.cwd ?? sandboxDir
-        console.warn(
-          `[session] freed in-use session ${sessionId} for pane ${paneId} (${recovery.kind}); retrying resume`
-        )
-        // Re-`--resume` the SAME id in the recorded cwd. The id is preserved end-to-end, so the
-        // conversation is restored, not lost.
-        ptyManager?.start(paneId, { args: ['--resume', sessionId], resume: true, cwd })
-      }
+      onSessionInUse: (paneId, sessionId) => onSessionInUseForPane(paneId, sessionId)
     },
     {
       cwd: sandboxDir,
@@ -925,6 +991,9 @@ function registerIpcHandlers(): void {
     // fresh `--session-id` is minted. Either way the id+cwd are recorded for save.
     // terminal-open-directory-picker-v1 FR-004: a freshly-picked tab carries the chosen
     // `cwd`; for a fresh spawn it overrides the sandbox cwd (a resumed pane ignores it).
+    // session-resume-relaunch-v2: a renderer-driven start begins a FRESH recovery sequence, so
+    // reset the in-use retry counter (a stale count from a prior pane lifecycle must not shorten it).
+    terminalResumeAttempts.delete(payload.paneId)
     ptyManager?.start(payload.paneId, paneSpawnFor(payload.paneId, sandboxDirCached, payload.cwd))
   })
 
@@ -995,6 +1064,8 @@ function registerIpcHandlers(): void {
     if (!payload) {
       return // invalid -> warned + ignored (SC-005)
     }
+    // session-resume-relaunch-v2: a manual restart begins a fresh recovery sequence.
+    terminalResumeAttempts.delete(payload.paneId)
     ptyManager?.start(payload.paneId, paneSpawnFor(payload.paneId, sandboxDirCached))
   })
 
@@ -1021,6 +1092,8 @@ function registerIpcHandlers(): void {
     // below — so the lingering entry is never read. This mirrors the keep-on-exit policy in
     // `onExit` (the record outlives the PTY so a restart re-spawns in the right folder).
     terminalResumeMap.delete(payload.paneId)
+    // session-resume-relaunch-v2: a disposed pane has no pending in-use recovery — drop its counter.
+    terminalResumeAttempts.delete(payload.paneId)
     // terminal-file-explorer-v1 (FR-016): release the pane's fs watcher on tab close so no
     // watcher leaks. (The session map delete above also makes its root unresolvable.)
     fsExplorer?.stopWatch(payload.paneId)
