@@ -136,9 +136,22 @@ export interface SlackUser {
   displayName: string
 }
 
-/** A single search hit (FR-015, FR-017, Scopes: search:read user token). */
+/**
+ * A single search hit (FR-015, FR-017, Scopes: search:read user token).
+ *
+ * slack-search-row-full-parity-v1: a search hit is mapped to the SAME canonical
+ * `SlackMessageRow` as a channel-history message, so it must carry the SAME render-bearing
+ * fields a history message does — otherwise the search row silently renders sparse (no inline
+ * images, not clickable to open its thread) and reads as a DIFFERENT component. `search.messages`
+ * returns the matched message standalone with `files`/`blocks` (when present) + a top-level `ts` +
+ * `channel.id`, so `images` and the thread coordinates (`channelId` + `threadTs = ts`) ARE
+ * recoverable and now carried. The ONLY field `search.messages` does not return is the parent's
+ * `reply_count` (a search hit is the message itself, not its thread metadata), so `replyCount` is
+ * deliberately absent on a search hit — the one accepted, documented divergence (the "N replies"
+ * label simply does not render for a search row).
+ */
 export interface SlackSearchMatch {
-  /** Message timestamp/id of the hit. */
+  /** Message timestamp/id of the hit. ALSO its own thread key (`threadTs === ts`). */
   ts: string
   /** Author user id of the hit. */
   userId: string
@@ -146,16 +159,31 @@ export interface SlackSearchMatch {
   userName?: string
   /** Matching message text (mentions resolved, standard emoji glyph-substituted). */
   text: string
-  /** Channel id the hit is in. */
+  /** Channel id the hit is in. ALSO the thread-open coordinate the row drills into. */
   channelId: string
   /** Channel name the hit is in (for the `#channel` context chip, design §2.2). */
   channelName?: string
   /**
    * Per-match custom-emoji shortcode → opaque image ref map (slack-rich-message-
    * render-v1, FR-006/FR-012). Carried so a search row's body renders custom emoji
-   * identically to a history row. Search rows do NOT carry image attachments in v1.
+   * identically to a history row.
    */
   customEmoji?: Record<string, string>
+  /**
+   * Inline image attachments as OPAQUE refs (slack-search-row-full-parity-v1), extracted from
+   * the matched message's `files[]`/`blocks[]` by the SAME `extractImageRefs` a history message
+   * uses — so a search row shows the same inline thumbnail strip a history row does. Absent /
+   * empty when the matched message has no images. NEVER a token / token-bearing URL (FR-014).
+   */
+  images?: SlackImageRef[]
+  /**
+   * The thread root key the row drills into (slack-search-row-full-parity-v1). A search hit IS a
+   * message, and a message is its own thread root, so `threadTs === ts`. Carried so the search row
+   * wires `onOpenThread` (with `channelId`) EXACTLY like a native/generated history row — the row
+   * becomes clickable to open its thread (and post the first reply) instead of an inert variant.
+   * Non-secret coordinate; never a token.
+   */
+  threadTs?: string
 }
 
 /* ------------------------------------------------------------------------- *

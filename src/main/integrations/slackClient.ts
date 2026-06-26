@@ -389,8 +389,15 @@ export class SlackClient {
    * Keyword search (search.messages, FR-015). Requires a user token; pass the
    * user token here (the manager decides which token to attach). Mentions + custom
    * emoji are resolved per-match via the same {@link MessageResolvers} as history so a
-   * search row's body renders identically (slack-rich-message-render-v1, FR-012). Search
-   * rows do NOT carry image attachments in v1.
+   * search row's body renders identically (slack-rich-message-render-v1, FR-012).
+   *
+   * slack-search-row-full-parity-v1: a search hit is also given the SAME render-bearing fields a
+   * history message carries so it maps to the canonical row identically — inline `images` (extracted
+   * from the match's `files[]`/`blocks[]` by the SAME `extractImageRefs` as history) and the thread
+   * coordinates (`channelId` + `threadTs = ts`, since a message IS its own thread root) so the row
+   * is clickable to open its thread. `reply_count` is NOT returned by `search.messages` (the hit is
+   * the message, not its thread metadata), so `replyCount` stays absent — the one documented
+   * divergence (the "N replies" label simply does not render for a search row).
    */
   async search(
     auth: SlackCallAuth,
@@ -418,15 +425,24 @@ export class SlackClient {
         const idToName = await resolveMentionNames(rawText, resolvers.resolveUserName)
         const customEmoji = await resolveCustomEmoji(rawText, resolvers.resolveCustomEmojiRef)
         const customEmojiNames = new Set(Object.keys(customEmoji))
+        // slack-search-row-full-parity-v1: extract inline images from the matched message via the
+        // SAME extractor history uses (returns [] when the match has no files/blocks — safe always).
+        const images = extractImageRefs(m)
+        const ts = String(m.ts ?? '')
+        const channelId = String((channel as Record<string, unknown>).id ?? '')
         return {
-          ts: String(m.ts ?? ''),
+          ts,
           userId: String(m.user ?? ''),
           text: decodeSlackText(rawText, { idToName, customEmoji: customEmojiNames }),
-          channelId: String((channel as Record<string, unknown>).id ?? ''),
+          channelId,
           ...(typeof (channel as Record<string, unknown>).name === 'string'
             ? { channelName: String((channel as Record<string, unknown>).name) }
             : {}),
-          ...(customEmojiNames.size > 0 ? { customEmoji } : {})
+          ...(customEmojiNames.size > 0 ? { customEmoji } : {}),
+          ...(images.length > 0 ? { images } : {}),
+          // A message is its own thread root → threadTs = ts, so the row opens its own thread.
+          // Only emit it when BOTH coordinates are real (a coordless row degrades to non-interactive).
+          ...(ts !== '' && channelId !== '' ? { threadTs: ts } : {})
         }
       })
     )

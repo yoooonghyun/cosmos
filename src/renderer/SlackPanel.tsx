@@ -50,8 +50,10 @@ import { ScrollArea } from '@/components/ui/scroll-area'
 import { slackCatalog, SLACK_CATALOG_ID, SLACK_OPEN_CHANNEL_ACTION } from './slackCatalog'
 import { SlackMessageRow } from './slackCatalog/SlackMessageRow'
 import {
+  buildOpenThreadContext,
   countLabel,
   filterChannelsByName,
+  messageToRowProps,
   prependOlderMessages,
   searchMatchToRowProps,
   searchModeLabel,
@@ -218,16 +220,16 @@ function MessageRow({
   message: SlackMessage
   onOpenThread?: (message: SlackMessage) => void
 }): React.JSX.Element {
+  // slack-search-row-full-parity-v1: build the row props through the ONE shared mapper
+  // (`messageToRowProps`) that native search + the generated rows also use, so the field
+  // selection can never diverge across contexts. The native `onOpenThread` carries the
+  // `SlackMessage` (vs. the catalog row's dispatched action) — the only per-context piece.
   return (
     <SlackMessageRow
-      ts={message.ts}
-      userId={message.userId}
-      {...(message.userName !== undefined ? { userName: message.userName } : {})}
-      text={message.text}
-      {...(message.replyCount !== undefined ? { replyCount: message.replyCount } : {})}
-      {...(message.customEmoji ? { customEmoji: message.customEmoji } : {})}
-      {...(message.images ? { images: message.images } : {})}
-      {...(onOpenThread ? { onOpenThread: () => onOpenThread(message) } : {})}
+      {...messageToRowProps(
+        message,
+        onOpenThread ? { onOpenThread: () => onOpenThread(message) } : {}
+      )}
     />
   )
 }
@@ -946,7 +948,8 @@ function SlackThreadPanel({
 function SearchResults({
   query,
   onReconnect,
-  resolveMatchNames
+  resolveMatchNames,
+  onOpenThread
 }: {
   query: string
   onReconnect: () => void
@@ -958,6 +961,13 @@ function SearchResults({
    * `resolveNames`, so a search row's author/avatar now matches a history row.
    */
   resolveMatchNames: (matches: SlackSearchMatch[]) => Promise<SlackSearchMatch[]>
+  /**
+   * Open the right-docked thread for a search hit (slack-search-row-full-parity-v1). A search
+   * hit now carries thread coordinates (`channelId` + `threadTs = ts`), so a search row is
+   * clickable to open its own thread EXACTLY like a native/generated history row — the same
+   * single open-thread state. Absent coords ⇒ the row stays non-interactive (graceful).
+   */
+  onOpenThread: (ctx: SlackOpenThreadContext) => void
 }): React.JSX.Element {
   const [items, setItems] = useState<SlackSearchMatch[]>([])
   const [loading, setLoading] = useState(true)
@@ -998,20 +1008,41 @@ function SearchResults({
     return <EmptyLine>No results for “{query}”.</EmptyLine>
   }
   return (
+    // slack-search-row-full-parity-v1: IDENTICAL wrapper to the history `MessageList` body
+    // (ScrollArea h-full → a bare `flex flex-col` of rows) so the rows sit in the same chrome.
+    // The count label matches the history list's class (`px-3 py-1.5 text-xs`).
     <ScrollArea className="h-full">
       <div className="flex flex-col">
-        <p className="px-3 py-2 text-xs text-muted-foreground" aria-live="polite">
+        <p className="px-3 py-1.5 text-xs text-muted-foreground" aria-live="polite">
           {items.length} {items.length === 1 ? 'result' : 'results'} for “{query}”
         </p>
-        {/* bug slack-search-shared-row-v1 / slack-search-row-data-parity-v1 (Issue 2): search hits
-            render via the SAME shared SlackMessageRow AND through the SAME field mapper
-            (`searchMatchToRowProps`) the generated path uses — identical avatars, rich text, custom
-            emoji, and RESOLVED author name (resolveMatchNames ran above) — instead of a divergent
-            row or a sparse raw-id one. The cross-channel `#channelName` chip is the only intended
-            difference; no thread coords ⇒ non-interactive row (search has no drill-in). */}
-        {items.map((m) => (
-          <SlackMessageRow key={`${m.channelId}-${m.ts}`} {...searchMatchToRowProps(m)} />
-        ))}
+        {/* slack-search-row-full-parity-v1 (supersedes slack-search-shared-row-v1): search hits
+            render via the SAME canonical SlackMessageRow AND the SAME unified field mapper
+            (`searchMatchToRowProps` → `messageToRowProps`) the native + generated history rows use,
+            so avatars, rich text, custom emoji, RESOLVED author name, and now inline IMAGES are
+            identical. A search hit carries thread coords (channelId + threadTs = ts), so the row is
+            ALSO clickable to open its own thread (onOpenThread) — no longer an inert variant. The
+            cross-channel `#channelName` chip + the absent "N replies" label (search.messages omits
+            reply_count) are the only intended differences. */}
+        {items.map((m) => {
+          const ctx = buildOpenThreadContext({
+            channelId: m.channelId,
+            threadTs: m.threadTs,
+            ts: m.ts,
+            userId: m.userId,
+            ...(m.userName !== undefined ? { userName: m.userName } : {}),
+            text: m.text
+          })
+          return (
+            <SlackMessageRow
+              key={`${m.channelId}-${m.ts}`}
+              {...searchMatchToRowProps(
+                m,
+                ctx ? { onOpenThread: () => onOpenThread(ctx) } : {}
+              )}
+            />
+          )
+        })}
       </div>
     </ScrollArea>
   )
@@ -1521,6 +1552,7 @@ export function SlackPanel({ active }: { active: boolean }): React.JSX.Element {
                         query={view.query}
                         onReconnect={() => void refreshStatus()}
                         resolveMatchNames={resolveMatchNames}
+                        onOpenThread={openThreadFor}
                       />
                     )}
                   </div>

@@ -114,7 +114,7 @@ describe('row mappers (non-secret bound-row shape parity)', () => {
     )
   })
 
-  it('slackSearchRow omits absent userName/channelName (missing optional)', () => {
+  it('slackSearchRow omits absent userName/channelName/images/threadTs (missing optional)', () => {
     expect(slackSearchRow(MATCH)).toEqual({
       ts: MATCH.ts,
       userId: 'U2',
@@ -125,6 +125,24 @@ describe('row mappers (non-secret bound-row shape parity)', () => {
       userName: 'Bo',
       channelName: 'general'
     })
+  })
+
+  // slack-search-row-full-parity-v1: a search hit now carries the SAME render-bearing fields a
+  // history row does — inline images + the thread coordinate (threadTs = ts) so the generated
+  // search row shows thumbnails AND is clickable to open its thread. replyCount stays absent.
+  it('slackSearchRow carries images + threadTs when the match has them (full parity)', () => {
+    const images = [{ ref: 'cosmos-slack-img://x', alt: 'pic' }]
+    const row = slackSearchRow({ ...MATCH, images, threadTs: MATCH.ts })
+    expect(row).toMatchObject({ images, threadTs: MATCH.ts, channelId: 'C1' })
+    // The coords let the generated SearchResultRow build a thread-open context (channelId+threadTs).
+    expect(row).toHaveProperty('threadTs', MATCH.ts)
+  })
+
+  it('slackSearchRow carries no token/secret even with coordinates/images (FR-019)', () => {
+    const images = [{ ref: 'cosmos-slack-img://x' }]
+    expect(
+      JSON.stringify(slackSearchRow({ ...MATCH, images, threadTs: MATCH.ts }))
+    ).not.toMatch(/Bearer|xoxb|xoxp|accessToken|refreshToken|token/i)
   })
 })
 
@@ -303,17 +321,38 @@ describe('slackAdapterResolver — search (FR-006)', () => {
     })
   })
 
-  // slack-generative-message-parity-v1 (FR-013): search rows must NOT gain thread coords.
-  it('does NOT inject thread coordinates into search rows (no channelId/threadTs)', async () => {
+  // slack-search-row-full-parity-v1 (supersedes the old "search rows must NOT gain thread coords"):
+  // the resolver passes the match's own fields through `slackSearchRow`, so a match that carries
+  // images + threadTs (main extracts them now) yields a row with them — the generated search row
+  // then shows thumbnails AND is clickable to open its thread, exactly like a history row.
+  it('passes through images + threadTs from the match (full parity, FR-013)', async () => {
+    const images = [{ ref: 'cosmos-slack-img://x' }]
+    const m = manager({
+      search: vi.fn(
+        async (): Promise<SlackResult<SlackPage<SlackSearchMatch>>> => ({
+          ok: true,
+          data: { items: [{ ...MATCH, userName: 'Bo', images, threadTs: MATCH.ts }] }
+        })
+      )
+    })
+    const out = await slackAdapterResolver(m)({
+      dataSource: SlackAdapterSource.Search,
+      query: { query: 'hello' }
+    })
+    expect(out.ok).toBe(true)
+    const items = (out.ok ? out.items : []) ?? []
+    expect(items[0]).toMatchObject({ images, threadTs: MATCH.ts, channelId: 'C1' })
+  })
+
+  it('a match WITHOUT thread coords yields a non-interactive row (graceful — no threadTs)', async () => {
     const out = await slackAdapterResolver(manager())({
       dataSource: SlackAdapterSource.Search,
       query: { query: 'hello' }
     })
     expect(out.ok).toBe(true)
     const items = (out.ok ? out.items : []) ?? []
+    // The default MATCH fixture has no threadTs, so the row stays non-interactive (degrades safely).
     expect(items[0]).not.toHaveProperty('threadTs')
-    // (SearchResultRow keeps its own channelId field — that is the hit's channel, not a
-    // thread coordinate the MessageRow drill-in reads.)
   })
 
   it('surfaces search_unavailable as a recoverable notice (FR-007)', async () => {

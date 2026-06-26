@@ -172,9 +172,51 @@ describe('SlackClient reads (FR-013, FR-014, FR-026)', () => {
         userId: 'U7',
         text: 'found it',
         channelId: 'C3',
-        channelName: 'eng'
+        channelName: 'eng',
+        // slack-search-row-full-parity-v1: a message is its own thread root, so threadTs = ts is
+        // carried even with no files/blocks — making the search row clickable to open its thread.
+        threadTs: '9.9'
       })
       expect(result.data.nextCursor).toBe('2')
+    }
+  })
+
+  it('search extracts inline images + thread coords for full row parity (slack-search-row-full-parity-v1)', async () => {
+    // search.messages returns the matched message standalone WITH its files[]/blocks[] when present,
+    // so a search hit can carry the SAME inline images a history row does, plus threadTs = ts so the
+    // row opens its own thread. reply_count is NOT returned by search.messages → replyCount absent.
+    const fetchImpl: FetchLike = async () =>
+      res({
+        ok: true,
+        messages: {
+          matches: [
+            {
+              ts: '12.3',
+              user: 'U1',
+              text: 'see pic',
+              channel: { id: 'C9', name: 'design' },
+              files: [
+                {
+                  mimetype: 'image/png',
+                  url_private: 'https://files.slack.com/files-pri/T1-F1/pic.png',
+                  title: 'pic'
+                }
+              ]
+            }
+          ],
+          paging: { page: 1, pages: 1 }
+        }
+      })
+    const result = await new SlackClient({ fetchImpl }).search({ token: 'xoxp-user' }, 'pic')
+    expect(result.ok).toBe(true)
+    if (result.ok) {
+      const m = result.data.items[0]
+      expect(m.threadTs).toBe('12.3')
+      expect(m.images).toBeDefined()
+      expect(m.images).toHaveLength(1)
+      expect(m.images?.[0].ref.startsWith('cosmos-slack-img://')).toBe(true)
+      // search.messages does not return reply_count → the search row carries no "N replies".
+      expect('replyCount' in m).toBe(false)
     }
   })
 

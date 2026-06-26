@@ -132,18 +132,28 @@ export function slackMessageRow(
   }
 }
 
-/** Map one search match to the bound row shape `SearchResultList`/`SearchResultRow` reads. */
+/**
+ * Map one search match to the bound row shape `SearchResultList`/`SearchResultRow` reads.
+ *
+ * slack-search-row-full-parity-v1: a search hit now carries the SAME render-bearing fields a
+ * history row does so the generated search row maps to the canonical row identically — the
+ * custom-emoji ref map, inline `images` (extracted main-side), AND the thread coordinate
+ * `threadTs` (= the hit's own `ts`, since a message is its own thread root) so the generated row
+ * is clickable to open its thread via the `channelId` + `threadTs` pair, exactly like a generated
+ * history row. `replyCount` stays absent (search.messages omits reply_count) — the one documented
+ * divergence (the "N replies" label simply does not render). NEVER carries a token/secret (FR-019).
+ */
 export function slackSearchRow(match: SlackSearchMatch): Record<string, unknown> {
   return {
     ts: match.ts,
     userId: match.userId,
     ...(match.userName ? { userName: match.userName } : {}),
     text: match.text,
-    // slack-rich-message-render-v1 (FR-012): carry the custom-emoji ref map so a search row
-    // renders custom emoji like a history row. Search rows carry no image attachments in v1.
     ...(match.customEmoji ? { customEmoji: match.customEmoji } : {}),
+    ...(match.images && match.images.length > 0 ? { images: match.images } : {}),
     channelId: match.channelId,
-    ...(match.channelName ? { channelName: match.channelName } : {})
+    ...(match.channelName ? { channelName: match.channelName } : {}),
+    ...(match.threadTs ? { threadTs: match.threadTs } : {})
   }
 }
 

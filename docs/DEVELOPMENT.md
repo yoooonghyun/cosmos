@@ -658,6 +658,26 @@ single new `window.cosmos.session` namespace in `src/shared/ipc.ts` (`session:lo
   (node-tested in `logic.test.ts`: chain tokens present, `max-h-*`/`70vh` ABSENT) because the
   `.tsx` can't mount in node/no-jsdom to observe computed layout. The SAME SDK-wrapper break
   affects the Jira/Confluence catalogs — applying this chain repair there is future-work parity.
+- **Every Slack message row builds its props through the ONE `messageToRowProps()` mapper
+  (`slackCatalog/logic.ts`) — never spread `message.*` ad-hoc into `SlackMessageRow`.**
+  (slack-search-row-full-parity-v1.) Four render paths feed the canonical `SlackMessageRow`: native
+  history (`SlackPanel.tsx` `MessageRow`), native search (`SearchResults` rows), generated history
+  (`components.tsx` `MessageRow`), and generated search (`SearchResultRow`). They consume THREE
+  different DTOs (`SlackMessage` / `SlackSearchMatch` / bound `MessageRowNode`), so any path that
+  hand-spreads fields silently drifts (a dropped field = a row that "looks separately implemented" —
+  a recurring user complaint). `messageToRowProps(source, { onOpenThread? })` is the single field
+  selector; `searchMatchToRowProps` is a thin wrapper over it. The ONLY per-context piece is the
+  `onOpenThread` CLOSURE (native carries a `SlackMessage`; generated dispatches
+  `SLACK_OPEN_THREAD_ACTION`) — passed in via `opts`, never built in the pure mapper. Node-tested in
+  `logic.test.ts` incl. an explicit "three contexts → identical props" assertion. **Search-row data
+  parity is closed at the main mapping point**: `slackClient.search()` now runs the SAME
+  `extractImageRefs` history uses (search.messages DOES return `files[]`/`blocks[]` on matches that
+  have them) and sets `threadTs = ts` (a message is its own thread root) so a search row shows inline
+  images AND is clickable to open its own thread. **Hard limitation: search.messages does NOT return
+  `reply_count`**, so a search row carries no `replyCount` and the "N replies" label does not render —
+  the one accepted, documented divergence. `SlackSearchMatch.images`/`.threadTs` are additive
+  (no breaking change); they are MAIN→renderer response fields (not inbound IPC params), so they need
+  no new `validateSlack*` boundary check — they're defensively coerced where main builds them.
 - **Slack thread/detail dock is an ALWAYS-overlay floating drawer (matches Jira/Confluence/Calendar
   detail docks).** Both `SlackPanel.tsx` thread-dock regions (the native history dock and the
   generative-surface dock, each driven by the single `openThread` state) render as an absolute

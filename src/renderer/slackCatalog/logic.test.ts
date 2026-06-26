@@ -10,6 +10,7 @@ import {
   formatTs,
   initials,
   messageRowOpenThread,
+  messageToRowProps,
   orderBoundMessages,
   prependOlderMessages,
   searchMatchToRowProps,
@@ -298,9 +299,32 @@ describe('searchMatchToRowProps (search match → shared row props — data pari
     expect('userName' in props).toBe(false)
     expect('customEmoji' in props).toBe(false)
     expect('channelName' in props).toBe(false)
-    // No thread coords / images on a search match ⇒ a non-interactive, image-less row (parity).
-    expect('onOpenThread' in props).toBe(false)
     expect('images' in props).toBe(false)
+    // replyCount is never carried by a search hit (search.messages omits reply_count).
+    expect('replyCount' in props).toBe(false)
+    // No onOpenThread closure supplied ⇒ a non-interactive row (graceful).
+    expect('onOpenThread' in props).toBe(false)
+  })
+
+  it('CARRIES images when the search match has them (slack-search-row-full-parity-v1)', () => {
+    // A search hit now carries the same inline image refs a history row does (extracted main-side),
+    // so the thumbnail strip renders — this was the prior divergence (search rows showed no images).
+    const images = [{ ref: 'cosmos-slack-img://abc', alt: 'pic' }]
+    const props = searchMatchToRowProps({ ts: '1.0', userId: 'U1', text: 'hi', channelId: 'C1', images })
+    expect(props.images).toEqual(images)
+  })
+
+  it('wires onOpenThread from the supplied closure so a search row is clickable to open its thread', () => {
+    // A search hit carries thread coords (channelId + threadTs = ts), so the caller supplies a
+    // thread-open closure — the row becomes interactive EXACTLY like a native/generated history row.
+    let opened = 0
+    const props = searchMatchToRowProps(
+      { ts: '1.0', userId: 'U1', text: 'hi', channelId: 'C1', threadTs: '1.0' },
+      { onOpenThread: () => { opened++ } }
+    )
+    expect(typeof props.onOpenThread).toBe('function')
+    props.onOpenThread?.()
+    expect(opened).toBe(1)
   })
 
   it('falls back to the raw userId for the name when userName is unresolved (history fallback)', () => {
@@ -309,6 +333,95 @@ describe('searchMatchToRowProps (search match → shared row props — data pari
     const props = searchMatchToRowProps({ ts: '1.0', userId: 'U9', text: 'x', channelId: 'C1' })
     expect(props.userName).toBeUndefined()
     expect(authorName(props.userId ?? '', props.userName)).toBe('U9')
+  })
+})
+
+describe('messageToRowProps (THE unified mapper — every path builds row props through it)', () => {
+  // slack-search-row-full-parity-v1: native history, native search, generated MessageRow, and
+  // generated SearchResultRow ALL build SlackMessageRowProps through this one function, so given
+  // equivalent source data every context produces IDENTICAL props (the runtime visual identity).
+
+  it('selects every render-bearing field the same way (full source)', () => {
+    const images = [{ ref: 'cosmos-slack-img://x', alt: 'a' }]
+    const customEmoji = { wave: 'cosmos-slack-img://w' }
+    expect(
+      messageToRowProps({
+        ts: '1700000000.000100',
+        userId: 'U123',
+        userName: 'Alice',
+        text: 'hello :wave:',
+        replyCount: 3,
+        customEmoji,
+        images,
+        channelName: 'general'
+      })
+    ).toEqual({
+      ts: '1700000000.000100',
+      userId: 'U123',
+      userName: 'Alice',
+      text: 'hello :wave:',
+      replyCount: 3,
+      customEmoji,
+      images,
+      channelName: 'general'
+    })
+  })
+
+  it('THE PARITY GUARANTEE: a history message, a search match, and a generated row with EQUIVALENT data produce IDENTICAL props', () => {
+    // The exact same underlying message viewed three ways. Each path's DTO is shaped differently,
+    // but all funnel the same fields into messageToRowProps, so the resulting props must be equal.
+    const shared = {
+      ts: '1700000000.000100',
+      userId: 'U1',
+      userName: 'Alice',
+      text: 'shipped it :tada:',
+      customEmoji: { tada: 'cosmos-slack-img://t' },
+      images: [{ ref: 'cosmos-slack-img://i' }]
+    }
+    // (1) native history MessageRow spreads a SlackMessage (replyCount present there).
+    const nativeHistory = messageToRowProps({ ...shared, replyCount: 2 })
+    // (2) generated MessageRow spreads a bound MessageRowNode (same data).
+    const generatedHistory = messageToRowProps({ ...shared, replyCount: 2 })
+    // (3) native + generated search build from a SlackSearchMatch via searchMatchToRowProps.
+    //     reply_count is NOT returned by search.messages, so replyCount is absent — but every
+    //     OTHER field (incl. images) is identical. We compare the shared subset.
+    const search = searchMatchToRowProps({ ...shared, channelId: 'C1' })
+    expect(generatedHistory).toEqual(nativeHistory)
+    // Search matches the history props on every field it carries (channelName/replyCount aside):
+    const { replyCount: _rc, ...historyMinusReply } = nativeHistory
+    expect(search).toEqual(historyMinusReply)
+  })
+
+  it('coerces missing ts/userId/text to empty strings (total — never undefined for the required trio)', () => {
+    const props = messageToRowProps({})
+    expect(props.ts).toBe('')
+    expect(props.userId).toBe('')
+    expect(props.text).toBe('')
+  })
+
+  it('OMITS each optional field when absent (missing-optional safe — no explicit-undefined props)', () => {
+    const props = messageToRowProps({ ts: '1.0', userId: 'U1', text: 'hi' })
+    expect('userName' in props).toBe(false)
+    expect('replyCount' in props).toBe(false)
+    expect('customEmoji' in props).toBe(false)
+    expect('images' in props).toBe(false)
+    expect('channelName' in props).toBe(false)
+    expect('onOpenThread' in props).toBe(false)
+  })
+
+  it('drops an empty images array (no empty thumbnail strip)', () => {
+    expect('images' in messageToRowProps({ ts: '1.0', userId: 'U1', text: 'hi', images: [] })).toBe(false)
+  })
+
+  it('appends the per-context onOpenThread closure verbatim (the one per-path piece)', () => {
+    let n = 0
+    const props = messageToRowProps(
+      { ts: '1.0', userId: 'U1', text: 'hi' },
+      { onOpenThread: () => { n++ } }
+    )
+    expect(typeof props.onOpenThread).toBe('function')
+    props.onOpenThread?.()
+    expect(n).toBe(1)
   })
 })
 

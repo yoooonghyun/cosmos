@@ -40,6 +40,7 @@ import {
   buildOpenThreadContext,
   countLabel,
   initials,
+  messageToRowProps,
   orderBoundMessages,
   searchMatchToRowProps,
   showEmptyState,
@@ -260,16 +261,16 @@ export function MessageRow({
         })
       }
     : undefined
+  // slack-search-row-full-parity-v1: build the row props through the ONE shared mapper
+  // (`messageToRowProps`) the native history + native/generated search rows also use, so the
+  // field selection can never diverge across contexts. The dispatched-action `onOpenThread`
+  // (vs. the native closure carrying a SlackMessage) is the only per-context piece.
   return (
     <SlackMessageRow
-      ts={ts}
-      userId={userId}
-      userName={userName}
-      text={text}
-      replyCount={replyCount}
-      {...(customEmoji ? { customEmoji } : {})}
-      {...(images ? { images } : {})}
-      {...(onOpenThread ? { onOpenThread } : {})}
+      {...messageToRowProps(
+        { ts, userId, userName, text, replyCount, customEmoji, images },
+        onOpenThread ? { onOpenThread } : {}
+      )}
     />
   )
 }
@@ -359,37 +360,66 @@ export interface SearchResultRowNode extends SdkProps {
   /** Per-match custom-emoji shortcode → opaque ref map (slack-rich-message-render-v1,
    * FR-006/FR-012) so a search row renders custom emoji like a history row. */
   customEmoji?: Record<string, string>
+  /** Inline image attachment refs (slack-search-row-full-parity-v1) — search hits now carry them
+   * (extracted main-side), so a generated search row shows the same thumbnail strip a history row
+   * does. Forwarded to the shared row's thumbnails. */
+  images?: SlackImageRef[]
   channelId?: string
   channelName?: string
+  /** The thread root key the row drills into (slack-search-row-full-parity-v1). A search hit is its
+   * own thread root (`threadTs = ts`); with `channelId` it makes the row clickable to open its
+   * thread — exactly like a generated history row. Absent ⇒ non-interactive row. */
+  threadTs?: string
 }
 
 export function SearchResultRow({
+  surfaceId,
+  componentId,
   ts,
   userId,
   userName,
   text,
   customEmoji,
+  images,
   channelId,
-  channelName
+  channelName,
+  threadTs
 }: SearchResultRowNode): React.JSX.Element {
-  // bug slack-search-shared-row-v1 / slack-search-row-data-parity-v1 (Issue 2): a search hit
-  // renders via the ONE canonical SlackMessageRow AND through the SAME field mapper the native
-  // search path uses (`searchMatchToRowProps`), so avatars, rich text, custom emoji, author name,
-  // and layout are identical to a channel-history row. `userName` is the RESOLVED display name
-  // (the generated path's `resolveAuthorNames` fills it before this renders); absent → the raw-id
-  // fallback the history row also uses. The `#channelName` chip is the only intended difference;
-  // no thread coords ⇒ non-interactive row.
+  const dispatch = useDispatchAction()
+  // slack-search-row-full-parity-v1 (supersedes slack-search-shared-row-v1): a search hit renders
+  // via the ONE canonical SlackMessageRow AND the SAME unified mapper (`searchMatchToRowProps` →
+  // `messageToRowProps`) the native + generated history rows use, so avatars, rich text, custom
+  // emoji, RESOLVED author name, and now inline IMAGES are identical to a channel-history row. A
+  // search hit now carries thread coords (channelId + threadTs = ts), so the row is ALSO clickable
+  // to open its thread — the SAME SLACK_OPEN_THREAD_ACTION drill-in the generated history row
+  // dispatches (handled renderer-locally by the Slack panel, never sent to main). `userName` is the
+  // RESOLVED display name (`resolveAuthorNames` fills it before this renders); the `#channelName`
+  // chip + the absent "N replies" label (search.messages omits reply_count) are the only intended
+  // differences.
+  const threadCtx = buildOpenThreadContext({ channelId, threadTs, ts, userId, userName, text })
+  const onOpenThread = threadCtx
+    ? (): void => {
+        dispatch(surfaceId, componentId, {
+          name: SLACK_OPEN_THREAD_ACTION,
+          context: { ...threadCtx }
+        })
+      }
+    : undefined
   return (
     <SlackMessageRow
-      {...searchMatchToRowProps({
-        ts: ts ?? '',
-        userId: userId ?? '',
-        ...(userName !== undefined ? { userName } : {}),
-        text: text ?? '',
-        ...(customEmoji ? { customEmoji } : {}),
-        channelId: channelId ?? '',
-        ...(channelName ? { channelName } : {})
-      })}
+      {...searchMatchToRowProps(
+        {
+          ts: ts ?? '',
+          userId: userId ?? '',
+          ...(userName !== undefined ? { userName } : {}),
+          text: text ?? '',
+          ...(customEmoji ? { customEmoji } : {}),
+          ...(images ? { images } : {}),
+          channelId: channelId ?? '',
+          ...(channelName ? { channelName } : {})
+        },
+        onOpenThread ? { onOpenThread } : {}
+      )}
     />
   )
 }

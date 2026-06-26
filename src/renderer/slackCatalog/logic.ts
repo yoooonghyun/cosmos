@@ -9,7 +9,7 @@
  * total functions — a missing/odd value yields a safe display string, never a throw.
  */
 
-import type { SlackSearchMatch } from '../../shared/slack'
+import type { SlackImageRef, SlackSearchMatch } from '../../shared/slack'
 import type { SlackMessageRowProps } from './SlackMessageRow'
 
 /** Author display name with raw-id fallback (FR-004 / native `authorName`). */
@@ -18,39 +18,110 @@ export function authorName(userId: string, userName?: string): string {
 }
 
 /**
- * Map a Slack SEARCH match into the SAME row-props shape `SlackMessageRow` expects from a
- * channel-history message (bug slack-search-row-data-parity-v1). A search hit and a history
- * message both feed the ONE canonical `SlackMessageRow`, but a `SlackSearchMatch` is a
- * DIFFERENT DTO than `SlackMessage`, so the two render paths must map their fields the SAME
- * way or a search row silently renders sparse (e.g. an unmapped field dropped). This single
- * mapper is shared by BOTH the native `SearchResults` and the generated `SearchResultRow` so
- * the field mapping can never drift; the node test asserts every shared field is carried.
+ * The SUPERSET row shape every Slack message-bearing DTO can supply to the canonical row
+ * (slack-search-row-full-parity-v1). A channel-history `SlackMessage`, a `SlackSearchMatch`, and
+ * a generated bound `MessageRowNode` are three DIFFERENT DTOs, but they all map to the ONE
+ * `SlackMessageRow`. Each field below is the union of what those DTOs carry; {@link messageToRowProps}
+ * selects the present ones the SAME way for every path so a row can NEVER render differently
+ * across native history, search results, and a generated `MessageList` given equivalent data.
  *
- * Parity notes:
- *  - `userName` is the RESOLVED display name (FR-014): search.messages does NOT return it, so
- *    BOTH paths resolve it via `getUser` (native `resolveNames`, generated `resolveAuthorNames`)
- *    BEFORE this mapper runs. The avatar initials + name then match a history row exactly
- *    (raw-`userId` fallback only when resolution failed — the SAME fallback the history row uses).
- *  - `text`/`customEmoji` are already decoded at the single main mapping point (`slackClient`
- *    `search` applies `decodeSlackText` + the custom-emoji resolver just like history), so rich
- *    text + custom emoji render identically.
- *  - `channelName` adds the cross-channel `#channel` chip (the ONLY intended difference).
- *  - search rows carry NO thread coords and NO image attachments (search.messages omits them),
- *    so `onOpenThread`/`images` are absent — degrading to the same non-interactive, image-less
- *    row a history message with neither would produce (not a degraded variant).
- *
- * Pure + total: omits each optional field when absent (so a missing optional never becomes an
- * explicit `undefined` prop); never throws.
+ * NON-SECRET only: this is display + non-secret thread coordinates — never a token.
  */
-export function searchMatchToRowProps(match: SlackSearchMatch): SlackMessageRowProps {
+export interface SlackRowSource {
+  ts?: string
+  userId?: string
+  userName?: string
+  text?: string
+  /** Thread reply count — present on a history message; ABSENT on a search hit (search.messages
+   * does not return reply_count), so the "N replies" label simply does not render for search. */
+  replyCount?: number
+  customEmoji?: Record<string, string>
+  /** Inline image refs — now carried by BOTH history AND search (extractImageRefs, main side). */
+  images?: SlackImageRef[]
+  /** Cross-channel `#channel` chip — search hits only (the one intended presentational difference). */
+  channelName?: string
+}
+
+/**
+ * The ONE field mapper from any Slack message DTO to the canonical {@link SlackMessageRowProps}
+ * (slack-search-row-full-parity-v1, OQ-3 full unification). EVERY render path — native history,
+ * native search, generated `MessageRow`, generated `SearchResultRow` — builds its data props
+ * through THIS function, so the field selection can never drift between contexts. Given equivalent
+ * source data the three contexts produce IDENTICAL props (the runtime visual-identity guarantee).
+ *
+ * The `onOpenThread` BEHAVIOR is NOT built here: it is a per-context closure (native carries a
+ * `SlackMessage`; the generated row dispatches the `SLACK_OPEN_THREAD_ACTION`), which a pure
+ * function cannot express. Callers pass their closure as `opts.onOpenThread` and it is appended
+ * uniformly — so the only thing that ever differs between contexts is the closure's body, not the
+ * data props. The DECISION of whether a row is thread-interactive is itself unified upstream
+ * (every path wires the closure iff {@link buildOpenThreadContext} yields coords, i.e. the row
+ * carries `channelId` + `threadTs`).
+ *
+ * Parity notes (why each field maps the same for all DTOs):
+ *  - `userName` is the RESOLVED display name (FR-014); BOTH history (`resolveNames`) and search
+ *    (`resolveMatchNames` / `resolveAuthorNames`) fill it BEFORE this runs, so the avatar initials
+ *    + name match exactly (raw-`userId` fallback only when resolution failed — same for all paths).
+ *  - `text`/`customEmoji` are decoded at the single main mapping point, so rich text + custom emoji
+ *    render identically.
+ *  - `images` are extracted by the SAME `extractImageRefs` for history AND search, so the inline
+ *    thumbnail strip is identical.
+ *  - `replyCount` is present on a history message and ABSENT on a search hit (search.messages omits
+ *    it); the row's `RepliesAffordance` renders nothing for a 0/absent count, so this is a clean
+ *    degrade, not a divergent variant.
+ *  - `channelName` is the cross-channel `#channel` chip — search hits only; the ONE intended
+ *    presentational difference.
+ *
+ * Pure + total: omits each optional field when absent (a missing optional never becomes an explicit
+ * `undefined` prop), never throws.
+ */
+export function messageToRowProps(
+  source: SlackRowSource,
+  opts: { onOpenThread?: () => void } = {}
+): SlackMessageRowProps {
   return {
-    ts: match.ts,
-    userId: match.userId,
-    ...(match.userName !== undefined ? { userName: match.userName } : {}),
-    text: match.text,
-    ...(match.customEmoji ? { customEmoji: match.customEmoji } : {}),
-    ...(match.channelName ? { channelName: match.channelName } : {})
+    ts: source.ts ?? '',
+    userId: source.userId ?? '',
+    ...(source.userName !== undefined ? { userName: source.userName } : {}),
+    text: source.text ?? '',
+    ...(typeof source.replyCount === 'number' ? { replyCount: source.replyCount } : {}),
+    ...(source.customEmoji ? { customEmoji: source.customEmoji } : {}),
+    ...(source.images && source.images.length > 0 ? { images: source.images } : {}),
+    ...(source.channelName ? { channelName: source.channelName } : {}),
+    ...(opts.onOpenThread ? { onOpenThread: opts.onOpenThread } : {})
   }
+}
+
+/**
+ * Map a Slack SEARCH match into the canonical row props (slack-search-row-full-parity-v1).
+ * A THIN wrapper over the unified {@link messageToRowProps}: it forwards the match's now-full set
+ * of render fields (incl. `images`) plus the cross-channel `#channel` chip, and wires
+ * `onOpenThread` when the caller supplies the thread-open closure (a search hit carries
+ * `channelId` + `threadTs = ts`, so it IS clickable to open its own thread — exactly like a
+ * history row). Sharing the mapper with the native + generated history paths means a search row's
+ * field mapping can never drift from theirs; the node test asserts every shared field is carried.
+ *
+ * `userName` is the RESOLVED display name (`resolveMatchNames` / `resolveAuthorNames` fill it
+ * before this runs); `replyCount` is intentionally absent (search.messages omits reply_count), so
+ * the "N replies" label does not render for a search row — the one documented divergence.
+ *
+ * Pure + total: omits each optional field when absent; never throws.
+ */
+export function searchMatchToRowProps(
+  match: SlackSearchMatch,
+  opts: { onOpenThread?: () => void } = {}
+): SlackMessageRowProps {
+  return messageToRowProps(
+    {
+      ts: match.ts,
+      userId: match.userId,
+      ...(match.userName !== undefined ? { userName: match.userName } : {}),
+      text: match.text,
+      ...(match.customEmoji ? { customEmoji: match.customEmoji } : {}),
+      ...(match.images ? { images: match.images } : {}),
+      ...(match.channelName ? { channelName: match.channelName } : {})
+    },
+    opts
+  )
 }
 
 /** Initials for the Avatar fallback (NO remote images). Returns '?' for an empty name. */
