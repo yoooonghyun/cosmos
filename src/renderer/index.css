@@ -232,18 +232,24 @@
  */
 @utility glass-dock {
   background-color: var(--glass-dock-fill);
-  backdrop-filter: blur(20px) saturate(160%);
-  -webkit-backdrop-filter: blur(20px) saturate(160%);
+  /* REAL liquid glass: an SVG feTurbulence -> feDisplacementMap REFRACTS the backdrop (warps it like
+     curved glass) BEFORE a light blur — a plain gaussian blur alone reads flat/"discrete". The
+     `url(#glass-dock-distortion)` filter is defined once in index.html; Chromium/Electron supports an
+     SVG filter as a backdrop-filter. Keep the blur light so the refraction (not a heavy frost) is the
+     dominant glass cue. */
+  backdrop-filter: url(#glass-dock-distortion) blur(6px) saturate(120%);
+  -webkit-backdrop-filter: url(#glass-dock-distortion) blur(6px) saturate(120%);
   border-color: var(--glass-dock-edge);
-  /* inset top-edge specular highlight + a soft outer depth shadow in one shorthand. */
+  /* inset top + left specular highlight (the lit glass rim) + a soft outer depth shadow. */
   box-shadow:
     inset 0 1px 0 0 var(--glass-dock-highlight),
     inset 1px 0 0 0 var(--glass-dock-edge),
-    -12px 0 32px -12px rgb(0 0 0 / 0.5);
-}
-@supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
-  @utility glass-dock {
-    /* No blur engine → fall back to a near-opaque card so content stays legible. */
+    -16px 0 40px -16px rgb(0 0 0 / 0.55);
+  /* No blur engine → fall back to a near-opaque card so content stays legible. The @supports
+     is nested INSIDE the @utility (a second top-level `@utility glass-dock` wrapped in @supports
+     is invalid in Tailwind v4 and silently drops the whole utility — leaving the dock fully
+     transparent, which is the "반투명이 안 됨" bug this fixes). */
+  @supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
     background-color: color-mix(in oklab, var(--card) 92%, transparent);
   }
 }
@@ -253,9 +259,9 @@
 
   /* glass-dock-v1 light values. Fill = a high-key translucent card so dark text on it stays
      legible; edge/highlight are whites that read as a luminous rim on the light surface. */
-  --glass-dock-fill: color-mix(in oklab, var(--card) 62%, transparent);
-  --glass-dock-edge: rgb(255 255 255 / 0.55);
-  --glass-dock-highlight: rgb(255 255 255 / 0.7);
+  --glass-dock-fill: color-mix(in oklab, var(--card) 46%, transparent);
+  --glass-dock-edge: rgb(255 255 255 / 0.35);
+  --glass-dock-highlight: rgb(255 255 255 / 0.4);
 
   --background: #ffffff;
   --foreground: #1e1e1e;
@@ -332,9 +338,9 @@
      and keep a low alpha so the frosted panel content shows through. edge/highlight are
      low-alpha whites — the luminous specular rim that gives the dark glass its visionOS depth
      without washing out the dark surface. Fill alpha (~58%) keeps card-foreground text legible. */
-  --glass-dock-fill: color-mix(in oklab, color-mix(in oklab, var(--card) 80%, #ffffff) 58%, transparent);
+  --glass-dock-fill: color-mix(in oklab, color-mix(in oklab, var(--card) 80%, #ffffff) 30%, transparent);
   --glass-dock-edge: rgb(255 255 255 / 0.14);
-  --glass-dock-highlight: rgb(255 255 255 / 0.22);
+  --glass-dock-highlight: rgb(255 255 255 / 0.26);
 
   /* cosmos VS Code-style palette (see spec). */
   --background: #1e1e1e;
