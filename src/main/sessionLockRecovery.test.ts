@@ -5,8 +5,18 @@ import {
   recoverSessionLock,
   planResumeRetry,
   RESUME_RETRY_BACKOFF_MS,
+  IN_USE_RETRY_CLEAR_SEQUENCE,
   type SessionLockEnv
 } from './sessionLockRecovery'
+
+describe('IN_USE_RETRY_CLEAR_SEQUENCE (session-resume-relaunch-v4)', () => {
+  it('clears the visible screen + homes the cursor, but PRESERVES scrollback', () => {
+    // \x1b[2J = clear screen, \x1b[H = cursor home. Crucially NO \x1b[3J (clear scrollback) — the
+    // restored scrollback the renderer pre-wrote must survive the transient-error wipe.
+    expect(IN_USE_RETRY_CLEAR_SEQUENCE).toBe('\x1b[2J\x1b[H')
+    expect(IN_USE_RETRY_CLEAR_SEQUENCE).not.toContain('3J')
+  })
+})
 
 /**
  * session-resume-relaunch-v1 — pure recovery of a recorded `claude` session id rejected on

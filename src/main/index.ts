@@ -33,7 +33,7 @@ import {
   watch as fsWatch,
   writeFileSync
 } from 'node:fs'
-import { dirname, join } from 'node:path'
+import { dirname, join, sep } from 'node:path'
 import { randomUUID } from 'node:crypto'
 import { execFileSync } from 'node:child_process'
 import {
@@ -61,8 +61,15 @@ import { resolvePaneSpawn, type ResolvedPaneSpawn } from './paneSpawn'
 import {
   planResumeRetry,
   RESUME_RETRY_BACKOFF_MS,
+  IN_USE_RETRY_CLEAR_SEQUENCE,
   type SessionLockEnv
 } from './sessionLockRecovery'
+import { canGroupKill } from './processGroupKill'
+import {
+  selectOrphanMcpServers,
+  type CosmosMcpSignature,
+  type ProcSnapshotRow
+} from './orphanReaper'
 import type { SlackConnectionStatus } from '../shared/slack'
 import type { JiraConnectionStatus } from '../shared/jira'
 import { JiraAdapterSource } from '../shared/jira'
@@ -488,6 +495,14 @@ function onSessionInUseForPane(paneId: string, sessionId: string): void {
   console.warn(
     `[session] in-use resume retry #${nextAttempt} for pane ${paneId} (id ${sessionId}, freedHolder=${plan.freedHolder}); waiting ${plan.delayMs}ms`
   )
+  // session-resume-relaunch-v4: wipe the transient "Session ID <id> is already in use" line that the
+  // just-failed `--resume` printed into the pane, so the user only ever sees the clean resumed
+  // session — NOT on the give-up path (its error must stay visible) and NOT on a normal resume
+  // (untouched). Sent through the existing PtyChannel.Data frame the renderer writes to xterm; clears
+  // the visible screen only, preserving the restored scrollback.
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send(PtyChannel.Data, { paneId, data: IN_USE_RETRY_CLEAR_SEQUENCE })
+  }
   // Wait one backoff slot for the dying holder to finish releasing the id, then re-`--resume` the
   // SAME id in the recorded cwd. A success leaves the pane live (no further onSessionInUse); a
   // repeat rejection re-enters this function and advances the attempt counter.
@@ -592,6 +607,76 @@ const claudeSessionLockEnv: SessionLockEnv = {
       rmSync(filePath, { force: true })
     } catch {
       // best-effort
+    }
+  }
+}
+
+/**
+ * session-resume-relaunch-v4 (orphan prevention, part c): at STARTUP, find and SIGKILL any of THIS
+ * install's MCP-server processes (`node <app>/out/main/mcp/<X>Server.js`) left ORPHANED by a previous
+ * run — an abrupt cosmos termination (sleep/force-quit/SIGKILL never ran teardown), or pre-existing
+ * orphans from before the teardown fix. A backstop that matches by COMMAND + SOCKET signature (not by
+ * process group), so it also catches a server that escaped the group teardown via its own `setsid`.
+ *
+ * The selection is the pure {@link selectOrphanMcpServers}: it only picks a process that (1) is one
+ * of OUR server scripts under THIS app's out dir AND references THIS install's sandbox socket dir,
+ * (2) is genuinely orphaned (reparented to launchd, or its `claude` leader is dead), and (3) has
+ * pid > 1 — so a concurrent second cosmos's LIVE servers and any unrelated process are never touched.
+ * Best-effort: a `ps` failure / kill error never throws (startup must not be blocked).
+ */
+function reapOrphanMcpServers(): void {
+  // Env-augmented snapshot (`-E`): macOS appends the process env to the command, so the
+  // `COSMOS_*_BRIDGE_SOCKET=<sandbox>/...` value is visible for the install-scoping match.
+  let raw: string
+  try {
+    raw = execFileSync('ps', ['-axEww', '-o', 'pid=,ppid=,pgid=,command='], {
+      encoding: 'utf8',
+      timeout: 4000,
+      maxBuffer: 8 * 1024 * 1024
+    })
+  } catch {
+    return // ps unavailable / errored → skip reaping (never block startup)
+  }
+
+  const snapshot: ProcSnapshotRow[] = []
+  for (const line of raw.split('\n')) {
+    // "  pid  ppid  pgid  command...". Split off the three leading integer columns; the rest (which
+    // may contain spaces — paths, env) is the command line, kept intact.
+    const m = /^\s*(\d+)\s+(\d+)\s+(\d+)\s+(.*)$/.exec(line)
+    if (!m) {
+      continue
+    }
+    snapshot.push({ pid: Number(m[1]), ppid: Number(m[2]), pgid: Number(m[3]), command: m[4] })
+  }
+
+  const signature: CosmosMcpSignature = {
+    // `<app.getAppPath()>/out/main/mcp/` — the exact dir our server scripts are bundled under (the
+    // same `join(__dirname, 'mcp/<X>Server.js')` the mcpConfig entries use, __dirname = out/main).
+    outDirMarker: join(app.getAppPath(), 'out', 'main', 'mcp') + sep,
+    // `<userData>/sandbox` — this install's bridge-socket dir (resolveSandboxDir's parent of the
+    // `.cosmos-*.sock` files), so a different install instance's servers are left alone.
+    sandboxMarker: join(app.getPath('userData'), 'sandbox')
+  }
+
+  const orphans = selectOrphanMcpServers(snapshot, signature)
+  if (orphans.length === 0) {
+    return
+  }
+  console.warn(`[session] reaping ${orphans.length} orphaned cosmos MCP server(s) from a previous run`)
+  for (const pid of orphans) {
+    // Reuse the negative-pid SAFETY GATE: kill the orphan's whole GROUP (it may itself lead a small
+    // group), then the pid directly as a fallback. Both best-effort.
+    try {
+      if (canGroupKill(pid)) {
+        process.kill(-pid, 'SIGKILL')
+      }
+    } catch {
+      // group already gone / not permitted
+    }
+    try {
+      process.kill(pid, 'SIGKILL')
+    } catch {
+      // already gone
     }
   }
 }
@@ -2264,6 +2349,10 @@ app.whenReady().then(() => {
   // macOS shows the dock icon from the app bundle, not the BrowserWindow `icon`;
   // set it explicitly so dev (unpackaged Electron) shows the cosmos icon too.
   applyDockIcon()
+  // session-resume-relaunch-v4: reap any orphaned MCP-server processes left by a previous run
+  // (abrupt termination / pre-fix orphans) BEFORE spawning fresh sessions, so they can't accumulate
+  // and a relaunch starts from a clean process table. Best-effort; never blocks startup.
+  reapOrphanMcpServers()
   registerIpcHandlers()
   createWindow()
 

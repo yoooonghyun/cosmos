@@ -185,6 +185,18 @@ export function recoverSessionLock(
  */
 export const RESUME_RETRY_BACKOFF_MS: readonly number[] = [250, 250, 250, 500, 500]
 
+/**
+ * session-resume-relaunch-v4: terminal control sequence sent to a pane right BEFORE an in-use
+ * backoff RETRY, to wipe the transient "Session ID <id> is already in use" line that claude's failed
+ * first `--resume` attempt printed — so the user only ever sees the clean resumed session.
+ *
+ * `\x1b[2J` clears the visible screen and `\x1b[H` homes the cursor; we deliberately do NOT send
+ * `\x1b[3J` (clear scrollback), so the RESTORED scrollback the renderer pre-wrote is preserved.
+ * Emitted ONLY on the retry path (never on give-up, where the recoverable error must stay visible,
+ * and never on a normal successful resume, which is untouched).
+ */
+export const IN_USE_RETRY_CLEAR_SEQUENCE = '\x1b[2J\x1b[H'
+
 /** The decision {@link planResumeRetry} returns for ONE in-use rejection. */
 export type ResumeRetryPlan =
   | {
