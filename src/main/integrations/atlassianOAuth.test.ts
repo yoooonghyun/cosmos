@@ -7,7 +7,8 @@ import {
 } from './atlassianOAuth'
 import {
   ATLASSIAN_ACCESSIBLE_RESOURCES_ENDPOINT,
-  ATLASSIAN_TOKEN_ENDPOINT
+  ATLASSIAN_TOKEN_ENDPOINT,
+  CONFLUENCE_OAUTH_SCOPES
 } from './atlassianConfig'
 import type { FetchLike, ServerFactory } from './oauthPkce'
 
@@ -244,6 +245,54 @@ describe('runAtlassianOAuth — secret-less FIRST then client_secret fallback (F
     expect(url.searchParams.get('response_type')).toBe('code')
     expect(url.searchParams.get('scope')).toContain('offline_access')
     expect(url.searchParams.get('code_challenge_method')).toBe('S256')
+    // Secret NEVER appears in the authorize URL (SC-009).
+    expect(authorizeUrl).not.toContain('client_secret')
+  })
+
+  // confluence-comment-author-name-v1: a reconnect must FORCE re-consent so the new token
+  // carries the CURRENT full scope set (incl. the granular user-read scope). Atlassian otherwise
+  // reuses the prior consent and mints a token with the OLD scope set, so the authed-user lookup
+  // 403s and the comment author renders as the raw account id. `prompt=consent` is the fix;
+  // this asserts the built authorize URL carries it alongside every required param AND the
+  // read:user:confluence scope, while offline_access (refresh) + PKCE (S256) stay intact.
+  it('forces re-consent and carries the full Confluence scope set incl. the user-read scope', async () => {
+    capturedState = ''
+    const servers: FakeServer[] = []
+    let authorizeUrl = ''
+    const fetchImpl: FetchLike = async (url) => {
+      if (url === ATLASSIAN_TOKEN_ENDPOINT) {
+        return res({ access_token: 'AT', refresh_token: 'RT', expires_in: 3600 })
+      }
+      return res([{ id: 'c' }])
+    }
+    await runAtlassianOAuth({
+      scopes: CONFLUENCE_OAUTH_SCOPES,
+      clientId: 'CID',
+      clientSecret: 'S',
+      openExternal: (u) => {
+        authorizeUrl = u
+        capturedState = new URL(u).searchParams.get('state') ?? ''
+      },
+      fetchImpl,
+      serverFactory: fakeFactory(servers)
+    })
+    const url = new URL(authorizeUrl)
+    // Re-consent is forced on every connect/reconnect.
+    expect(url.searchParams.get('prompt')).toBe('consent')
+    // Required Atlassian authorize params.
+    expect(url.searchParams.get('audience')).toBe('api.atlassian.com')
+    expect(url.searchParams.get('client_id')).toBe('CID')
+    expect(url.searchParams.get('response_type')).toBe('code')
+    expect(url.searchParams.get('state')).toBe(capturedState)
+    expect(url.searchParams.get('redirect_uri')).toMatch(/^http:\/\/127\.0\.0\.1:\d+\//)
+    // PKCE redirect stays intact (S256 challenge present, verifier kept out of the URL).
+    expect(url.searchParams.get('code_challenge')).toBeTruthy()
+    expect(url.searchParams.get('code_challenge_method')).toBe('S256')
+    // The granted scope set is the full CURRENT one: refresh (offline_access) + the granular
+    // user-read scope whose absence caused the raw-account-id regression.
+    const scope = url.searchParams.get('scope') ?? ''
+    expect(scope).toContain('read:user:confluence')
+    expect(scope).toContain('offline_access')
     // Secret NEVER appears in the authorize URL (SC-009).
     expect(authorizeUrl).not.toContain('client_secret')
   })
