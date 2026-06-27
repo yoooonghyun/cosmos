@@ -87,6 +87,7 @@ import { surfaceSpinnerVisible } from './promptComposerLogic'
 import { usePerTabNav } from './usePerTabNav'
 import { useTabShortcuts } from './useTabShortcuts'
 import { canSubmitSlackMessage } from './slackComposerLogic'
+import { loadAllChannels } from './slackChannelSearchLogic'
 import { useConfirm } from './useConfirm'
 import { ConfirmDialog } from '@/components/ui/confirm-dialog'
 import { confirmCopy } from './confirmLogic'
@@ -395,6 +396,18 @@ function ChannelList({
   const [error, setError] = useState<SlackError | null>(null)
   const [loaded, setLoaded] = useState(false)
 
+  // bug slack-channel-search-full-load-v1: the [Channels] search filters by name, but the visible
+  // `items` are only the pages loaded via load-more — so a channel not yet paged in was invisible
+  // to the filter. Slack's public API has no channel-name search (conversations.list takes no
+  // query), so the only fix is to enumerate the FULL list via cursor pagination, then filter
+  // client-side. We do this LAZILY (only on first channel-search use), cache the exhausted set for
+  // the session in a ref (re-typing must NOT re-paginate), and filter over the full set.
+  const [allChannels, setAllChannels] = useState<SlackChannel[] | null>(null)
+  const [loadingAll, setLoadingAll] = useState(false)
+  // Cache for the session: holds the exhausted full set (or 'loading' while in flight) so the
+  // pagination runs at most once. A failed/partial run leaves it null so a later search retries.
+  const fullLoadRef = useRef<'loading' | 'done' | null>(null)
+
   const load = useCallback(async (next?: string) => {
     if (next) {
       setLoadingMore(true)
@@ -420,6 +433,35 @@ function ChannelList({
     void load()
   }, [load])
 
+  // Exhaust the FULL channel list the first time the user searches in [Channels] mode (non-empty
+  // query). Reuses the EXISTING listChannels({ cursor }) IPC (no new contract). Cached via the ref
+  // so re-typing serves from `allChannels` without re-paginating; a mid-pagination failure degrades
+  // to the partial set (never cached → retried) and never throws.
+  const filtering = filter.trim() !== ''
+  useEffect(() => {
+    if (!filtering || fullLoadRef.current !== null) {
+      return
+    }
+    fullLoadRef.current = 'loading'
+    setLoadingAll(true)
+    let cancelled = false
+    void loadAllChannels((c) => window.cosmos.slack.listChannels(c ? { cursor: c } : {})).then(
+      ({ channels, complete }) => {
+        if (cancelled) {
+          return
+        }
+        // Only cache (and stop future loads) when the FULL set was loaded; a partial degrade
+        // resets the ref so the next keystroke/search retries the exhaustion.
+        fullLoadRef.current = complete ? 'done' : null
+        setAllChannels(channels)
+        setLoadingAll(false)
+      }
+    )
+    return () => {
+      cancelled = true
+    }
+  }, [filtering])
+
   if (error?.kind === 'reconnect_needed') {
     return <ReconnectState onReconnect={onReconnect} />
   }
@@ -434,14 +476,26 @@ function ChannelList({
   }
   // bug slack-search-mode-selector-v1: the visible rows are the name-filtered subset. The filter
   // text now arrives from the shared search Input ([Channels] mode) instead of a local Input.
-  const visible = filterChannelsByName(items, filter)
-  const filtering = filter.trim() !== ''
+  // bug slack-channel-search-full-load-v1: when filtering, filter over the EXHAUSTED full set
+  // (cached in `allChannels`) so a channel not yet paged into `items` is still found. Until the
+  // full load resolves we filter over whatever's loaded (`items`) so results appear progressively
+  // and an empty query keeps the live filter over the browse list exactly as before.
+  const source = filtering && allChannels ? allChannels : items
+  const visible = filterChannelsByName(source, filter)
   return (
     <div className="flex h-full min-h-0 flex-col">
       <ScrollArea className="min-h-0 flex-1">
         <div className="flex flex-col p-1">
+          {/* bug slack-channel-search-full-load-v1: a subtle spinner while the FULL channel list is
+              being exhausted for the search (reuses the same Loader2 pattern as load-more). */}
+          {filtering && loadingAll && (
+            <div className="flex items-center justify-center gap-1.5 py-2 text-xs text-muted-foreground">
+              <Loader2 className="size-3.5 animate-spin" /> Searching all channels…
+            </div>
+          )}
           {visible.length === 0 ? (
-            <EmptyLine>No channels match “{filter.trim()}”.</EmptyLine>
+            // While the full load is still in flight, don't claim "no match" prematurely.
+            loadingAll ? null : <EmptyLine>No channels match “{filter.trim()}”.</EmptyLine>
           ) : (
             visible.map((channel) => (
               <Button
@@ -1454,12 +1508,21 @@ export function SlackPanel({ active }: { active: boolean }): React.JSX.Element {
                     >
                       <SelectTrigger
                         size="sm"
-                        className="h-8 shrink-0 text-sm"
+                        // Fixed width (not w-fit): the label swap Channels↔Messages must not
+                        // resize the trigger (and, via the popper min-w below, the menu).
+                        className="h-8 w-28 shrink-0 text-xs"
                         aria-label="Search scope"
                       >
                         <SelectValue />
                       </SelectTrigger>
-                      <SelectContent>
+                      {/* popper + trigger-width min: the default item-aligned content carries
+                          min-w-[8rem], which overflows the compact w-fit scope trigger (menu wider
+                          than its button). Popper position lets the viewport adopt the trigger
+                          width; the min-w override drops the 8rem floor so the menu matches. */}
+                      <SelectContent
+                        position="popper"
+                        className="min-w-[var(--radix-select-trigger-width)]"
+                      >
                         {SLACK_SEARCH_MODES.map((mode) => (
                           <SelectItem
                             key={mode}
@@ -1467,8 +1530,9 @@ export function SlackPanel({ active }: { active: boolean }): React.JSX.Element {
                             disabled={mode === 'messages' && status.canSearch === false}
                             // No selected-check here: it forces the shared SelectItem's pr-8
                             // reserve, widening items past the compact scope trigger. Drop the
-                            // indicator + its padding so items size to the label.
-                            className="pr-2 [&>[data-slot=select-item-indicator]]:hidden"
+                            // indicator + its padding so items size to the label. text-xs matches
+                            // the compact trigger (the shared item default is text-sm).
+                            className="pr-2 text-xs [&>[data-slot=select-item-indicator]]:hidden"
                           >
                             {searchModeLabel(mode)}
                           </SelectItem>
