@@ -20,7 +20,7 @@ import { useEffect, useRef, useState } from 'react'
 import { Document, Page, pdfjs } from 'react-pdf'
 import 'react-pdf/dist/Page/AnnotationLayer.css'
 import 'react-pdf/dist/Page/TextLayer.css'
-import { buildLocalFileSrc } from './localFileSrc'
+import { fetchLocalFileBytes } from './fetchLocalFileBytes'
 // Vite resolves bare package specifiers with `?url` to a hashed same-origin asset URL in BOTH
 // dev and packaged builds. The `new URL('pdfjs-dist/...', import.meta.url)` pattern does NOT
 // work for bare specifiers in Vite — Vite only rewrites relative paths inside `new URL()`.
@@ -63,9 +63,31 @@ export function PdfView({
     return () => ro.disconnect()
   }, [])
 
-  // `file` must be a stable object across renders or react-pdf re-fetches on every render. The
-  // opaque URL string is stable for a given paneId+relPath, so passing the string is fine here.
-  const fileUrl = buildLocalFileSrc(paneId, relPath)
+  // react-pdf must NOT fetch the cosmos-file:// URL itself: pdf.js loads it via XMLHttpRequest,
+  // which Chromium CORS-blocks for non-standard schemes ("cross origin requests are only
+  // supported for chrome/http/https/data" → ResponseException, blank PDF). So fetch the bytes
+  // ourselves over the privileged fetch() (the SAME path docx/xlsx use) and hand pdf.js an
+  // in-memory { data } source — no cross-scheme XHR. The state object is stable until the file
+  // changes, so Document loads it once.
+  const [pdfFile, setPdfFile] = useState<{ data: Uint8Array } | null>(null)
+  // Read onRenderError through a ref so a fresh closure from the parent never re-triggers the fetch.
+  const onRenderErrorRef = useRef(onRenderError)
+  onRenderErrorRef.current = onRenderError
+  useEffect(() => {
+    let cancelled = false
+    setPdfFile(null)
+    void fetchLocalFileBytes(paneId, relPath).then(
+      (buf) => {
+        if (!cancelled) setPdfFile({ data: new Uint8Array(buf) })
+      },
+      () => {
+        if (!cancelled) onRenderErrorRef.current(relPath)
+      }
+    )
+    return () => {
+      cancelled = true
+    }
+  }, [paneId, relPath])
 
   return (
     <div
@@ -73,25 +95,29 @@ export function PdfView({
       className="min-h-0 flex-1 overflow-auto bg-popover p-4"
       data-testid="pdf-view"
     >
-      <Document
-        file={fileUrl}
-        onLoadSuccess={({ numPages: n }) => setNumPages(n)}
-        onLoadError={() => onRenderError(relPath)}
-        loading={<div className="h-full min-h-0 w-full" aria-busy="true" />}
-        error={<></>}
-        className="flex flex-col items-center gap-4"
-      >
-        {Array.from({ length: numPages }, (_, i) => (
-          <Page
-            key={`page-${i + 1}`}
-            pageNumber={i + 1}
-            width={width ?? undefined}
-            className="shadow-md"
-            renderAnnotationLayer
-            renderTextLayer
-          />
-        ))}
-      </Document>
+      {pdfFile ? (
+        <Document
+          file={pdfFile}
+          onLoadSuccess={({ numPages: n }) => setNumPages(n)}
+          onLoadError={() => onRenderError(relPath)}
+          loading={<div className="h-full min-h-0 w-full" aria-busy="true" />}
+          error={<></>}
+          className="flex flex-col items-center gap-4"
+        >
+          {Array.from({ length: numPages }, (_, i) => (
+            <Page
+              key={`page-${i + 1}`}
+              pageNumber={i + 1}
+              width={width ?? undefined}
+              className="shadow-md"
+              renderAnnotationLayer
+              renderTextLayer
+            />
+          ))}
+        </Document>
+      ) : (
+        <div className="h-full min-h-0 w-full" aria-busy="true" />
+      )}
     </div>
   )
 }
