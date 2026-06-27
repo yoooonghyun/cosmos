@@ -51,6 +51,7 @@ import { PanelFooter } from './PanelFooter'
 import { ActiveTabSurface } from './ActiveTabSurface'
 import { usePublishComposer } from './ActiveComposerProvider'
 import { SurfaceSpinner } from './SurfaceSpinner'
+import { GlassDock } from './glassDock/GlassDock'
 import { contextChipFor, jiraViewContext } from './viewContextCapture'
 import { useGenerativePanelTabs, type TabSurface } from './useGenerativePanelTabs'
 import { useRestoredGenerativePanel } from './SessionProvider'
@@ -194,7 +195,9 @@ function JiraDetailDock({
   onAction: (action: A2UIAction) => boolean
 }): React.JSX.Element {
   return (
-    <div className="flex h-full min-w-0 flex-col bg-card">
+    // glass-dock-v1: bg-transparent (NOT bg-card) so the owning dock's `glass-dock` material
+    // is the single fill — a stacked opaque card here would defeat the frosted backdrop-blur.
+    <div className="flex h-full min-w-0 flex-col bg-transparent">
       {/* Header (sticky top, non-scrolling): icon + issue-key title + X close (FR-004). */}
       <div className="flex items-center gap-2 border-b border-border px-2 py-1.5">
         <SquareKanban className="size-4 shrink-0 text-muted-foreground" aria-hidden="true" />
@@ -730,10 +733,16 @@ export function JiraPanel({ active }: { active: boolean }): React.JSX.Element {
                 <button
                   type="button"
                   aria-label="Close ticket detail"
-                  className="absolute inset-0 z-10 bg-black/40"
+                  className="absolute inset-0 z-10 bg-black/15"
                   onClick={closeDetail}
                 />
-                <div className="absolute inset-y-0 right-0 z-20 w-full max-w-[28rem] border-l border-border bg-card shadow-lg">
+                {/* glass-dock-v1: the drawer wears the shared `glass-dock` material (the SAME
+                    global config the Calendar dock uses — fill/edge/highlight tokens in
+                    index.css + the SVG refraction filter in index.html). `glass-dock` supplies
+                    the translucent fill, border-color, and depth/edge shadow, so the explicit
+                    `bg-card shadow-lg border-border` are dropped (keep only `border-l`). The
+                    inner `JiraDetailDock` root is bg-transparent so this is the SINGLE fill. */}
+                <GlassDock className="absolute inset-y-0 right-0 z-20 w-full max-w-[28rem] border-l">
                   <JiraDetailDock
                     tabId={activeTabId}
                     issueKey={detailIssueKey}
@@ -741,7 +750,7 @@ export function JiraPanel({ active }: { active: boolean }): React.JSX.Element {
                     onClose={closeDetail}
                     onAction={handleSurfaceAction}
                   />
-                </div>
+                </GlassDock>
               </>
             )}
           </div>

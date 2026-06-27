@@ -232,13 +232,15 @@
  */
 @utility glass-dock {
   background-color: var(--glass-dock-fill);
-  /* REAL liquid glass: an SVG feTurbulence -> feDisplacementMap REFRACTS the backdrop (warps it like
-     curved glass) BEFORE a light blur — a plain gaussian blur alone reads flat/"discrete". The
-     `url(#glass-dock-distortion)` filter is defined once in index.html; Chromium/Electron supports an
-     SVG filter as a backdrop-filter. Keep the blur light so the refraction (not a heavy frost) is the
-     dominant glass cue. */
-  backdrop-filter: url(#glass-dock-distortion) blur(6px) saturate(120%);
-  -webkit-backdrop-filter: url(#glass-dock-distortion) blur(6px) saturate(120%);
+  /* REAL liquid glass (glass-dock-v2): the refraction is supplied per-dock by `useGlassDockFilter`,
+     which generates a displacement map SIZED to that dock and applies it as an inline
+     `backdrop-filter: url(#glass-dock-<uid>) blur() saturate()`. That map has a NEUTRAL interior
+     (crisp centre) and refraction CONCENTRATED IN THE BEZEL (the glass rim), so the backdrop bends
+     only at the edge like a real lens — no whole-backdrop noise distortion. The OLD static
+     `url(#glass-dock-distortion)` feTurbulence filter is gone (it warped everything with random
+     noise and read broken). This utility no longer sets `backdrop-filter`; the dock's inline style
+     does, so each dock gets its own correctly-sized filter. (A dock that has not measured yet falls
+     back to a plain blur set inline by the hook.) */
   border-color: var(--glass-dock-edge);
   /* inset top + left specular highlight (the lit glass rim) + a soft outer depth shadow. */
   box-shadow:

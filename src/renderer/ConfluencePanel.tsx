@@ -52,6 +52,7 @@ import { PanelFooter } from './PanelFooter'
 import { ActiveTabSurface } from './ActiveTabSurface'
 import { usePublishComposer } from './ActiveComposerProvider'
 import { SurfaceSpinner } from './SurfaceSpinner'
+import { GlassDock } from './glassDock/GlassDock'
 import { useGenerativePanelTabs } from './useGenerativePanelTabs'
 import { confluenceViewContext, contextChipFor } from './viewContextCapture'
 import { useRestoredGenerativePanel } from './SessionProvider'
@@ -750,13 +751,19 @@ export function ConfluencePanel({ active }: { active: boolean }): React.JSX.Elem
                 Close (X / scrim) → `closeGenUiPage`. */}
             {genUiPage && (
               <>
-                {/* Click-away scrim: closes the dock on click. Always present. */}
+                {/* Click-away scrim (glass-dock-v1): closes the dock on click. Faint bg-black/15
+                    (was bg-black/40) so the frosted list reads THROUGH the glass blur. Always present. */}
                 <div
-                  className="absolute inset-0 z-10 bg-black/40 transition-opacity duration-200"
+                  className="absolute inset-0 z-10 bg-black/15 transition-opacity duration-200"
                   aria-hidden="true"
                   onClick={closeGenUiPage}
                 />
-                <div className="absolute inset-y-0 right-0 z-20 flex w-1/2 translate-x-0 flex-col border-l border-border bg-card shadow-lg transition-transform duration-200 ease-out motion-reduce:transition-none">
+                {/* glass-dock-v1: the drawer wears the shared `glass-dock` material (the SAME
+                    global config the Calendar dock uses). `glass-dock` supplies the translucent
+                    fill, border-color, and depth/edge shadow, so `bg-card shadow-lg border-border`
+                    are dropped (keep only `border-l`). The dock's header div + the PageDetail
+                    ScrollArea below carry no opaque fill, so `glass-dock` is the single fill. */}
+                <GlassDock className="absolute inset-y-0 right-0 z-20 flex w-1/2 translate-x-0 flex-col border-l transition-transform duration-200 ease-out motion-reduce:transition-none">
                   {/* Dock frame header — the EXISTING back-row header (PageDetailTitle + the
                       "Open in Confluence" `detailWebUrl` lift, #100), with the leading Back arrow
                       swapped for a trailing ghost `icon-sm` X close (the Slack/Jira/calendar dock
@@ -784,7 +791,7 @@ export function ConfluencePanel({ active }: { active: boolean }): React.JSX.Elem
                       onWebUrl={setDetailWebUrl}
                     />
                   </div>
-                </div>
+                </GlassDock>
               </>
             )}
           </div>

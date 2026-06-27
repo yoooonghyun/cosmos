@@ -78,6 +78,7 @@ import { PanelFooter } from './PanelFooter'
 import { ActiveTabSurface } from './ActiveTabSurface'
 import { usePublishComposer } from './ActiveComposerProvider'
 import { SurfaceSpinner } from './SurfaceSpinner'
+import { GlassDock } from './glassDock/GlassDock'
 import { useGenerativePanelTabs } from './useGenerativePanelTabs'
 import { contextChipFor, slackViewContext } from './viewContextCapture'
 import { useRestoredGenerativePanel } from './SessionProvider'
@@ -663,11 +664,18 @@ function SlackComposer({
   const [error, setError] = useState<SlackError | null>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
 
+  // glass-dock-v1: the THREAD instance (it carries `threadTs`) lives INSIDE the `glass-dock`
+  // drawer, so its footer fill must be transparent or it stacks a second opaque surface that
+  // defeats the frosted blur. The channel-history instance (no `threadTs`) sits on the panel's
+  // opaque body, so it keeps `bg-card`. NOT a per-dock CSS override — the composer just wears
+  // the right fill for its home.
+  const footerFill = threadTs ? 'bg-transparent' : 'bg-card'
+
   // canSend === false → replace the form with the reconnect-to-send affordance
   // (design §3 last row). Do NOT show an enabled-but-failing send.
   if (!canSend) {
     return (
-      <div className="shrink-0 border-t border-border bg-card px-3 py-2.5">
+      <div className={`shrink-0 border-t border-border ${footerFill} px-3 py-2.5`}>
         <Alert
           variant="destructive"
           className="border-destructive/40 bg-destructive/15"
@@ -729,7 +737,7 @@ function SlackComposer({
   }
 
   return (
-    <div className="shrink-0 border-t border-border bg-card px-2 py-2">
+    <div className={`shrink-0 border-t border-border ${footerFill} px-2 py-2`}>
       {error && (
         <p
           className="mb-1.5 flex items-center gap-1.5 rounded-md border border-destructive/40 bg-destructive/15 px-2 py-1 text-[12px] text-destructive"
@@ -833,7 +841,9 @@ function SlackThreadPanel({
   // can never become a live link (mirrors the Confluence PageDetailTitle treatment).
   const canOpenInSlack = isOpenableThreadPermalink(permalink)
   return (
-    <div className="flex h-full min-w-0 flex-col bg-card">
+    // glass-dock-v1: bg-transparent (NOT bg-card) so the owning dock's `glass-dock` material
+    // is the single fill — a stacked opaque card here would defeat the frosted backdrop-blur.
+    <div className="flex h-full min-w-0 flex-col bg-transparent">
       <div className="flex shrink-0 items-center gap-2 border-b border-border px-2 py-1.5">
         <MessageSquare className="size-4 shrink-0 text-muted-foreground" aria-hidden="true" />
         {canOpenInSlack ? (
@@ -1565,12 +1575,19 @@ export function SlackPanel({ active }: { active: boolean }): React.JSX.Element {
                       is always present and closes the thread on click. */}
                   {openThread && (
                     <>
+                      {/* glass-dock-v1: faint scrim (was bg-black/40) so the frosted list reads
+                          THROUGH the glass blur. */}
                       <div
-                        className="absolute inset-0 z-10 bg-black/40 transition-opacity duration-200"
+                        className="absolute inset-0 z-10 bg-black/15 transition-opacity duration-200"
                         aria-hidden="true"
                         onClick={closeThread}
                       />
-                      <div className="absolute inset-y-0 right-0 z-20 w-full max-w-[28rem] translate-x-0 border-l border-border bg-card shadow-lg transition-transform duration-200 ease-out motion-reduce:transition-none">
+                      {/* glass-dock-v1: the drawer wears the shared `glass-dock` material (the SAME
+                          global config the Calendar dock uses). It supplies the translucent fill,
+                          border-color, and depth/edge shadow, so `bg-card shadow-lg border-border`
+                          are dropped (keep only `border-l`). The inner SlackThreadPanel root is
+                          bg-transparent so this is the SINGLE fill. */}
+                      <GlassDock className="absolute inset-y-0 right-0 z-20 w-full max-w-[28rem] translate-x-0 border-l transition-transform duration-200 ease-out motion-reduce:transition-none">
                         <SlackThreadPanel
                           context={openThread}
                           canSend={status.canSend === true}
@@ -1579,7 +1596,7 @@ export function SlackPanel({ active }: { active: boolean }): React.JSX.Element {
                           onConnectForSend={() => void connect()}
                           resolveNames={resolveNames}
                         />
-                      </div>
+                      </GlassDock>
                     </>
                   )}
                 </div>
@@ -1635,13 +1652,16 @@ export function SlackPanel({ active }: { active: boolean }): React.JSX.Element {
                   <>
                     {/* ALWAYS-overlay floating drawer (matches Jira/Confluence/Calendar docks):
                         scrim + absolute right-drawer float OVER the full-width generative surface
-                        at every width and never squeeze it. Scrim always present, closes on click. */}
+                        at every width and never squeeze it. Scrim always present, closes on click.
+                        glass-dock-v1: faint scrim (was bg-black/40) + the drawer wears the shared
+                        `glass-dock` material (drops `bg-card shadow-lg border-border`, keeps
+                        `border-l`); the inner SlackThreadPanel root is bg-transparent. */}
                     <div
-                      className="absolute inset-0 z-10 bg-black/40 transition-opacity duration-200"
+                      className="absolute inset-0 z-10 bg-black/15 transition-opacity duration-200"
                       aria-hidden="true"
                       onClick={closeThread}
                     />
-                    <div className="absolute inset-y-0 right-0 z-20 w-full max-w-[28rem] translate-x-0 border-l border-border bg-card shadow-lg transition-transform duration-200 ease-out motion-reduce:transition-none">
+                    <GlassDock className="absolute inset-y-0 right-0 z-20 w-full max-w-[28rem] translate-x-0 border-l transition-transform duration-200 ease-out motion-reduce:transition-none">
                       <SlackThreadPanel
                         context={openThread}
                         canSend={status.canSend === true}
@@ -1650,7 +1670,7 @@ export function SlackPanel({ active }: { active: boolean }): React.JSX.Element {
                         onConnectForSend={() => void connect()}
                         resolveNames={resolveNames}
                       />
-                    </div>
+                    </GlassDock>
                   </>
                 )}
               </div>

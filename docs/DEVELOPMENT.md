@@ -694,6 +694,26 @@ single new `window.cosmos.session` namespace in `src/shared/ipc.ts` (`session:lo
   skeleton placeholder becomes a visible horizontal jump on the skeleton→content swap. Bug
   `jira-skeleton-width-v1`: `KanbanBoardSkeleton`'s `w-64 shrink-0` columns were swapped for
   `flex-1 min-w-0` (equal full-width columns) to match the full-width board.
+- **Liquid-glass detail docks use a per-dock generated displacement filter, NOT a global SVG noise
+  filter (glass-dock-v2).** The four detail docks (Calendar/Jira/Confluence/Slack) wear the
+  reusable `<GlassDock/>` (`src/renderer/glassDock/GlassDock.tsx`) instead of a bare
+  `<div className="glass-dock …">`. `<GlassDock/>` keeps the `glass-dock` @utility (translucent
+  fill + edge highlight + shadow + `@supports` fallback) but the `backdrop-filter` is now set
+  **inline per instance** by `useGlassDockFilter`, which: measures the dock (ResizeObserver,
+  debounced), generates a displacement-map PNG **sized to that dock** via an offscreen canvas
+  (`generateDisplacementMap.ts` → pure `displacementMap.ts`), and injects a per-instance
+  `<svg><filter id="glass-dock-<uid>"><feImage/><feDisplacementMap/><feGaussianBlur/></filter>`.
+  The map has a **NEUTRAL interior** (RGB 128,128 = zero displacement → crisp centre) and refraction
+  **concentrated in the bezel** (a band along the *exposed* edges only). **Why per-dock + sized:**
+  `feImage` does NOT scale to the filter region — a mis-sized map tiles/clips, so the map MUST match
+  the element and regenerate on resize. The OLD global `#glass-dock-distortion` feTurbulence filter
+  in `index.html` is gone (random noise distorted the WHOLE backdrop → "끊어짐"/wavy/banded). **Edge
+  gating:** the docks are flush right-edge drawers, so only the **LEFT** edge refracts
+  (`RIGHT_DRAWER_EDGES`); refracting a non-interior edge would draw a box outline. **One tuning
+  point:** geometry/strength knobs live ONCE in `glassDock/config.ts` (`GLASS_DOCK_CONFIG`: bezel,
+  radius, displacementScale, blur, saturate, mapBlur); colors stay in the `--glass-dock-*` tokens.
+  Pure geometry/profile is node-tested in `displacementMap.test.ts`; the canvas + React layers are
+  runtime-only (Chromium SVG backdrop-filter, Electron-only — acceptable).
 
 ## Testing
 

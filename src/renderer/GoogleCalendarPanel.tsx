@@ -75,6 +75,7 @@ import { PanelFooter } from './PanelFooter'
 import { ActiveTabSurface } from './ActiveTabSurface'
 import { usePublishComposer } from './ActiveComposerProvider'
 import { SurfaceSpinner } from './SurfaceSpinner'
+import { GlassDock } from './glassDock/GlassDock'
 import { useGenerativePanelTabs } from './useGenerativePanelTabs'
 import { calendarViewContext, contextChipFor } from './viewContextCapture'
 import { useRestoredGenerativePanel } from './SessionProvider'
@@ -839,13 +840,13 @@ export function GoogleCalendarPanel({ active }: { active: boolean }): React.JSX.
               root is bg-transparent so this is the SINGLE fill (two stacked opaque surfaces
               would defeat the blur). The glass-dock utility supplies its own border color +
               depth/edge shadow, so we keep only the border-l side + the entry transition. */}
-          <div className="glass-dock absolute inset-y-0 right-0 z-20 w-full max-w-[22rem] translate-x-0 border-l transition-transform duration-200 ease-out motion-reduce:transition-none">
+          <GlassDock className="absolute inset-y-0 right-0 z-20 w-full max-w-[22rem] translate-x-0 border-l transition-transform duration-200 ease-out motion-reduce:transition-none">
             <EventDetail
               event={genUiEvent}
               {...(activeLegend ? { calendars: activeLegend } : {})}
               onClose={closeDetail}
             />
-          </div>
+          </GlassDock>
         </>
       )}
     </section>

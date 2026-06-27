@@ -73,6 +73,25 @@ import {
   type CardSize
 } from './openPromptPosition'
 import { useOpenPromptPosition } from './OpenPromptPositionProvider'
+import { useGlassDockFilter, ALL_EDGES } from './glassDock/useGlassDockFilter'
+import { OPEN_PROMPT_GLASS_CONFIG } from './glassDock/config'
+
+// open-prompt-glass: corner radius (px) of the expanded composer card. It wears `rounded-lg`
+// = `--radius` (0.5rem ≈ 8px), so the all-edges bezel refraction must sweep an 8px rounded rim.
+const CARD_RADIUS_PX = 8
+// The collapsed logo is `size-12` (48px). It reads as a glass PEBBLE: a circular fill+blur
+// (rounded-full) with NO displacement map — a refraction bezel on a ~40px element is degenerate
+// (the rounded path is reserved for the larger card), so the pebble gets just the frosted fill.
+
+// open-prompt-glass: the float shadow for the Open Prompt surfaces. `glass-dock`'s own box-shadow
+// is tuned for a LEFT-edge drawer (one-sided rim highlight + leftward drop) which looks wrong on a
+// centered floating pill/card, so these surfaces override it inline with the same lit inset rim
+// (top highlight + edge) plus an EVEN, all-around ambient drop shadow. Uses the mode-aware
+// `--glass-dock-*` tokens so the rim still matches the docks across light/dark.
+const OPEN_PROMPT_GLASS_SHADOW =
+  'inset 0 1px 0 0 var(--glass-dock-highlight), ' +
+  'inset 0 0 0 1px var(--glass-dock-edge), ' +
+  '0 8px 30px -8px rgb(0 0 0 / 0.45)'
 
 /**
  * Props for the shared composer. Per-panel copy only — no invented props (FR-017 gating
@@ -181,9 +200,85 @@ export function PromptComposer({
   // so a plain fire-and-forget submit leaves the composer immediately usable for the next send.
   const composerLocked = !composerInteractiveAfterSubmit()
 
+  // open-prompt-glass: the expanded card's per-instance liquid-glass refraction filter. It reuses
+  // the docks' glass infrastructure (`useGlassDockFilter`) but with the rounded-surface knobs
+  // (`OPEN_PROMPT_GLASS_CONFIG`) and ALL FOUR edges + the card's real corner radius, so the bezel
+  // refraction sweeps the full rounded rim instead of a single flush edge. The hook measures the
+  // element it's `ref`'d to (the form) and regenerates the map on resize; `cardGlass.style` sets
+  // the `backdrop-filter`, `cardGlass.filter` is the injected `<svg><filter>`. The card also wears
+  // the shared `glass-dock` CSS class for the fill/edge/highlight layers. NOTE: the form's measured
+  // LAYOUT box (offsetWidth/offsetHeight, read by the open-at-position clamp) is unaffected by the
+  // backdrop-filter, and the glass `ref` is a separate callback ref from `formRef` — both attach to
+  // the same form without conflict — so the drag/anchor math is untouched (material swap only).
+  const cardGlass = useGlassDockFilter({
+    edges: ALL_EDGES,
+    config: OPEN_PROMPT_GLASS_CONFIG,
+    radius: CARD_RADIUS_PX
+  })
+
+  // open-prompt-glass: the collapsed logo is a small (~48px) round pebble. A per-instance
+  // displacement bezel on an element that tiny reads degenerate (the whole pebble would be rim),
+  // so by design it gets just the GLASS FILL + frosted blur (the `glass-dock` class + this plain
+  // backdrop blur/saturate) — no refraction map — reserving the full bezel refraction for the
+  // larger card. The blur/saturate come from the SAME shared config so the pebble and card frost
+  // match. Static (no measurement needed), so an inline style, not the hook.
+  const logoGlassStyle = {
+    backdropFilter: `blur(${OPEN_PROMPT_GLASS_CONFIG.blur}px) saturate(${OPEN_PROMPT_GLASS_CONFIG.saturate})`,
+    WebkitBackdropFilter: `blur(${OPEN_PROMPT_GLASS_CONFIG.blur}px) saturate(${OPEN_PROMPT_GLASS_CONFIG.saturate})`,
+    // `glass-dock`'s own box-shadow is the LEFT-only drawer rim + a leftward depth shadow — wrong
+    // for a CENTERED floating surface. Override (inline wins over the @utility) with the same
+    // inset edge highlight but a SYMMETRIC, all-around drop shadow so the pebble/card float evenly.
+    boxShadow: OPEN_PROMPT_GLASS_SHADOW
+  } as React.CSSProperties
+
+  // open-prompt-glass: shared box-shadow for the centered floating surfaces (logo + card). Keeps
+  // `glass-dock`'s lit inset rim (top highlight + left edge) but swaps its one-sided drawer drop
+  // shadow for an even ambient one. `--glass-dock-*` tokens are mode-aware (light/dark) so the rim
+  // matches the docks.
+  const cardGlassStyle = { ...cardGlass.style, boxShadow: OPEN_PROMPT_GLASS_SHADOW }
+
   const logoRef = useRef<HTMLButtonElement | null>(null)
   const textareaRef = useRef<HTMLTextAreaElement | null>(null)
   const formRef = useRef<HTMLFormElement | null>(null)
+
+  // open-prompt-open-at-position-v1 (FR-009): measure the form's REAL layout box into `cardSize`.
+  // Hoisted to a stable callback so BOTH the merged ref (on attach) and the content-change
+  // ResizeObserver effect below call the SAME measure. `offsetWidth/Height` is the un-transformed
+  // layout box (stable across the open/close scale morph; the backdrop-filter does not affect it).
+  const measureCard = useCallback((el: HTMLFormElement): void => {
+    setCardSize((prev) => {
+      const next = { width: el.offsetWidth, height: el.offsetHeight }
+      if (prev && prev.width === next.width && prev.height === next.height) {
+        return prev // skip the state churn (and re-render) when the box is unchanged
+      }
+      return next
+    })
+  }, [])
+
+  // The form needs TWO refs: `formRef` (positioning/measure) and the glass hook's measuring ref.
+  // Merge them in one callback so a single `ref` prop drives both.
+  //
+  // open-prompt-glass centering fix: the `cardSize` measurement MUST happen here, when the element
+  // actually attaches, NOT only inside a `useLayoutEffect` keyed on `[contextChip, contextDismiss]`.
+  // The glass hook's `ref` synchronously runs `regenerate()` → `setState`, so the layout-effect path
+  // alone could leave `cardSize` at its initial `null`/0 (the effect doesn't re-run on the glass
+  // re-render), which made `clampCardWithinPanel` skip the `-cardW/2,-cardH/2` centering offset and
+  // open the card at the button's TOP-LEFT instead of CENTERED. Measuring on attach guarantees
+  // `cardSize` is the real `max-w-2xl` box the moment the form exists.
+  const setFormRef = useCallback(
+    (el: HTMLFormElement | null): void => {
+      formRef.current = el
+      cardGlass.ref(el)
+      if (el) {
+        measureCard(el)
+      }
+    },
+    // Depend on the STABLE `cardGlass.ref` callback, NOT the whole `cardGlass` result object —
+    // the hook returns a new object every render, so `[cardGlass]` made `setFormRef` change
+    // identity each render, React re-attached the ref every render, and the ref's synchronous
+    // `regenerate()` setState looped infinitely ("Maximum update depth exceeded").
+    [cardGlass.ref, measureCard]
+  )
   // Tracks WHY we collapsed so the focus effect only pulls focus to the logo on an
   // explicit collapse (submit/Esc/outside-click), not on first mount.
   const pendingLogoFocus = useRef(false)
@@ -576,26 +671,17 @@ export function PromptComposer({
     if (!el) {
       return
     }
-    const measure = (): void => {
-      setCardSize((prev) => {
-        const next = { width: el.offsetWidth, height: el.offsetHeight }
-        // Skip the state churn (and re-render) when the box is unchanged.
-        if (prev && prev.width === next.width && prev.height === next.height) {
-          return prev
-        }
-        return next
-      })
-    }
-    measure()
+    measureCard(el)
     if (typeof ResizeObserver === 'undefined') {
       return
     }
-    const ro = new ResizeObserver(measure)
+    const ro = new ResizeObserver(() => measureCard(el))
     ro.observe(el)
     return () => ro.disconnect()
     // Re-measure when content that changes the card height toggles: the context chip's presence
-    // and the dismiss state both alter the rendered height.
-  }, [contextChip, contextDismiss])
+    // and the dismiss state both alter the rendered height. (The first attach-time measurement is
+    // done in `setFormRef`/`measureCard`; this effect handles content-driven size changes.)
+  }, [contextChip, contextDismiss, measureCard])
 
   // open-prompt-open-at-position-v1 (FR-001/FR-002/FR-007): the expanded card's clamped top-left
   // in the SAME panel-box px frame as the logo. Anchored bottom-LEFT at the live button anchor
@@ -782,7 +868,7 @@ export function PromptComposer({
           width: `${panelRect.width}px`,
           height: `${panelRect.height}px`
         }}
-        className="pointer-events-none fixed"
+        className="pointer-events-none fixed z-50"
       >
         {/* COLLAPSED: the draggable cosmos-logo button. Positioned by a TRANSFORM
             (`translate3d`) — NOT `left/top` — so dragging animates the compositor, not
@@ -843,14 +929,29 @@ export function PromptComposer({
                   // the button's LIVE position (handles click-to-open mid-settle, OQ-1 FREEZE).
                   openComposer()
                 }}
+                style={logoGlassStyle}
                 className={[
-                  'relative size-12 rounded-xl border border-border bg-popover p-0 shadow-md',
+                  // open-prompt-glass: the logo reads as a round GLASS PEBBLE — the shared
+                  // `glass-dock` material (translucent fill + edge highlight + depth shadow)
+                  // REPLACES the opaque `bg-popover`/`shadow-md`, `rounded-2xl` makes it a rounded
+                  // SQUARE (not a circle), and `logoGlassStyle` frosts the panel behind it (fill+blur
+                  // only; no refraction map on an element this small). The CosmosMark glyph stays its
+                  // own solid color, so it remains crisply legible over the translucent fill.
+                  // 테두리 얇게: the explicit `border` (1px) is DROPPED — it stacked on top of the
+                  // glass-dock inset edge (`OPEN_PROMPT_GLASS_SHADOW`'s `inset 0 0 0 1px edge`),
+                  // reading as a heavy ~2px rim. The inset hairline alone gives a thin, subtle,
+                  // glassy edge.
+                  'glass-dock relative size-12 rounded-2xl p-0',
                   // draggable affordance (OQ-3 whole-button drag): grab cursor at rest,
                   // grabbing while a drag is active; touch-none so the pointer drag is not
                   // hijacked by scroll/gesture handling.
                   'cursor-grab touch-none active:cursor-grabbing',
                   'transition-[background-color,box-shadow,transform] duration-150 ease-out',
-                  'hover:bg-accent hover:shadow-lg active:scale-95',
+                  // open-prompt-glass: hover lifts the pebble WITHOUT going opaque — the old
+                  // `hover:bg-accent` would slam the solid accent token over the translucent glass
+                  // fill, killing the frost. A faint translucent-white wash + the deeper shadow keep
+                  // the glass look while still reading as a hover.
+                  'hover:bg-white/10 hover:shadow-lg active:scale-95',
                   'motion-reduce:transition-none motion-reduce:active:scale-100',
                   hasError ? 'ring-2 ring-destructive/60' : ''
                 ].join(' ')}
@@ -868,6 +969,19 @@ export function PromptComposer({
             <TooltipContent side="top">Open prompt</TooltipContent>
           </Tooltip>
         </div>
+
+        {/* open-prompt-glass: when EXPANDED, a dock-style scrim dims + disables the panel behind the
+            composer and a click-away collapses it (the same modal affordance the detail docks use).
+            It is `pointer-events-auto` (so it blocks the panel) ONLY while expanded; absent when
+            collapsed so the floating logo never blocks the panel. Sits below the card (rendered
+            after it) within the z-50 layer. */}
+        {expanded && (
+          <div
+            aria-hidden="true"
+            onClick={() => collapse(true)}
+            className="pointer-events-auto absolute inset-0 bg-black/20 transition-opacity duration-200 motion-reduce:transition-none"
+          />
+        )}
 
         {/* open-prompt-open-at-position-v1: the EXPANDED card + the "Sent" hint now live in the
             SAME `fixed` panel-box layer (`slotRef`) as the logo, positioned by a `translate3d`
@@ -913,11 +1027,18 @@ export function PromptComposer({
           ].join(' ')}
         >
         <form
-          ref={formRef}
+          ref={setFormRef}
           inert={!expanded}
           aria-hidden={!expanded}
+          style={cardGlassStyle}
           className={[
-            'w-full rounded-lg border border-input bg-popover p-2 shadow-md',
+            // open-prompt-glass: the card is liquid GLASS — the shared `glass-dock` material class
+            // (translucent `--glass-dock-fill` + edge highlight + depth shadow + opaque fallback)
+            // REPLACES the opaque `bg-popover`, and `cardGlass.style` adds the per-instance
+            // all-edges rounded bezel `backdrop-filter` so the panel content refracts through the
+            // card's rounded rim. `rounded-lg` matches `CARD_RADIUS_PX` (the bezel radius). The
+            // original `border-input` is dropped — `glass-dock` supplies its own translucent edge.
+            'glass-dock w-full rounded-lg border p-2',
             // Submit exit is a GROW-TO-FILL-AND-VANISH "launch" (composer-send-animation-v1
             // FR-001, design §3): on submit the card scales UP well past full size while
             // fading + softening to nothing, as if the prompt is launched into the surface —
@@ -938,6 +1059,9 @@ export function PromptComposer({
           aria-label={ariaLabel}
           onSubmit={handleSubmit}
         >
+          {/* open-prompt-glass: the per-instance `<svg><filter>` that the card's `backdrop-filter`
+              references. Hidden, zero layout footprint — purely the filter definition. */}
+          {cardGlass.filter}
           <Textarea
             ref={textareaRef}
             value={value}
@@ -949,7 +1073,11 @@ export function PromptComposer({
             tabIndex={expanded ? 0 : -1}
             placeholder={placeholder}
             aria-label={ariaLabel}
-            className="max-h-[9rem] min-h-[2.5rem] resize-none border-0 bg-transparent shadow-none focus-visible:ring-0"
+            // open-prompt-glass LEGIBILITY: the translucent glass fill alone is too low-contrast for
+            // a multi-line editing surface, so the textarea keeps a FAINT solid backing (a low-alpha
+            // popover tint + hairline) — enough for crisp text without an opaque slab that would
+            // defeat the glass look. Placeholder/value inherit the popover foreground token.
+            className="max-h-[9rem] min-h-[2.5rem] resize-none rounded-md border border-border/40 bg-popover/55 shadow-none focus-visible:ring-1 focus-visible:ring-ring/40"
           />
           {/* open-prompt-view-context-v1 (design §3/§5): the in-view context chip, between the
               textarea and the footer. Hidden entirely once dismissed 'all'; the thread badge is
