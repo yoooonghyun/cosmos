@@ -34,6 +34,11 @@ import { allowedToolForTarget, groundingPromptForTarget, renderMcpConfigJsonForT
 import { viewContextGroundingClause } from './viewContextGrounding'
 import { decideSubmit } from './agentSessionQueue'
 import {
+  isAlreadyInUseError,
+  planResumeRetry,
+  type SessionLockEnv
+} from './sessionLockRecovery'
+import {
   DEFAULT_UI_RENDER_TARGET,
   type AgentStatusPayload,
   type UiRenderTarget,
@@ -77,6 +82,20 @@ export interface AgentRunnerOptions {
    * Omit (undefined) to keep the pre-feature ephemeral behaviour (no `--session-id`).
    */
   defaultSessionId?: string
+  /**
+   * session-id-already-in-use-runtime-v1: injected registry env so the runner can survive the
+   * registry-release window. When a queued run is drained the instant the previous `claude` child
+   * exits, the prior child may not yet have removed its `~/.claude/sessions/<pid>.json` entry, so the
+   * next `claude --session-id <same id>` is hard-rejected "already in use". On that rejection the
+   * runner uses {@link planResumeRetry} (the SAME pure helper the PTY `--resume` path uses) to wait a
+   * short backoff and re-spawn the SAME queued item, rather than surfacing a terminal error.
+   *
+   * Optional and defaults to a NO-OP (an env with an empty registry) so existing tests and the
+   * PTY-free property are unaffected: with no holder + the budget present, the path is identical to
+   * before unless a real "already in use" stderr appears. Wire the real `claudeSessionLockEnv` in
+   * `index.ts` so production gets the registry-release retry.
+   */
+  sessionLockEnv?: SessionLockEnv
 }
 
 /** One queued submit (any target), awaiting the in-flight run to finish. */
@@ -84,6 +103,25 @@ interface QueuedSubmit {
   utterance: string
   target: UiRenderTarget
   viewContext?: ViewContext
+  /**
+   * session-id-already-in-use-runtime-v1: 1-based count of registry-release retries already
+   * attempted for THIS submit (0 on first spawn). Threaded through {@link planResumeRetry} so the
+   * backoff budget is bounded per submit and a permanently-held id eventually surfaces an error.
+   */
+  inUseAttempts?: number
+}
+
+/**
+ * A no-op SessionLockEnv (empty registry) — the default when no real env is injected. Keeps the
+ * runner PTY-free and leaves existing tests/behaviour unchanged: with no holder found, a retry plan
+ * still waits the backoff and re-spawns (the dying-orphan race), but production wires the real env.
+ */
+const NOOP_SESSION_LOCK_ENV: SessionLockEnv = {
+  listRegistryFiles: () => [],
+  readEntry: () => null,
+  isAlive: () => false,
+  killPid: () => {},
+  removeFile: () => {}
 }
 
 export class AgentRunner {
@@ -94,6 +132,8 @@ export class AgentRunner {
   private readonly resolveExecutable: (command: string) => boolean
   /** Persistent default-conversation session id, or undefined (ephemeral). */
   private readonly defaultSessionId?: string
+  /** Injected registry env for the registry-release retry (defaults to a no-op empty registry). */
+  private readonly sessionLockEnv: SessionLockEnv
 
   /** The in-flight child, or null when idle (single-run state). */
   private child: ChildProcess | null = null
@@ -116,6 +156,7 @@ export class AgentRunner {
     this.spawn = options.spawn ?? nodeSpawn
     this.resolveExecutable = options.resolveExecutable ?? isExecutableResolvable
     this.defaultSessionId = options.defaultSessionId
+    this.sessionLockEnv = options.sessionLockEnv ?? NOOP_SESSION_LOCK_ENV
   }
 
   /** True while a headless run is in flight. */
@@ -171,7 +212,8 @@ export class AgentRunner {
    * to start now. A pre-check / spawn failure emits `error` and drains the queue so
    * a queued conversation never stalls behind a failed run.
    */
-  private spawnRun({ utterance, target, viewContext }: QueuedSubmit): void {
+  private spawnRun(submit: QueuedSubmit): void {
+    const { utterance, target, viewContext } = submit
     // Electron PATH caveat: a GUI-launched app may not inherit the shell PATH, so
     // `claude` may be unresolvable. Pre-check and fail fast with an `error` status
     // rather than spawning a missing binary (FR-014).
@@ -284,15 +326,40 @@ export class AgentRunner {
       console.log(`[agent] run closed code=${code} stdout=${stdout.trim().slice(0, 800)} stderr=${stderr.trim().slice(0, 400)}`)
       if (code === 0) {
         this.sinks.onStatus({ state: 'completed' })
-      } else {
-        this.sinks.onStatus({
-          state: 'error',
-          message: runErrorMessage(code, stdout, stderr)
-        })
+        // unified-agent-session-v1: the run finished and freed the slot — start the next
+        // queued submit (any target, if any), serializing so two `--session-id <same id>`
+        // runs never overlap.
+        this.drainQueue()
+        return
       }
-      // unified-agent-session-v1: the run finished and freed the slot — start the next
-      // queued submit (any target, if any), serializing so two `--session-id <same id>`
-      // runs never overlap.
+      // session-id-already-in-use-runtime-v1: a non-zero exit whose stderr/stdout carries claude's
+      // "already in use" rejection is the registry-release race — the just-exited child has not yet
+      // removed its `~/.claude/sessions/<pid>.json` entry, so this same-id run was rejected. Mirror
+      // the PTY `--resume` path: plan a backoff retry via the shared {@link planResumeRetry} helper
+      // and RE-SPAWN the SAME submit after the delay instead of surfacing a terminal error.
+      if (
+        this.defaultSessionId !== undefined &&
+        isAlreadyInUseError(`${stderr}\n${stdout}`)
+      ) {
+        const nextAttempt = (submit.inUseAttempts ?? 0) + 1
+        const plan = planResumeRetry(this.defaultSessionId, nextAttempt, this.sessionLockEnv)
+        if (plan.action === 'retry') {
+          // Skip the normal error emission AND the drain for this attempt: re-run the SAME queued
+          // item after the registry-release backoff. The serializer invariant holds — `finish()`
+          // already cleared `this.running`, and we re-enter `spawnRun` (which re-sets `running`)
+          // only after the timer fires, so no two children are ever alive at once.
+          setTimeout(() => {
+            this.spawnRun({ ...submit, inUseAttempts: nextAttempt })
+          }, plan.delayMs)
+          return
+        }
+        // give-up: backoff budget exhausted and the id is still rejected — fall through to surface
+        // the error and drain normally (the pre-fix behaviour).
+      }
+      this.sinks.onStatus({
+        state: 'error',
+        message: runErrorMessage(code, stdout, stderr)
+      })
       this.drainQueue()
     })
   }
