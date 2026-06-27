@@ -353,6 +353,56 @@ detail.
   `autoStart`/`phase`/`pending` state for this; restored tabs set `autoStart` so they resume
   without a pick.
 
+## Cosmos conversation timeline (cosmos-conversation-panel-v2, step 3)
+
+- **The Cosmos panel is a conversation TIMELINE, not a surface-per-tab strip.** It DELIBERATELY
+  does NOT use `useGenerativePanelTabs` (FR-116) — it has its own pure tab state `cosmosTabs.ts`
+  (ONE pinned, undeletable `kind:'default'` tab; future `kind:'favorite'` tabs are appended
+  additively). The other four generative panels keep `useGenerativePanelTabs` untouched.
+- **Rail id `'cosmos'` ≠ wire `UiRenderTarget` `'generated-ui'` — STILL diverged, do NOT "finish
+  the rename".** The panel publishes its composer under the RAIL id `'cosmos'`
+  (`usePublishComposer('cosmos', …)`) but submits + filters `ui:render` on the WIRE target
+  `'generated-ui'`. Renaming the wire target or the persisted snapshot key breaks render routing
+  + session restore.
+- **All `~/.claude` access is MAIN-only and CONFINED to one path.** `transcriptReader.ts` resolves
+  exactly `~/.claude/projects/<dir-key>/<defaultSessionId>.jsonl` — `<dir-key>` DERIVED from the
+  stable sandbox cwd (`resolveSandboxDir()`) by replacing `/`+`.`→`-` (`encodeProjectDirKey`),
+  with a `readdirSync` SCAN fallback when the derived file is absent. It NEVER takes a renderer
+  path, NEVER reads another session. The renderer touches `~/.claude` never.
+- **Pure parse is split for node tests.** `transcriptParse.ts` (`parseTranscript(lines)`) is the
+  `.ts` half — no fs/Electron — mapping jsonl lines → the `Conversation` model: a string/`text`
+  user line → `user-prompt`; assistant `text` → `assistant-text`; assistant `tool_use` →
+  `tool-call`, EXCEPT the render tool (name `mcp__cosmos-render-ui__render_ui`) → a `surface` turn
+  carrying `input.spec`; a user `tool_result` correlates to its tool-call by `tool_use_id`. Noise
+  (`permission-mode`/`file-history-snapshot`/`attachment`/`queue-operation`), `isSidechain`, and
+  malformed/partial lines are skipped (one bad line never blanks the timeline). Tool args/results
+  are surfaced ONLY as a bounded (`PREVIEW_MAX_LEN`=200), secret-redacted one-line `previewArgs`.
+- **Live trigger = re-read on run-lifecycle (NOT `fs.watch`).** On every `agent:status`
+  `completed`, main re-reads the transcript and pushes `conversation:update`
+  (`pushConversationUpdateToRenderer`). `claude` has flushed by completion, so no racing a partial
+  mid-write. It fires on ALL completed runs (the status payload has no target) — a non-default run
+  didn't append to the default transcript, so the re-read is idempotent. The fetch handler is
+  `conversation:fetch` (invoke, no arg). Both validated by `validateConversationResult` BEFORE
+  send (validate-before-send, like `validateAgentStatusPayload`) — a malformed/secret frame is
+  dropped, never sent.
+- **Reconciliation: the live in-flight surface shows EXACTLY ONCE.** `cosmosConversation.ts`
+  (`reconcileTimeline`) appends the live `ui:render` provisional entry ONLY while in flight; on
+  `completed` the panel clears `live` (and the `conversation:update` re-read supplies the final
+  turn), and a live `surface` whose `surfaceId` already appears in the transcript is suppressed.
+  HISTORICAL surfaces are display-only: rendered via the SAME `ActiveTabSurface` host but with
+  `requestId:''`, so a control action is a safe no-op (`handleAction` bails on empty requestId) —
+  never an error. Only the live in-flight surface carries a real, resolvable `requestId`.
+- **PanelTabStrip gained two OPTIONAL, additive props** for the pinned default: `PanelTab.closeable`
+  (default true; `false` suppresses the `X` entirely) and `onNewTab` now optional (absent ⇒ no `+`).
+  The four other panels omit both ⇒ unchanged behavior.
+- **PRELOAD edit**: `window.cosmos.conversation` (`getDefault`/`onUpdate`) is a NEW preload surface —
+  a full `npm run dev` restart is required (HMR leaves it `not a function`). The panel guards
+  `window.cosmos.conversation` absence → empty state, so an un-restarted dev session degrades calmly.
+- **No markdown dep.** Assistant/tool text renders as React TEXT nodes (auto-escaped,
+  `whitespace-pre-wrap`), never raw HTML — zero injection surface, zero new dependency. Rich
+  markdown is a deferred refinement. Long-history surface virtualization (OQ-V2-perf) is also
+  deferred (all historical `A2UIProvider`s currently mount).
+
 ## Session persistence (session-persistence-v1)
 
 The working session (all rail panel tabs, composed generated-UI surfaces, terminal `claude`

@@ -1,121 +1,187 @@
 /**
- * CosmosPanel — the always-present general-purpose A2UI surface (formerly GeneratedUiPanel).
+ * CosmosPanel — the default-session CONVERSATION TIMELINE (cosmos-conversation-panel-v2,
+ * step 3). Supersedes the step-1 surface-per-tab placeholder.
  *
- * cosmos-conversation-panel-v1 STEP 1 (rail/panel swap only): the "Generated UI" rail panel was
- * renamed to "Cosmos". This component keeps the CURRENT tabbed render behavior intact — it still
- * hosts the live A2UI surface for the general-purpose agent. The conversation-history timeline is
- * a FOLLOW-UP step; nothing about the render path changed here beyond the rail identity.
+ * The panel renders the default agent's full conversation — read from its persistent
+ * transcript jsonl in MAIN (the `transcriptReader`, confined to the one default-session
+ * path) and delivered over the `conversation:*` IPC channel — as a scrollable timeline:
+ * user prompt bubbles, assistant text, collapsible tool-call rows, and inline interactive
+ * A2UI surfaces (FR-109/FR-110). It LIVE-updates as runs land (main re-reads + pushes on a
+ * completed run, FR-107) and reconciles the live in-flight `ui:render` surface with the
+ * transcript so a turn shows exactly once (no double-render, FR-111).
  *
- * IMPORTANT — rail id vs. wire target diverge here (cosmos-conversation-panel-v1, OQ-2/OQ-5):
- *  - The RAIL `SurfaceId` is now `'cosmos'` → `usePublishComposer('cosmos', …)` so the ONE
- *    App-level Open-Prompt composer routes here while Cosmos is the active surface.
- *  - The WIRE `UiRenderTarget` stays `'generated-ui'` → `target: 'generated-ui'` so the agent's
- *    `render_ui` frames (which still stamp `'generated-ui'`) land here, and the persisted snapshot
- *    key stays `'generated-ui'` → `useRestoredGenerativePanel('generated-ui')` so a restored
- *    session still feeds this panel (no schema migration).
+ * IMPORTANT — rail id vs. wire target still diverge (carried from step 1; FR-117):
+ *  - The RAIL `SurfaceId` is `'cosmos'` → `usePublishComposer('cosmos', …)` so the ONE
+ *    App-level Open-Prompt composer routes here.
+ *  - The WIRE `UiRenderTarget` stays `'generated-ui'` → the agent's `render_ui` frames land
+ *    here and the persistent step-2 session path is unchanged. Do NOT "finish the rename".
  *
- * The panel hosts an independent ordered set of VS Code-style tabs (FR-001). Each tab owns its own
- * A2UI surface; the panel mounts ONLY the active tab's `<A2UIProvider>` + renderer subtree
- * (inactive tabs keep their surface spec in hook state, re-processed on switch — FR-003 — so we
- * never mount N providers fighting over the one `ui:render` channel). With zero tabs the panel
- * shows its idle placeholder (FR-018); the composer is always present (FR-016).
- *
- * The originating-tab correlation (FR-012/012a/013/014/015/027) lives in the shared
- * `useGenerativePanelTabs` hook; this component is chrome (strip + idle placeholder)
- * + composer. `cancelOnClose: true` because a `generated-ui` render_ui call BLOCKS
- * in main awaiting the user's action (CLAUDE.md), so closing its tab must cancel.
- *
- * Spec trace carried forward (render-ui-v1): FR-005 render spec, FR-006 send action,
- * FR-009 cancel (now via tab close), FR-012 requestId echo, SC-005 malformed → safe.
+ * TAB MODEL (FR-114/FR-115/FR-116): the panel retires `useGenerativePanelTabs` for the
+ * Cosmos surface in favor of a small purpose-built tab state (`cosmosTabs.ts`) with ONE
+ * pinned, UNDELETABLE default tab. Future favorited tabs are appended additively (none built
+ * in step 3).
  */
 
-import { useEffect, useMemo } from 'react'
-import { A2UIProvider } from '@a2ui-sdk/react/0.9'
-import { CosmosMark } from './CosmosMark'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { PanelTabStrip, type PanelTab } from './PanelTabStrip'
-import { PanelRefreshButton } from './PanelRefreshButton'
-import { panelRefreshInputsFor } from './panelRefreshLogic'
 import { PanelFooter } from './PanelFooter'
-import { ActiveTabSurface } from './ActiveTabSurface'
+import { CosmosMark } from './CosmosMark'
 import { usePublishComposer } from './ActiveComposerProvider'
-import { SurfaceSpinner } from './SurfaceSpinner'
-import { useGenerativePanelTabs } from './useGenerativePanelTabs'
-import { surfaceSpinnerVisible } from './promptComposerLogic'
-import { useTabShortcuts } from './useTabShortcuts'
-import { useRestoredGenerativePanel } from './SessionProvider'
+import { CosmosTimelineEntry } from './CosmosTimelineEntry'
+import { reconcileTimeline, type LiveInFlight } from './cosmosConversation'
+import { initialCosmosTabs, setActiveCosmosTab, closeCosmosTab } from './cosmosTabs'
+import type { Conversation } from '../shared/conversation'
+import type {
+  ConversationResult,
+  UiRenderPayload,
+  AgentStatusPayload
+} from '../shared/ipc'
+
+/** The four read states the panel presents (FR-112). */
+type ReadState =
+  | { phase: 'loading' }
+  | { phase: 'empty' }
+  | { phase: 'error' }
+  | { phase: 'populated'; conversation: Conversation }
+
+/** Map a `ConversationResult` to a read state (FR-108/FR-112). */
+function toReadState(result: ConversationResult): ReadState {
+  if (result.ok) {
+    return result.conversation.state === 'empty'
+      ? { phase: 'empty' }
+      : { phase: 'populated', conversation: result.conversation }
+  }
+  return result.reason === 'empty' ? { phase: 'empty' } : { phase: 'error' }
+}
 
 export function CosmosPanel({ active }: { active: boolean }): React.JSX.Element {
-  // Snapshot key stays the WIRE target 'generated-ui' (OQ-5 — no schema migration), so a restored
-  // session still feeds the Cosmos panel even though the rail id is now 'cosmos'.
-  const restored = useRestoredGenerativePanel('generated-ui')
-  const { tabs, activeTabId, activeTab, setActive, submit, newTab, closeTab, update } =
-    useGenerativePanelTabs({
-      // WIRE render target stays 'generated-ui' (OQ-2) — the agent's render_ui frames still
-      // stamp this; the rail id divergence is intentional.
-      target: 'generated-ui',
-      panelName: 'Cosmos',
-      cancelOnClose: true,
-      ...(restored ? { initial: restored } : {})
-    })
+  // FR-114: the pinned-default tab state (purpose-built; NOT useGenerativePanelTabs).
+  const [tabsState, setTabsState] = useState(initialCosmosTabs)
 
-  // Tab keyboard shortcuts act on THIS strip only while the Cosmos surface is active.
-  useTabShortcuts({ active, tabs, activeTabId, onActivate: setActive, onNewTab: newTab, onCloseTab: closeTab })
+  // The transcript-sourced conversation read state (FR-112).
+  const [read, setRead] = useState<ReadState>({ phase: 'loading' })
+  // The live in-flight run, reconciled with the transcript (FR-111). Null when idle.
+  const [live, setLive] = useState<LiveInFlight>(null)
+  // The last submitted prompt text, shown on the in-flight "generating" affordance.
+  const lastPromptRef = useRef<string | undefined>(undefined)
+  const scrollRef = useRef<HTMLDivElement>(null)
 
-  // Always keep ≥1 tab (Terminal-unified layout): seed one on mount and reopen a fresh
-  // tab if the collection ever empties, so the tab strip is never a zero-tab empty state.
+  // FR-106: fetch the full default-session conversation on mount; subscribe to live pushes
+  // (main re-reads + pushes on a completed run — FR-107). `window.cosmos.conversation` is a
+  // NEW preload surface (full `npm run dev` restart required); guard it so an un-restarted
+  // dev session degrades to the empty state instead of throwing.
   useEffect(() => {
-    if (tabs.length === 0) {
-      newTab()
+    const conversation = window.cosmos.conversation
+    if (!conversation) {
+      setRead({ phase: 'empty' })
+      return
     }
-    // newTab is stable; only react to the count reaching 0.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [tabs.length])
-
-  // The idle placeholder is the base shown not only at zero tabs but also whenever the
-  // active tab has not composed a surface yet (a fresh `+` "Untitled" tab), so a new tab
-  // lands on the same base screen instead of a blank panel.
-  const showBase = !activeTab || (!activeTab.surface && !activeTab.error)
-
-  // The surface send-spinner gate, scoped to the ACTIVE tab (composer-send-animation-v1
-  // FR-005/FR-008): in-flight without a landed surface/error → show the spinner.
-  const showSpinner = !!activeTab &&
-    surfaceSpinnerVisible({
-      inFlight: activeTab.inFlight,
-      hasSurface: activeTab.surface != null,
-      hasError: activeTab.error != null,
-      loadingDefault: activeTab.loadingDefault
+    let disposed = false
+    conversation
+      .getDefault()
+      .then((result) => {
+        if (!disposed) {
+          setRead(toReadState(result))
+        }
+      })
+      .catch(() => {
+        if (!disposed) {
+          setRead({ phase: 'error' })
+        }
+      })
+    const off = conversation.onUpdate((result) => {
+      setRead(toReadState(result))
+      // A completed run flushed into the transcript — the in-flight provisional entry is now
+      // confirmed by the transcript, so clear the live state (FR-111: shown exactly once).
+      setLive(null)
     })
+    return () => {
+      disposed = true
+      off()
+    }
+  }, [])
 
-  const stripTabs: PanelTab[] = tabs.map((t) => ({
-    id: t.id,
-    label: t.label,
-    kind: 'generative' as const,
-    status: t.inFlight ? 'in-flight' : t.error ? 'error' : 'idle',
-    untitled: t.untitled,
-    ...(t.error ? { errorMessage: t.error } : {})
-  }))
+  // FR-111: track the LIVE in-flight run. A `ui:render` for the wire target 'generated-ui'
+  // is the in-flight surface (authoritative until the transcript confirms it); an
+  // `agent:status` 'started' opens a "generating" affordance, 'completed'/'error' clears it
+  // (the transcript re-read on completion supplies the final turn).
+  useEffect(() => {
+    const offRender = window.cosmos.ui.onRender((payload: UiRenderPayload) => {
+      if (payload.target !== 'generated-ui') {
+        return
+      }
+      setLive({
+        phase: 'surface',
+        requestId: payload.requestId,
+        spec: payload.spec,
+        promptText: lastPromptRef.current
+      })
+    })
+    const offStatus = window.cosmos.agent.onStatus((status: AgentStatusPayload) => {
+      if (status.state === 'started') {
+        setLive({ phase: 'generating', promptText: lastPromptRef.current })
+      } else {
+        // completed / error: clear the in-flight affordance. On completed, the
+        // conversation:update re-read also clears it (idempotent).
+        setLive(null)
+      }
+    })
+    return () => {
+      offRender()
+      offStatus()
+    }
+  }, [])
 
-  const activeStripTab = stripTabs.find((t) => t.id === activeTabId) ?? null
-  // panel-refresh-v1 (Goal 1): the shared refresh control, fed the active tab's surface
-  // slice. A generated-UI surface composed without a descriptor derives to disabled (OQ-2).
-  const refreshInputs = panelRefreshInputsFor(activeTab)
-
-  // open-prompt-hoist-v1: publish this panel's composer wiring to the shared registry so the
-  // ONE App-level composer routes to it while Cosmos is the active surface. Published under the
-  // RAIL id 'cosmos' (not the wire target) so it matches the active SurfaceId. Cosmos is always
-  // available (no connection gate), carries no view-context chip.
+  // open-prompt-hoist-v1: publish this panel's composer under the RAIL id 'cosmos' so the
+  // ONE App-level composer routes here. Submitting starts a default-agent run exactly as
+  // today — the composer threads the wire target 'generated-ui' via the agent submit path
+  // (FR-113); the step-2 persistent session is unchanged.
+  const showSpinner = live?.phase === 'generating'
   usePublishComposer(
     'cosmos',
     useMemo(
       () => ({
-        onSubmit: submit,
+        onSubmit: (utterance: string) => {
+          lastPromptRef.current = utterance
+          // FR-113: a new in-flight turn appears immediately (the run's 'started' status will
+          // also set this, but seeding here makes the prompt bubble appear on Enter).
+          setLive({ phase: 'generating', promptText: utterance })
+          window.cosmos.agent.submit({ utterance, target: 'generated-ui' })
+        },
         placeholder: 'Describe the UI you want…',
         ariaLabel: 'Compose generated UI',
         busy: showSpinner
       }),
-      [submit, showSpinner]
+      [showSpinner]
     )
   )
+
+  // The reconciled timeline (FR-111): transcript turns + the live in-flight entry, once.
+  const timeline = useMemo(() => {
+    const turns = read.phase === 'populated' ? read.conversation.turns : []
+    return reconcileTimeline(turns, live)
+  }, [read, live])
+
+  // Auto-scroll to the newest turn as the timeline grows.
+  useEffect(() => {
+    if (active && scrollRef.current) {
+      scrollRef.current.scrollTop = scrollRef.current.scrollHeight
+    }
+  }, [timeline.length, active])
+
+  // FR-114: the tab strip with the pinned default tab. PanelTabStrip renders a close `X`
+  // only when `onClose` would act — the default tab is never closeable (closeCosmosTab is a
+  // no-op for it), and we mark it via the strip's `closeable` discriminator below.
+  const stripTabs: PanelTab[] = tabsState.tabs.map((t) => ({
+    id: t.id,
+    label: t.label,
+    kind: 'generative' as const,
+    status: 'idle' as const,
+    // The pinned default tab has NO close affordance (FR-114).
+    closeable: t.kind !== 'default'
+  }))
+
+  const hasLiveOrTurns = timeline.length > 0
 
   return (
     <section
@@ -124,55 +190,52 @@ export function CosmosPanel({ active }: { active: boolean }): React.JSX.Element 
     >
       <PanelTabStrip
         tabs={stripTabs}
-        activeTabId={activeTabId}
-        onActivate={setActive}
-        onClose={closeTab}
-        onNewTab={newTab}
-        onRename={(id, label) => update(id, { label, renamed: true, untitled: false })}
-        trailing={
-          <PanelRefreshButton
-            activeTab={refreshInputs.activeTab}
-            requestId={refreshInputs.requestId}
-          />
-        }
+        activeTabId={tabsState.activeTabId}
+        onActivate={(id) => setTabsState((s) => setActiveCosmosTab(s, id))}
+        onClose={(id) => setTabsState((s) => closeCosmosTab(s, id))}
         ariaLabel="Cosmos tabs"
       />
 
-      <div className="min-h-0 flex-1 overflow-auto p-3 text-card-foreground" role="tabpanel">
-        {/* Surface send-spinner: the busy state of this region while a submitted run is in
-            flight, until its surface lands (composer-send-animation-v1 FR-005/FR-006). */}
-        {showSpinner && <SurfaceSpinner />}
-        {showBase && !showSpinner && (
-          // FR-018: idle placeholder when zero tabs are open or the active tab is empty.
-          // Suppressed while the send-spinner shows so the two never co-render.
-          <p className="text-[13px] text-muted-foreground">
-            Describe a UI below and Claude will build it here.
-          </p>
+      <div
+        ref={scrollRef}
+        className="min-h-0 flex-1 space-y-3 overflow-auto p-3 text-card-foreground"
+        role="tabpanel"
+      >
+        {read.phase === 'loading' && (
+          <p className="text-[13px] text-muted-foreground">Loading conversation…</p>
         )}
-        {activeTab?.error && (
+        {read.phase === 'error' && (
           <p
             className="rounded-md border border-destructive/40 bg-destructive/15 px-2.5 py-2 text-[13px] text-destructive"
             role="alert"
           >
-            Could not generate that UI: {activeTab.error}
+            Could not read the conversation transcript. You can still describe a UI below.
           </p>
         )}
-        {/* Only the ACTIVE tab's provider is mounted; keyed by tab id so a switch
-            remounts + re-processes that tab's stored surface (FR-003). */}
-        {activeTab && (activeTab.surface || activeTab.error) && (
-          <A2UIProvider key={activeTab.id}>
-            <ActiveTabSurface
-              surface={activeTab.surface}
-              catalogId="standard"
-              panelName="CosmosPanel"
-            />
-          </A2UIProvider>
-        )}
+        {(read.phase === 'empty' || read.phase === 'populated') &&
+          !hasLiveOrTurns && (
+            <p className="text-[13px] text-muted-foreground">
+              Describe a UI below and Claude will build it here — your conversation will appear in
+              this timeline.
+            </p>
+          )}
+        {timeline.map((entry, i) => (
+          <CosmosTimelineEntry key={entryKey(entry, i)} entry={entry} />
+        ))}
       </div>
 
-      {/* open-prompt-hoist-v1: the composer is now ONE App-level instance routed to the
-          active surface; this panel publishes its wiring via usePublishComposer above. */}
-      <PanelFooter surfaceName="Cosmos" icon={CosmosMark} activeTab={activeStripTab} />
+      <PanelFooter surfaceName="Cosmos" icon={CosmosMark} activeTab={null} />
     </section>
   )
+}
+
+/** A stable-ish key for a timeline entry (turn id, or a synthetic live key). */
+function entryKey(entry: ReturnType<typeof reconcileTimeline>[number], index: number): string {
+  if (entry.kind === 'turn') {
+    return entry.turn.id
+  }
+  if (entry.kind === 'live-surface') {
+    return `live-surface:${entry.requestId}`
+  }
+  return `live-generating:${index}`
 }

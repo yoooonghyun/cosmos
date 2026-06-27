@@ -44,6 +44,13 @@ export interface PanelTab {
   untitled?: boolean
   /** Error message for the tooltip when `status === 'error'` (FR-015). */
   errorMessage?: string
+  /**
+   * Whether this tab shows a close `X` (cosmos-conversation-panel-v2 FR-114). Defaults to
+   * `true` (the existing per-tab close affordance). The Cosmos pinned DEFAULT tab passes
+   * `false` so it has NO close affordance and cannot be closed by click/keyboard. Purely
+   * additive: the four generative panels + terminal omit it ⇒ closeable, unchanged.
+   */
+  closeable?: boolean
 }
 
 export interface PanelTabStripProps {
@@ -55,8 +62,12 @@ export interface PanelTabStripProps {
   onActivate: (tabId: string) => void
   /** `X` click or Delete/Backspace closes a tab (FR-004/FR-006). */
   onClose: (tabId: string) => void
-  /** `+` opens a new tab (FR-005). */
-  onNewTab: () => void
+  /**
+   * `+` opens a new tab (FR-005). OPTIONAL: when omitted the pinned `+` is not rendered
+   * (cosmos-conversation-panel-v2 — the Cosmos panel has no new-tab affordance in step 3;
+   * favorites are out of scope). The four generative panels + terminal always pass it.
+   */
+  onNewTab?: () => void
   /**
    * A committed inline rename (tab-rename-v1 FR-019): the strip reports the new,
    * trimmed `label` and the panel persists it (label + `renamed`) into its own tab
@@ -360,7 +371,9 @@ export function PanelTabStrip({
                       (dimmed + non-interactive) so it keeps its layout slot — the tab width
                       stays stable on entering edit mode — without an awkward empty gap and
                       with no click target during a rename. stopPropagation so it doesn't
-                      also activate the tab. */}
+                      also activate the tab. SUPPRESSED entirely for a non-closeable tab
+                      (cosmos pinned default — FR-114): no `X`, no close path. */}
+                  {t.closeable !== false && (
                   <Button
                     asChild
                     variant="ghost"
@@ -399,6 +412,7 @@ export function PanelTabStrip({
                       <X aria-hidden="true" />
                     </span>
                   </Button>
+                  )}
                 </button>
               </TooltipTrigger>
               <TooltipContent side="bottom">{tooltip}</TooltipContent>
@@ -411,23 +425,26 @@ export function PanelTabStrip({
           control), pinned LEFT of `+` in the same non-scrolling cluster. Never scrolls. */}
       {trailing}
 
-      {/* Pinned trailing `+` — never scrolls (design §4.1). Always present, incl. the
-          zero-tab state (FR-005/FR-016). */}
-      <Tooltip>
-        <TooltipTrigger asChild>
-          <Button
-            type="button"
-            variant="ghost"
-            size="icon-sm"
-            aria-label="New tab"
-            onClick={onNewTab}
-            className="shrink-0 self-center rounded-none border-l border-border"
-          >
-            <Plus className="size-4" aria-hidden="true" />
-          </Button>
-        </TooltipTrigger>
-        <TooltipContent side="bottom">New tab</TooltipContent>
-      </Tooltip>
+      {/* Pinned trailing `+` — never scrolls (design §4.1). Present for every panel that
+          passes `onNewTab` (FR-005/FR-016); OMITTED when absent (cosmos-conversation-panel-v2
+          — the Cosmos panel has no new-tab affordance in step 3). */}
+      {onNewTab && (
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon-sm"
+              aria-label="New tab"
+              onClick={onNewTab}
+              className="shrink-0 self-center rounded-none border-l border-border"
+            >
+              <Plus className="size-4" aria-hidden="true" />
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent side="bottom">New tab</TooltipContent>
+        </Tooltip>
+      )}
     </div>
   )
 }

@@ -15,14 +15,14 @@ const allDisabled: EnabledIntegrations = {
 }
 
 describe('visibleSurfaceIds — rail = always-present + enabled gateable (FR-004/FR-005)', () => {
-  it('first-run (all disabled) shows only terminal + cosmos (SC-005)', () => {
-    expect(visibleSurfaceIds(allDisabled)).toEqual(['terminal', 'cosmos'])
+  it('first-run (all disabled) shows only cosmos + terminal (SC-005)', () => {
+    expect(visibleSurfaceIds(allDisabled)).toEqual(['cosmos', 'terminal'])
   })
 
   it('shows an integration only when enabled, in fixed rail order (SC-003)', () => {
     expect(
       visibleSurfaceIds({ ...allDisabled, jira: true, slack: true })
-    ).toEqual(['terminal', 'cosmos', 'slack', 'jira'])
+    ).toEqual(['cosmos', 'terminal', 'slack', 'jira'])
   })
 
   it('fully enabled rail preserves the canonical order', () => {

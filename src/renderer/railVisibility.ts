@@ -20,8 +20,9 @@ import type { EnabledIntegrations, GateableIntegration } from '../shared/ipc'
  */
 export type SurfaceId = 'terminal' | 'cosmos' | GateableIntegration
 
-/** The always-present surfaces — never gated, never have an Enable toggle (FR-005). */
-export const ALWAYS_PRESENT: SurfaceId[] = ['terminal', 'cosmos']
+/** The always-present surfaces — never gated, never have an Enable toggle (FR-005). Cosmos sits
+ *  ABOVE Terminal in the rail (order = rail order); Terminal remains the default/fallback surface. */
+export const ALWAYS_PRESENT: SurfaceId[] = ['cosmos', 'terminal']
 
 /** The gateable integration surfaces, in canonical rail order (FR-004). */
 export const GATEABLE_SURFACES: GateableIntegration[] = [
