@@ -26,6 +26,7 @@ import { Badge } from '@/components/ui/badge'
 import { Avatar, AvatarFallback } from '@/components/ui/avatar'
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { cn } from '@/lib/utils'
+import { useSlackScrollToLatest } from '../useSlackScrollToLatest'
 // slack-generative-adapter-v1 (design §6): the bound Slack lists reuse the SHARED adapter
 // controls + binding helpers VERBATIM (the single definition the Jira catalog also uses).
 // Slack registers LoadMoreButton only — never PaginationBar (append-only). Refresh moved to
@@ -319,6 +320,12 @@ export function MessageList({
   // panel (newest-at-bottom). Re-ordering here leaves the shared dispatcher untouched.
   const items = orderBoundMessages(boundRows(rows))
   const loaded = useLoadedOnce(items.length, isLoading)
+  // bug slack-history-scroll-to-latest-v1: this newest-at-bottom generative list must also open
+  // scrolled to the LATEST (bottom) message. `SLACK_LIST_SCROLL_CLASS` is the scroller itself
+  // (kind='self') — ref ONLY, no layout/class change (preserves the per-list independent scroll
+  // + scrollbar-hover-only). One-shot on first non-empty render; a top load-more (prepend-older)
+  // or in-place refresh keeps the latch, so the user's position is preserved.
+  const scrollRef = useSlackScrollToLatest<HTMLDivElement>(items.length, 'self')
   if (showSkeletonState(items.length, isLoading, loaded, errorMessage)) {
     return <MessageSkeleton />
   }
@@ -335,7 +342,7 @@ export function MessageList({
     // through the layout.tsx wrapper) so a LONE list fills to the panel bottom (no dead gap) and
     // N lists equal-split + each scroll independently. The count label, top load-more, and rows
     // stay inside the region (FR-005); a short list shows no inner scrollbar (FR-004).
-    <div className={cn('flex w-full flex-col', SLACK_LIST_SCROLL_CLASS)} aria-busy={isLoading}>
+    <div ref={scrollRef} className={cn('flex w-full flex-col', SLACK_LIST_SCROLL_CLASS)} aria-busy={isLoading}>
       <BoundListError message={errorMessage} />
       <div className="flex items-center justify-between gap-2 px-3 py-1.5">
         <p className="text-xs text-muted-foreground" aria-live="polite">

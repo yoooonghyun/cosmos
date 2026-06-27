@@ -87,6 +87,7 @@ import { surfaceSpinnerVisible } from './promptComposerLogic'
 import { usePerTabNav } from './usePerTabNav'
 import { useTabShortcuts } from './useTabShortcuts'
 import { canSubmitSlackMessage } from './slackComposerLogic'
+import { useSlackScrollToLatest } from './useSlackScrollToLatest'
 import { loadAllChannels } from './slackChannelSearchLogic'
 import { useConfirm } from './useConfirm'
 import { ConfirmDialog } from '@/components/ui/confirm-dialog'
@@ -582,6 +583,14 @@ function MessageList({
   const [loadingMore, setLoadingMore] = useState(false)
   const [error, setError] = useState<SlackError | null>(null)
   const [loaded, setLoaded] = useState(false)
+  // bug slack-history-scroll-to-latest-v1: this newest-at-bottom list must open scrolled to
+  // the LATEST (bottom) message on initial load / channel switch. The component is REMOUNTED
+  // per channel (its `key` is `${channel.id}-${historyReloadKey}`), so each fresh load runs
+  // this hook's one-shot initial-load scroll; a top load-more (prepend-older) keeps the same
+  // mount and is left untouched, preserving the user's position. Only the self-scrolling
+  // history/search variant owns the Radix viewport; the bare thread-dock variant (scroll=false)
+  // scrolls via its parent dock, so the ref is simply never attached there.
+  const scrollRef = useSlackScrollToLatest<HTMLDivElement>(items.length, 'radix-viewport')
 
   const run = useCallback(
     async (next?: string) => {
@@ -669,7 +678,11 @@ function MessageList({
   if (!scroll) {
     return body
   }
-  return <ScrollArea className={messageListWrapClass(scroll)}>{body}</ScrollArea>
+  return (
+    <ScrollArea ref={scrollRef} className={messageListWrapClass(scroll)}>
+      {body}
+    </ScrollArea>
+  )
 }
 
 /* ------------------------------------------------------------------------- *
