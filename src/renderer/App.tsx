@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
 import { Settings, Sparkles } from 'lucide-react'
 import { SiConfluence, SiGooglecalendar, SiJira, SiSlack } from 'react-icons/si'
 import { siClaudecode } from 'simple-icons'
@@ -195,12 +195,19 @@ function AppShell(): React.JSX.Element {
   return (
     <TooltipProvider delayDuration={300}>
       <div className="app">
-        <header className="app__header">
-          <span className="app__title">cosmos</span>
-          <span className="app__subtitle">
-            Terminal Panel · Generated UI · Slack · Jira · Confluence · Claude Code
-          </span>
-        </header>
+        {/* titlebar: the custom window-chrome strip. The native title bar is removed in main
+            (`titleBarStyle: 'hidden'`), so this thin bar IS the top chrome. `bg-background` matches
+            the app/panel surface so it reads as one seamless surface (NOT a contrasting color bar);
+            the centered "cosmos" wordmark is the app title. Height (28px) matches main's
+            `trafficLightPosition` so the macOS traffic lights center in it. `WebkitAppRegion: drag`
+            makes the bar drag the window (interactive children would need `no-drag`). On Windows/
+            Linux there are no traffic lights — it still renders as a draggable title bar. */}
+        <div
+          className="flex h-7 shrink-0 items-center justify-center bg-background select-none"
+          style={{ WebkitAppRegion: 'drag' } as CSSProperties}
+        >
+          <span className="text-xs font-medium tracking-wide text-muted-foreground">cosmos</span>
+        </div>
         <Tabs
           orientation="vertical"
           value={surface}

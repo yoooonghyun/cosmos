@@ -1961,6 +1961,17 @@ function createWindow(): void {
     show: false,
     backgroundColor: '#1e1e1e',
     title: 'cosmos',
+    // titlebar-brand-accent: drop the native title bar but KEEP the macOS traffic-light
+    // buttons (close/min/max). On macOS `'hidden'` removes the bar chrome and leaves the
+    // lights, which we vertically center inside the renderer's custom title strip (28px tall,
+    // `bg-background` with a centered "cosmos" wordmark) via `trafficLightPosition`. The 16px
+    // lights centered in 28px ⇒ y≈6; x=14 insets them from the left. NOTE: this option only
+    // takes effect at window creation, so a running dev session must be FULLY restarted (not
+    // HMR) to see it. Windows/Linux have no traffic lights — there the strip is just a
+    // draggable title bar and the OS draws its own controls; native window controls /
+    // `titleBarOverlay` for those platforms are a follow-up if cosmos ever ships off macOS.
+    titleBarStyle: 'hidden',
+    trafficLightPosition: { x: 14, y: 6 },
     ...(existsSync(appIconPath()) ? { icon: appIconPath() } : {}),
     webPreferences: {
       preload: join(__dirname, '../preload/index.mjs'),
