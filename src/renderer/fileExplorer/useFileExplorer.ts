@@ -27,7 +27,7 @@ import {
   type TreeNode
 } from './tree'
 import {
-  invalidateOpen,
+  renderError,
   resolveRead,
   type ViewerState
 } from './viewerState'
@@ -81,6 +81,10 @@ export interface UseFileExplorer {
   setActiveFile: (relPath: string) => void
   /** Close one file's tab (FR-004/FR-005); the active one re-picks the adjacency neighbour. */
   closeFile: (relPath: string) => void
+  /** Flip an open document tab to the calm "Couldn't open this file" block when its renderer
+   * threw on a corrupt/malformed file (file-viewer-multiformat-v1, FR-008). Touches only that
+   * tab; a closed/absent tab is a no-op. */
+  markRenderError: (relPath: string) => void
   /** Re-list the root (the §2.3 Retry button). */
   retryRoot: () => void
 }
@@ -229,16 +233,19 @@ export function useFileExplorer(
         void listDir(dir, false)
       }
       for (const openRel of openRelsRef.current) {
-        // Re-read each open file: a vanished read invalidates only that tab (FR-010). Coarse but
-        // cheap (one read per open file per change). ponytail: re-read all open on every change.
+        // Re-read each open file and apply the FRESH result to its tab. Coarse but cheap (one read
+        // per open file per change). ponytail: re-read all open on every change.
         void window.cosmos.fs.read(paneId, openRel).then((res) => {
           // Skip if the tab was closed before the read landed (no longer open).
           if (!openRelsRef.current.includes(openRel)) {
             return
           }
-          if (!res.ok && res.reason === 'not-found') {
-            setOpenFiles((s) => updateOpenFile(s, openRel, invalidateOpen(openRel)))
-          }
+          // Apply the re-read to the tab via the SAME mapping as the initial open/seed (line ~215):
+          // ok → the NEW text/image content (the live on-disk change the user expects to see),
+          // not-found → "no longer available" (FR-010), other benign failures → their calm block.
+          // Previously only the not-found case updated state, so a CONTENT change was re-read but
+          // silently dropped — the editor kept showing the stale content (the reported bug).
+          setOpenFiles((s) => updateOpenFile(s, openRel, resolveRead(openRel, res)))
         })
       }
     })
@@ -294,6 +301,17 @@ export function useFileExplorer(
     setOpenFiles((s) => closeOpenFile(s, relPath))
   }, [])
 
+  // file-viewer-multiformat-v1 FR-008: a per-format renderer (PDF/DOCX/SHEET) reported a parse
+  // failure on a corrupt file → flip THAT tab to the calm `render-error` block. Reuses the same
+  // per-tab `updateOpenFile` isolation as a read resolve, so a sibling tab is never disturbed; a
+  // tab closed before the failure landed is a harmless no-op (updateOpenFile discards the patch).
+  const markRenderError = useCallback((relPath: string): void => {
+    if (!openRelsRef.current.includes(relPath)) {
+      return
+    }
+    setOpenFiles((s) => updateOpenFile(s, relPath, renderError(relPath)))
+  }, [])
+
   const retryRoot = useCallback((): void => {
     void listDir('', true)
   }, [listDir])
@@ -309,6 +327,7 @@ export function useFileExplorer(
     openFile,
     setActiveFile,
     closeFile,
+    markRenderError,
     retryRoot
   }
 }

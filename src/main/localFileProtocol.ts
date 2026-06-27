@@ -24,7 +24,6 @@ import { protocol } from 'electron'
 import { createReadStream, realpathSync, statSync } from 'node:fs'
 import { Readable } from 'node:stream'
 import { confine, type ConfineFs } from './pathConfine'
-import { isImageExtension } from './fileKind'
 import { COSMOS_FILE_SCHEME, decodeLocalFileRef } from './localFileRef'
 
 export { COSMOS_FILE_SCHEME }
@@ -95,11 +94,13 @@ export function handleLocalFile(getRoot: RootResolver): (request: Request) => Pr
     if (!c.ok) {
       return brokenImageResponse(c.reason === 'not-found' ? 404 : 403)
     }
-    // This scheme is image-only (FR-010). A non-image extension never streams here — text /
-    // binary are classified + delivered over the `fs:read` IPC path instead.
-    if (!isImageExtension(ref.relPath)) {
-      return brokenImageResponse(415)
-    }
+    // file-viewer-multiformat-v1 (FR-007/FR-014): the image-only 415 gate is RELAXED — this
+    // scheme now streams ANY confined in-root regular file so the document renderers
+    // (pdf/docx/sheet) can fetch their bytes through the SAME confinement envelope as images.
+    // The security model is unchanged: the ref was decoded + validated (first SSRF gate), the
+    // root was resolved by paneId (never renderer-supplied), and `confine` real-path-checked
+    // the target against that root above — only the extension allowlist is dropped. text/code
+    // still rides `fs:read` (Monaco), so in practice the consumers here are images + documents.
     try {
       // Confirm it is a regular file (not a dir/socket) before streaming.
       const stat = statSync(c.abs)

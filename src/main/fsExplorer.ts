@@ -24,7 +24,9 @@
  */
 
 import { confine, type ConfineFs } from './pathConfine'
-import { classifyFile } from './fileKind'
+import { looksLikeText } from './fileKind'
+import { resolveViewerKind } from './viewerKind'
+import { isTooLarge } from './viewerCaps'
 import type { FsEntry, FsListResult, FsReadResult } from '../shared/ipc'
 
 /**
@@ -70,8 +72,13 @@ export interface ExplorerFs extends ConfineFs {
   /** `realpath` is inherited from {@link ConfineFs}: canonical path or `null` if missing. */
   /** Directory entries (names + dirent flags) of `absDir`, or an error sentinel. */
   readDir(absDir: string): { name: string; isDir: boolean; isSymlink: boolean }[] | { error: 'denied' | 'not-found' }
-  /** The file's bytes at `absFile`, or an error sentinel. NO size cap (FR-012). */
+  /** The file's bytes at `absFile`, or an error sentinel. NO size cap on text/image
+   * (FR-012) — document caps are enforced via {@link statSize} BEFORE this is called. */
   readFileBytes(absFile: string): Uint8Array | { error: 'denied' | 'not-found' }
+  /** The file's size in bytes at `absFile`, or `null` on any stat error (file-viewer-
+   * multiformat-v1 FR-012). Used to enforce a document's per-format cap WITHOUT reading the
+   * whole file. Total — never throws; a `null` means "size unknown, do not refuse for size". */
+  statSize(absFile: string): number | null
   /** Start watching `absRoot` recursively; `onEvent` fires on any change. Returns a handle. */
   watch(absRoot: string, onEvent: () => void): FsWatcher | null
 }
@@ -144,18 +151,39 @@ export function createFsExplorer(deps: {
     if (!c.ok) {
       return { ok: false, reason: c.reason }
     }
+    // file-viewer-multiformat-v1 (FR-005/FR-007/FR-012): route by the viewer REGISTRY.
+    // A DOCUMENT extension (pdf/docx/xlsx) routes to its renderer by NAME alone — its bytes
+    // never ride IPC (the renderer fetches them from `cosmos-file://`, FR-007), exactly like
+    // the image marker. So for those we DON'T read the bytes; we only `statSize` to enforce
+    // the per-format cap (FR-012) — over the cap → `too-large`, else the document marker.
+    // An image likewise needs no byte read (marker only). Only a non-document, non-image file
+    // is read + sniffed to decide text vs the calm "no preview" fallback (FR-006).
+    const extKind = resolveViewerKind(relPath)
+    if (extKind === 'pdf' || extKind === 'docx' || extKind === 'sheet') {
+      const size = fs.statSize(c.abs)
+      if (size === null) {
+        // Cannot stat (vanished / denied) — surface a benign read error, not a crash.
+        return { ok: false, reason: 'not-found' }
+      }
+      if (isTooLarge(extKind, size)) {
+        return { ok: false, reason: 'too-large' }
+      }
+      return { ok: true, kind: extKind }
+    }
+    if (extKind === 'image') {
+      // Image bytes do NOT ride IPC — the renderer loads the `cosmos-file://` URL
+      // (FR-010/FR-028). Return only the marker.
+      return { ok: true, kind: 'image' }
+    }
+    // Non-document, non-image: read the bytes and sniff text-vs-binary (no cap on these,
+    // FR-012). `resolveViewerKind(name, sniffText)` then yields `text` or `unsupported`.
     const bytes = fs.readFileBytes(c.abs)
     if (bytes instanceof Uint8Array) {
-      const kind = classifyFile(relPath, bytes)
-      if (kind === 'image') {
-        // Image bytes do NOT ride IPC — the renderer loads the `cosmos-file://` URL
-        // (FR-010/FR-028). Return only the marker.
-        return { ok: true, kind: 'image' }
-      }
-      if (kind === 'text') {
+      const sniffText = looksLikeText(bytes)
+      if (resolveViewerKind(relPath, sniffText) === 'text') {
         return { ok: true, kind: 'text', text: new TextDecoder('utf-8').decode(bytes) }
       }
-      // Binary / non-text, not a supported image — "preview not available" (FR-011).
+      // Sniffed binary / no registered viewer — "preview not available" (FR-006/FR-011).
       return { ok: false, reason: 'binary' }
     }
     return { ok: false, reason: bytes.error }

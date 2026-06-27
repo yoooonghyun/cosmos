@@ -16,7 +16,9 @@ import { useEffect, useRef, useState } from 'react'
 import {
   File,
   FileQuestion,
+  FileWarning,
   FileX2,
+  HardDrive,
   ImageOff,
   Lock,
   MousePointerClick
@@ -27,6 +29,9 @@ import { FileTabStrip, type FileTab } from './FileTabStrip'
 import { buildLocalFileSrc } from './localFileSrc'
 import { setupMonaco } from './monacoSetup'
 import { buildViewerEditorOptions, COSMOS_MONACO_THEME } from './monacoTheme'
+import { PdfView } from './PdfView'
+import { DocxView } from './DocxView'
+import { SheetView } from './SheetView'
 import type { ViewerState } from './viewerState'
 
 /** A calm centered state block (design §4.3) — glyph + title + reason. One shared layout. */
@@ -118,10 +123,13 @@ function ImageView({ paneId, relPath }: { paneId: string; relPath: string }): Re
 
 function ViewerBody({
   paneId,
-  viewer
+  viewer,
+  onRenderError
 }: {
   paneId: string
   viewer: NonNullable<ViewerState>
+  /** Flip this tab to the calm `render-error` block when a document renderer threw (FR-008). */
+  onRenderError: (relPath: string) => void
 }): React.JSX.Element {
   switch (viewer.kind) {
     case 'loading':
@@ -131,12 +139,38 @@ function ViewerBody({
       return <MonacoText relPath={viewer.relPath} text={viewer.text} />
     case 'image':
       return <ImageView paneId={paneId} relPath={viewer.relPath} />
+    case 'pdf':
+      return <PdfView paneId={paneId} relPath={viewer.relPath} onRenderError={onRenderError} />
+    case 'docx':
+      return <DocxView paneId={paneId} relPath={viewer.relPath} onRenderError={onRenderError} />
+    case 'sheet':
+      return <SheetView paneId={paneId} relPath={viewer.relPath} onRenderError={onRenderError} />
     case 'binary':
+    case 'unsupported':
+      // FR-006: a sniffed-binary / no-registered-viewer file → the calm "No preview available".
       return (
         <StateBlock
           glyph={FileQuestion}
-          title="Preview not available"
+          title="No preview available"
           reason="Can’t preview this file type."
+        />
+      )
+    case 'render-error':
+      // FR-008: a registered renderer threw on a corrupt/malformed file of its own type.
+      return (
+        <StateBlock
+          glyph={FileWarning}
+          title="Couldn’t open this file"
+          reason="The file may be corrupt or in an unsupported variant."
+        />
+      )
+    case 'too-large':
+      // FR-012: a document over its per-format size cap — not loaded.
+      return (
+        <StateBlock
+          glyph={HardDrive}
+          title="File too large to preview"
+          reason={`${viewer.name} exceeds the preview size limit.`}
         />
       )
     case 'denied':
@@ -167,6 +201,7 @@ export function FileViewer({
   viewer,
   onActivate,
   onClose,
+  onRenderError,
   onViewerFocusChange
 }: {
   paneId: string
@@ -180,6 +215,9 @@ export function FileViewer({
   onActivate: (relPath: string) => void
   /** Close a tab (X / Delete/Backspace). */
   onClose: (relPath: string) => void
+  /** Flip a document tab to the calm `render-error` block when its renderer threw on a corrupt
+   * file (file-viewer-multiformat-v1, FR-008). */
+  onRenderError: (relPath: string) => void
   /**
    * Report focus-within of the viewer region (terminal-focus-aware-close-tab-v1, OQ-1). `true` when
    * focus enters the viewer subtree (the tab strip OR the body), `false` when it leaves — so the
@@ -230,7 +268,7 @@ export function FileViewer({
         onClose={onClose}
         ariaLabel="Open files"
       />
-      <ViewerBody paneId={paneId} viewer={viewer} />
+      <ViewerBody paneId={paneId} viewer={viewer} onRenderError={onRenderError} />
     </div>
   )
 }

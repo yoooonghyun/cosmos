@@ -14,8 +14,17 @@ import type { FsReadResult } from '../../shared/ipc'
  * The middle viewer column's state.
  *  - `null`        — no file selected yet (calm "Select a file" placeholder; §4 empty state),
  *  - `loading`     — `fs:read` outstanding (the header is shown immediately on click),
- *  - `text`/`image`— the previewable content,
+ *  - `text`/`image`— the previewable content (existing paths),
+ *  - `pdf`/`docx`/`sheet` — a rendered DOCUMENT (file-viewer-multiformat-v1 FR-001/002/003);
+ *    the per-format renderer fetches the bytes from `cosmos-file://` (no bytes in this state),
  *  - `binary`      — calm "preview not available" block (NOT a red error),
+ *  - `unsupported` — calm "No preview available" — no registered viewer (FR-006); shares the
+ *    binary copy (a sniffed-binary / unknown-format file). Kept distinct for routing clarity.
+ *  - `render-error`— a registered renderer threw on a corrupt/malformed file of its own type
+ *    (FR-008) — the calm "Couldn't open this file" block; never a crash / sibling-tab bleed.
+ *    Set by the renderer COMPONENT (try/catch / error boundary), not by `resolveRead`.
+ *  - `too-large`   — a document over its per-format cap (FR-012) — calm "File too large to
+ *    preview" block; the bytes are NOT loaded.
  *  - `denied`      — calm "no permission" block (NOT a red error),
  *  - `not-found`   — "file no longer available" (deleted while open, FR-017).
  */
@@ -23,7 +32,13 @@ export type ViewerState =
   | { kind: 'loading'; relPath: string; name: string }
   | { kind: 'text'; relPath: string; name: string; text: string }
   | { kind: 'image'; relPath: string; name: string }
+  | { kind: 'pdf'; relPath: string; name: string }
+  | { kind: 'docx'; relPath: string; name: string }
+  | { kind: 'sheet'; relPath: string; name: string }
   | { kind: 'binary'; relPath: string; name: string }
+  | { kind: 'unsupported'; relPath: string; name: string }
+  | { kind: 'render-error'; relPath: string; name: string }
+  | { kind: 'too-large'; relPath: string; name: string }
   | { kind: 'denied'; relPath: string; name: string }
   | { kind: 'not-found'; relPath: string; name: string }
   | null
@@ -49,24 +64,49 @@ export function selectFile(relPath: string): NonNullable<ViewerState> {
 }
 
 /**
- * The viewer state once `fs:read` resolves for `relPath`. Maps a successful read to text/image and
- * the benign failures to their calm blocks (binary/denied/not-found). Out-of-root/unknown reasons
+ * The viewer state once `fs:read` resolves for `relPath`. Maps a successful read to its
+ * content/marker state — `text` carries the body; `image`/`pdf`/`docx`/`sheet` are MARKERS
+ * (the per-format renderer fetches the bytes from `cosmos-file://`, FR-007). Benign failures
+ * map to their calm blocks: `binary` → "preview not available", `too-large` → "File too large
+ * to preview" (FR-012), `denied` → "no permission". Out-of-root / not-found / unknown reasons
  * fall through to `not-found` (the calm "no longer available" block, FR-017).
+ *
+ * NOTE: `render-error` is NOT produced here — a corrupt-but-readable document reads OK (its
+ * marker) and the renderer COMPONENT flips to `render-error` when parsing throws (FR-008).
  */
 export function resolveRead(relPath: string, res: FsReadResult): NonNullable<ViewerState> {
   const name = baseName(relPath)
   if (res.ok) {
-    return res.kind === 'text'
-      ? { kind: 'text', relPath, name, text: res.text }
-      : { kind: 'image', relPath, name }
+    switch (res.kind) {
+      case 'text':
+        return { kind: 'text', relPath, name, text: res.text }
+      case 'image':
+        return { kind: 'image', relPath, name }
+      case 'pdf':
+        return { kind: 'pdf', relPath, name }
+      case 'docx':
+        return { kind: 'docx', relPath, name }
+      case 'sheet':
+        return { kind: 'sheet', relPath, name }
+    }
   }
   if (res.reason === 'denied') {
     return { kind: 'denied', relPath, name }
   }
   if (res.reason === 'binary') {
-    return { kind: 'binary', relPath, name }
+    return { kind: 'unsupported', relPath, name }
+  }
+  if (res.reason === 'too-large') {
+    return { kind: 'too-large', relPath, name }
   }
   return { kind: 'not-found', relPath, name }
+}
+
+/** The state for a renderer that threw on a corrupt/malformed file of its own type (FR-008):
+ * the calm "Couldn't open this file" block. Set by the per-format renderer component's
+ * try/catch / error boundary, never by `resolveRead`. Pure. */
+export function renderError(relPath: string): NonNullable<ViewerState> {
+  return { kind: 'render-error', relPath, name: baseName(relPath) }
 }
 
 /** The state for a file that vanished while open (watch re-read, FR-017): the calm not-found block. */

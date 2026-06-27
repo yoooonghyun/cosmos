@@ -66,34 +66,48 @@ export interface FsEntry {
  *    escape) or the pane has no live root; refused without reading (FR-019/020/021).
  *  - `binary`      — (read only) the file is binary/non-text and not a supported image
  *    → "preview not available", never raw bytes (FR-011).
+ *  - `too-large`   — (read only, file-viewer-multiformat-v1 FR-012) a DOCUMENT file
+ *    (pdf/docx/xlsx) over its per-format byte cap → the calm "File too large to preview"
+ *    block, parsed without loading the bytes. Images/text deliberately have NO cap.
  */
-export type FsFailureReason = 'denied' | 'not-found' | 'out-of-root' | 'binary'
+export type FsFailureReason = 'denied' | 'not-found' | 'out-of-root' | 'binary' | 'too-large'
 
 /**
  * M->R response to `fs:list` (FR-004). `ok: true` carries the directory's entries
  * (already sorted dirs-first, alphabetical case-insensitive — FR-005); `ok: false`
  * carries a reason so the explorer shows the right state (denied / not-found /
- * out-of-root) instead of a crash (FR-023). A `binary` reason never occurs on a list.
+ * out-of-root) instead of a crash (FR-023). The read-only `binary` / `too-large` reasons
+ * never occur on a list (they classify a FILE's content/size, not a directory listing).
  */
 export type FsListResult =
   | { ok: true; entries: FsEntry[] }
-  | { ok: false; reason: Exclude<FsFailureReason, 'binary'> }
+  | { ok: false; reason: Exclude<FsFailureReason, 'binary' | 'too-large'> }
 
 /**
- * M->R response to `fs:read` (FR-008/FR-009/FR-010/FR-011). Discriminated:
+ * M->R response to `fs:read` (FR-008/FR-009/FR-010/FR-011; file-viewer-multiformat-v1
+ * FR-005/FR-007/FR-012). Discriminated; bytes NEVER ride this channel — every non-text
+ * payload is a MARKER and the renderer streams the bytes out-of-band from `cosmos-file://`:
  *  - `{ ok: true, kind: 'text', text }` — a UTF-8 text file, rendered read-only in
- *    Monaco (FR-009). No size cap (FR-012) — the whole text rides this channel.
- *  - `{ ok: true, kind: 'image' }` — a MARKER ONLY (FR-010/FR-028). The renderer then
- *    loads the `cosmos-file://` URL; NO bytes / no `data:` URL cross this channel.
- *  - `{ ok: false, reason }` — `binary` (not text, not a supported image →
- *    "preview not available"), `denied` (OS permission), `not-found` (deleted), or
- *    `out-of-root` (escaped the root — refused, FR-019). NEVER raw bytes (FR-011).
- * There is deliberately NO `too-large` reason — there is no file-content size cap
- * (FR-012, OQ-3 resolved).
+ *    Monaco (FR-009). No size cap — the whole text rides this channel.
+ *  - `{ ok: true, kind: 'image' }` — a MARKER ONLY (FR-010/FR-028). The renderer loads the
+ *    `cosmos-file://` URL into an `<img>`; NO bytes / no `data:` URL cross this channel.
+ *  - `{ ok: true, kind: 'pdf' | 'docx' | 'sheet' }` — DOCUMENT MARKERS (file-viewer-
+ *    multiformat-v1 FR-001/FR-002/FR-003). Like the image marker, the renderer fetches the
+ *    bytes from `cosmos-file://` and hands them to the per-format renderer; no bytes ride IPC.
+ *  - `{ ok: false, reason }` — `binary` (sniffed binary, no registered viewer →
+ *    "preview not available", FR-006), `too-large` (a document over its per-format cap,
+ *    FR-012), `denied` (OS permission), `not-found` (deleted), or `out-of-root` (escaped the
+ *    root — refused, FR-019). NEVER raw bytes (FR-011).
+ *
+ * Per-format size caps (FR-012) apply ONLY to the document markers (pdf/docx/sheet) — the
+ * parse-into-memory formats; `text`/`image` keep their deliberate NO-cap stance.
  */
 export type FsReadResult =
   | { ok: true; kind: 'text'; text: string }
   | { ok: true; kind: 'image' }
+  | { ok: true; kind: 'pdf' }
+  | { ok: true; kind: 'docx' }
+  | { ok: true; kind: 'sheet' }
   | { ok: false; reason: FsFailureReason }
 
 /**

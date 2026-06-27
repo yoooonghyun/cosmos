@@ -18,11 +18,15 @@ function fakeFs(opts?: {
   files?: Record<string, Uint8Array>
   denied?: string[]
   missing?: string[]
+  /** Override the stat size for an abs file (file-viewer-multiformat-v1 FR-012). Defaults to
+   * the `files` entry's byte length, else `null` (unknown). */
+  sizes?: Record<string, number>
 }): ExplorerFs {
   const dirs = opts?.dirs ?? {}
   const files = opts?.files ?? {}
   const denied = new Set(opts?.denied ?? [])
   const missing = new Set(opts?.missing ?? [])
+  const sizes = opts?.sizes ?? {}
   return {
     realpath: (p) => (missing.has(p) ? null : p),
     readDir(absDir) {
@@ -38,6 +42,13 @@ function fakeFs(opts?: {
       }
       const bytes = files[absFile]
       return bytes ? bytes : { error: 'not-found' }
+    },
+    statSize(absFile) {
+      if (absFile in sizes) {
+        return sizes[absFile]
+      }
+      const bytes = files[absFile]
+      return bytes ? bytes.byteLength : null
     },
     watch(_absRoot, _onEvent): FsWatcher | null {
       return { close: () => {} }
@@ -113,6 +124,45 @@ describe('read — classification (FR-009/010/011)', () => {
     const ex = createFsExplorer({ getRoot: () => ROOT, onChanged: () => {}, fs })
     expect(ex.read('p', 'gone.txt')).toEqual({ ok: false, reason: 'not-found' })
     expect(ex.read('p', '/etc/passwd')).toEqual({ ok: false, reason: 'out-of-root' })
+  })
+})
+
+describe('read — document markers + size cap (file-viewer-multiformat-v1, FR-005/007/012)', () => {
+  it('returns a DOCUMENT marker (pdf/docx/sheet) by extension WITHOUT reading the bytes', () => {
+    // The renderer fetches the bytes from `cosmos-file://` (FR-007); the read must NOT call
+    // readFileBytes for a document — it routes by name + caps by statSize only.
+    const readFileBytes = vi.fn(() => ({ error: 'not-found' as const }))
+    const fs: ExplorerFs = {
+      ...fakeFs({ sizes: { [`${ROOT}/a.pdf`]: 1024, [`${ROOT}/b.docx`]: 1024, [`${ROOT}/c.xlsx`]: 1024 } }),
+      readFileBytes
+    }
+    const ex = createFsExplorer({ getRoot: () => ROOT, onChanged: () => {}, fs })
+    expect(ex.read('p', 'a.pdf')).toEqual({ ok: true, kind: 'pdf' })
+    expect(ex.read('p', 'b.docx')).toEqual({ ok: true, kind: 'docx' })
+    expect(ex.read('p', 'c.xlsx')).toEqual({ ok: true, kind: 'sheet' })
+    expect(readFileBytes).not.toHaveBeenCalled()
+  })
+  it('returns too-large for a document over its per-format cap (FR-012)', () => {
+    const fs = fakeFs({ sizes: { [`${ROOT}/huge.pdf`]: 51 * 1024 * 1024 } })
+    const ex = createFsExplorer({ getRoot: () => ROOT, onChanged: () => {}, fs })
+    expect(ex.read('p', 'huge.pdf')).toEqual({ ok: false, reason: 'too-large' })
+  })
+  it('returns not-found when a document cannot be stat-ed (vanished/denied)', () => {
+    // No `files` and no `sizes` entry → statSize returns null → benign not-found, no crash.
+    const fs = fakeFs()
+    const ex = createFsExplorer({ getRoot: () => ROOT, onChanged: () => {}, fs })
+    expect(ex.read('p', 'ghost.pdf')).toEqual({ ok: false, reason: 'not-found' })
+  })
+  it('routes a legacy/unknown binary (.doc/.zip) to the binary fallback, not a marker', () => {
+    const fs = fakeFs({
+      files: {
+        [`${ROOT}/old.doc`]: new Uint8Array([0x00, 0xd0, 0xcf]),
+        [`${ROOT}/pkg.zip`]: new Uint8Array([0x50, 0x4b, 0x00])
+      }
+    })
+    const ex = createFsExplorer({ getRoot: () => ROOT, onChanged: () => {}, fs })
+    expect(ex.read('p', 'old.doc')).toEqual({ ok: false, reason: 'binary' })
+    expect(ex.read('p', 'pkg.zip')).toEqual({ ok: false, reason: 'binary' })
   })
 })
 

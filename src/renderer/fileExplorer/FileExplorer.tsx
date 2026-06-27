@@ -65,6 +65,7 @@ export function useExplorerPanes(
     openFile,
     setActiveFile,
     closeFile,
+    markRenderError,
     retryRoot
   } = useFileExplorer(paneId, live, restoredOpenFiles, onOpenFilesChange)
 
@@ -101,6 +102,7 @@ export function useExplorerPanes(
         viewer={viewer}
         onActivate={setActiveFile}
         onClose={closeFile}
+        onRenderError={markRenderError}
         onViewerFocusChange={onViewerFocusChange}
       />
     ),
