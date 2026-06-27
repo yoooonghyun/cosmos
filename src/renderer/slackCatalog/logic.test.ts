@@ -4,6 +4,7 @@ import {
   authorName,
   boundRows,
   buildOpenThreadContext,
+  coerceImageRefs,
   compareTsAsc,
   countLabel,
   filterChannelsByName,
@@ -602,6 +603,81 @@ describe('buildOpenThreadContext (reply drill-in context builder — FR-013/FR-0
     expect(Object.keys(ctx ?? {}).sort()).toEqual(
       ['channelId', 'replyCount', 'text', 'threadTs', 'ts', 'userId', 'userName'].sort()
     )
+  })
+
+  it('CARRIES the parent images so the dock root header renders them (slack-thread-root-image-v1)', () => {
+    // The root cause of "thread root image does not render in the dock": the open-thread context
+    // dropped the clicked message's images, so the header (built from the context) had none — even
+    // though the row it was opened from did. Carrying them end-to-end is the fix.
+    const images = [{ ref: 'cosmos-slack-img://abc', alt: 'pic' }]
+    const ctx = buildOpenThreadContext({
+      channelId: 'C123',
+      threadTs: '1700000000.0',
+      ts: '1700000000.0',
+      userId: 'U1',
+      text: 'see this',
+      images
+    })
+    expect(ctx?.images).toEqual(images)
+  })
+
+  it('OMITS images when absent or an empty array (no empty thumbnail strip on the header)', () => {
+    const noImages = buildOpenThreadContext({
+      channelId: 'C123',
+      threadTs: '1700000000.0',
+      ts: '1700000000.0',
+      userId: 'U1',
+      text: 'x'
+    })
+    expect(noImages).not.toHaveProperty('images')
+    const emptyImages = buildOpenThreadContext({
+      channelId: 'C123',
+      threadTs: '1700000000.0',
+      ts: '1700000000.0',
+      userId: 'U1',
+      text: 'x',
+      images: []
+    })
+    expect(emptyImages).not.toHaveProperty('images')
+  })
+})
+
+/* slack-thread-root-image-v1 — validate UNTRUSTED images crossing the A2UI action boundary. */
+
+describe('coerceImageRefs (A2UI-boundary image-ref validator — slack-thread-root-image-v1)', () => {
+  it('keeps well-formed refs and carries the optional alt/w/h when present (happy path)', () => {
+    const out = coerceImageRefs([
+      { ref: 'cosmos-slack-img://a', alt: 'pic', w: 100, h: 80 },
+      { ref: 'cosmos-slack-img://b' }
+    ])
+    expect(out).toEqual([
+      { ref: 'cosmos-slack-img://a', alt: 'pic', w: 100, h: 80 },
+      { ref: 'cosmos-slack-img://b' }
+    ])
+  })
+
+  it('drops entries missing a string ref and keeps the valid ones (warn+ignore, never throws)', () => {
+    const out = coerceImageRefs([
+      { ref: 'cosmos-slack-img://ok' },
+      { alt: 'no-ref' },
+      { ref: 123 },
+      null,
+      'not-an-object'
+    ])
+    expect(out).toEqual([{ ref: 'cosmos-slack-img://ok' }])
+  })
+
+  it('drops malformed optional fields but keeps the valid ref (additive, lenient)', () => {
+    const out = coerceImageRefs([{ ref: 'cosmos-slack-img://x', alt: 5, w: 'big', h: null }])
+    expect(out).toEqual([{ ref: 'cosmos-slack-img://x' }])
+  })
+
+  it('returns undefined for a non-array, an empty array, or an all-invalid array (no images carried)', () => {
+    expect(coerceImageRefs(undefined)).toBeUndefined()
+    expect(coerceImageRefs(null)).toBeUndefined()
+    expect(coerceImageRefs('cosmos-slack-img://x')).toBeUndefined()
+    expect(coerceImageRefs([])).toBeUndefined()
+    expect(coerceImageRefs([{ alt: 'no-ref' }, 42])).toBeUndefined()
   })
 })
 

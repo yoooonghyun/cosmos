@@ -51,6 +51,7 @@ import { slackCatalog, SLACK_CATALOG_ID, SLACK_OPEN_CHANNEL_ACTION } from './sla
 import { SlackMessageRow } from './slackCatalog/SlackMessageRow'
 import {
   buildOpenThreadContext,
+  coerceImageRefs,
   countLabel,
   filterChannelsByName,
   messageToRowProps,
@@ -835,7 +836,10 @@ function SlackThreadPanel({
     ts: context.ts,
     userId: context.userId,
     ...(context.userName !== undefined ? { userName: context.userName } : {}),
-    text: context.text
+    text: context.text,
+    // slack-thread-root-image-v1: carry the root's inline image refs so the header row renders
+    // its image via the SAME MessageRow → messageToRowProps path the replies use. Absent → none.
+    ...(context.images !== undefined ? { images: context.images } : {})
   }
   // The openable-link guard re-validates the carried value so a non-http(s)/malformed permalink
   // can never become a live link (mirrors the Confluence PageDetailTitle treatment).
@@ -1041,7 +1045,10 @@ function SearchResults({
             ts: m.ts,
             userId: m.userId,
             ...(m.userName !== undefined ? { userName: m.userName } : {}),
-            text: m.text
+            text: m.text,
+            // slack-thread-root-image-v1: carry the search hit's images so its thread dock's root
+            // header shows the same thumbnail strip the search row did.
+            ...(m.images !== undefined ? { images: m.images } : {})
           })
           return (
             <SlackMessageRow
@@ -1203,6 +1210,10 @@ export function SlackPanel({ active }: { active: boolean }): React.JSX.Element {
         const channelId = typeof ctx.channelId === 'string' ? ctx.channelId : ''
         const threadTs = typeof ctx.threadTs === 'string' ? ctx.threadTs : ''
         if (channelId && threadTs) {
+          // slack-thread-root-image-v1: shape-validate the image refs crossing the A2UI action
+          // boundary (additive). An invalid/absent value yields undefined → no images carried (the
+          // header just shows none). Opaque `cosmos-slack-img://` display refs — NEVER a token.
+          const images = coerceImageRefs(ctx.images)
           openThreadFor({
             channelId,
             threadTs,
@@ -1210,7 +1221,8 @@ export function SlackPanel({ active }: { active: boolean }): React.JSX.Element {
             userId: typeof ctx.userId === 'string' ? ctx.userId : '',
             ...(typeof ctx.userName === 'string' && ctx.userName !== '' ? { userName: ctx.userName } : {}),
             text: typeof ctx.text === 'string' ? ctx.text : '',
-            ...(typeof ctx.replyCount === 'number' ? { replyCount: ctx.replyCount } : {})
+            ...(typeof ctx.replyCount === 'number' ? { replyCount: ctx.replyCount } : {}),
+            ...(images ? { images } : {})
           })
         }
         return true
@@ -1537,7 +1549,10 @@ export function SlackPanel({ active }: { active: boolean }): React.JSX.Element {
                                 userId: parent.userId,
                                 ...(parent.userName !== undefined ? { userName: parent.userName } : {}),
                                 text: parent.text,
-                                ...(parent.replyCount !== undefined ? { replyCount: parent.replyCount } : {})
+                                ...(parent.replyCount !== undefined ? { replyCount: parent.replyCount } : {}),
+                                // slack-thread-root-image-v1: carry the clicked row's images so the
+                                // dock's root header renders its image like the channel row did.
+                                ...(parent.images !== undefined ? { images: parent.images } : {})
                               })
                             }
                             onReconnect={() => void refreshStatus()}

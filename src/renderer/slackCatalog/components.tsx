@@ -20,6 +20,7 @@
 
 import { useRef } from 'react'
 import { useDataBinding, useDispatchAction } from '@a2ui-sdk/react/0.9'
+import type { DynamicValue } from '@a2ui-sdk/react/0.9'
 import { Hash, Info, TriangleAlert } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
 import { Avatar, AvatarFallback } from '@/components/ui/avatar'
@@ -252,12 +253,19 @@ export function MessageRow({
   // → the shared row renders the non-interactive label (FR-012). The action is handled
   // renderer-locally by the Slack panel (intercepted, never sent to main/the agent). The
   // list passes its real surfaceId/componentId so the dispatch routes through the SDK.
-  const threadCtx = buildOpenThreadContext({ channelId, threadTs, ts, userId, userName, text, replyCount })
+  // slack-thread-root-image-v1: include this row's image refs in the dispatched context so its
+  // thread dock's root header renders the image (the replies extract their own main-side). NEVER a token.
+  const threadCtx = buildOpenThreadContext({ channelId, threadTs, ts, userId, userName, text, replyCount, images })
   const onOpenThread = threadCtx
     ? (): void => {
+        // slack-thread-root-image-v1: the SDK action `context` is `Record<string, DynamicValue>`,
+        // which has no array-of-object member; `images` (opaque `cosmos-slack-img://` refs) is cast
+        // for transport over this renderer-local action ONLY (it never reaches main/the agent — the
+        // panel's `coerceImageRefs` re-validates it). Mirrors jiraCatalog's `fields as DynamicValue`.
+        const { images: ctxImages, ...rest } = threadCtx
         dispatch(surfaceId, componentId, {
           name: SLACK_OPEN_THREAD_ACTION,
-          context: { ...threadCtx }
+          context: { ...rest, ...(ctxImages ? { images: ctxImages as unknown as DynamicValue } : {}) }
         })
       }
     : undefined
@@ -396,12 +404,17 @@ export function SearchResultRow({
   // RESOLVED display name (`resolveAuthorNames` fills it before this renders); the `#channelName`
   // chip + the absent "N replies" label (search.messages omits reply_count) are the only intended
   // differences.
-  const threadCtx = buildOpenThreadContext({ channelId, threadTs, ts, userId, userName, text })
+  // slack-thread-root-image-v1: include the search hit's image refs so its thread dock's root
+  // header shows the same thumbnail strip the search row did. NEVER a token.
+  const threadCtx = buildOpenThreadContext({ channelId, threadTs, ts, userId, userName, text, images })
   const onOpenThread = threadCtx
     ? (): void => {
+        // slack-thread-root-image-v1: same cast rationale as MessageRow — `images` has no
+        // `DynamicValue` member; cast for this renderer-local action only (panel re-validates).
+        const { images: ctxImages, ...rest } = threadCtx
         dispatch(surfaceId, componentId, {
           name: SLACK_OPEN_THREAD_ACTION,
-          context: { ...threadCtx }
+          context: { ...rest, ...(ctxImages ? { images: ctxImages as unknown as DynamicValue } : {}) }
         })
       }
     : undefined

@@ -305,6 +305,36 @@ export const SLACK_OPEN_CHANNEL_ACTION = 'slack.openChannel'
 export const SLACK_OPEN_THREAD_ACTION = 'slack.openThread'
 
 /**
+ * Validate + narrow an UNTRUSTED `images` value crossing the A2UI action boundary
+ * (slack-thread-root-image-v1) into a clean `SlackImageRef[]`. The dispatched
+ * `SLACK_OPEN_THREAD_ACTION` context is `Record<string, unknown>`, so the panel must shape-check
+ * the carried image refs before trusting them: keep only entries that are objects with a string
+ * `ref` (the opaque `cosmos-slack-img://` reference); carry the optional `alt`/`w`/`h` when the
+ * right type, drop anything malformed. Returns `undefined` for a non-array, an empty array, or an
+ * array with no valid entries (warn+ignore — the header just shows no image, never a crash).
+ * These are NON-SECRET display refs only; a token can never be one (it is not a `cosmos-slack-img://`
+ * ref and would be dropped anyway). Pure + total.
+ */
+export function coerceImageRefs(value: unknown): SlackImageRef[] | undefined {
+  if (!Array.isArray(value) || value.length === 0) {
+    return undefined
+  }
+  const refs: SlackImageRef[] = []
+  for (const entry of value) {
+    if (entry && typeof entry === 'object' && typeof (entry as { ref?: unknown }).ref === 'string') {
+      const e = entry as { ref: string; alt?: unknown; w?: unknown; h?: unknown }
+      refs.push({
+        ref: e.ref,
+        ...(typeof e.alt === 'string' ? { alt: e.alt } : {}),
+        ...(typeof e.w === 'number' ? { w: e.w } : {}),
+        ...(typeof e.h === 'number' ? { h: e.h } : {})
+      })
+    }
+  }
+  return refs.length > 0 ? refs : undefined
+}
+
+/**
  * The renderer-local action context the reply affordance dispatches and the panel's
  * `handleSurfaceAction` consumes. NON-SECRET only: `channelId`/`threadTs` are the thread
  * coordinates the native thread read needs; the rest are the parent message's display
@@ -326,6 +356,13 @@ export interface SlackOpenThreadContext {
   text: string
   /** The parent thread's reply count, when known. */
   replyCount?: number
+  /**
+   * The parent message's inline image attachments as opaque `cosmos-slack-img://` refs
+   * (slack-thread-root-image-v1). Carried so the dock's root header renders its image exactly
+   * like the reply rows below it (which extract images main-side). Omitted when absent / empty.
+   * NON-SECRET display data (never a token / token-bearing URL — mirrors the row `images`).
+   */
+  images?: SlackImageRef[]
 }
 
 /**
@@ -343,6 +380,7 @@ export function buildOpenThreadContext(row: {
   userName?: string
   text?: string
   replyCount?: number
+  images?: SlackImageRef[]
 }): SlackOpenThreadContext | null {
   const channelId = typeof row.channelId === 'string' ? row.channelId : ''
   const threadTs = typeof row.threadTs === 'string' ? row.threadTs : ''
@@ -356,7 +394,10 @@ export function buildOpenThreadContext(row: {
     userId: typeof row.userId === 'string' ? row.userId : '',
     ...(typeof row.userName === 'string' && row.userName !== '' ? { userName: row.userName } : {}),
     text: typeof row.text === 'string' ? row.text : '',
-    ...(typeof row.replyCount === 'number' ? { replyCount: row.replyCount } : {})
+    ...(typeof row.replyCount === 'number' ? { replyCount: row.replyCount } : {}),
+    // slack-thread-root-image-v1: carry the parent's inline image refs so the dock's root header
+    // renders its image like the reply rows. Omit when absent / empty (no empty thumbnail strip).
+    ...(Array.isArray(row.images) && row.images.length > 0 ? { images: row.images } : {})
   }
 }
 
@@ -380,6 +421,7 @@ export function messageRowOpenThread(row: {
   userName?: string
   text?: string
   replyCount?: number
+  images?: SlackImageRef[]
 }): SlackOpenThreadContext | null {
   return buildOpenThreadContext(row)
 }
