@@ -183,4 +183,77 @@ describe('useSlackScrollPaginate DOM wiring', () => {
 
     expect(onLoadOlder).toHaveBeenCalledTimes(0)
   })
+
+  // ---------------------------------------------------------------------------
+  // Test 5 — kind='self' (generative MessageList): the ATTACHED div is the scroller
+  // (bug slack-generative-scroll-pagination-v1). The generative catalog list has no Radix
+  // viewport descendant — its SLACK_LIST_SCROLL_CLASS div scrolls itself — so the hook must
+  // resolve the root node directly and fire onLoadOlder on a near-top scroll of THAT div.
+  // RED BEFORE FIX: the hook hard-coded kind='radix-viewport' and querySelector'd a
+  // [data-slot="scroll-area-viewport"] that does not exist on a self-scroller → null → no
+  // listener → onLoadOlder never fires (defect 2 not applied to the generative list).
+  // ---------------------------------------------------------------------------
+
+  it("fires onLoadOlder on near-top scroll when kind='self' (generative list, the div IS the scroller)", () => {
+    // A bare self-scrolling div (no Radix viewport child) — the generative MessageList shape.
+    const selfScroller = document.createElement('div')
+    selfScroller.style.overflow = 'auto'
+    selfScroller.style.height = '200px'
+    const inner = document.createElement('div')
+    inner.style.height = '1000px'
+    selfScroller.appendChild(inner)
+    document.body.appendChild(selfScroller)
+
+    const onLoadOlder = vi.fn()
+    const { result } = renderHook(() =>
+      useSlackScrollPaginate({
+        itemCount: 5,
+        inFlight: false,
+        hasCursor: true,
+        enabled: true,
+        kind: 'self',
+        onLoadOlder,
+      })
+    )
+
+    act(() => {
+      result.current(selfScroller)
+    })
+
+    act(() => {
+      selfScroller.scrollTop = 10 // within NEAR_TOP_PX=64
+      selfScroller.dispatchEvent(new Event('scroll', { bubbles: false }))
+    })
+
+    expect(onLoadOlder).toHaveBeenCalledTimes(1)
+  })
+
+  it("does NOT fire onLoadOlder when kind='self' and hasCursor=false (no next page)", () => {
+    const selfScroller = document.createElement('div')
+    selfScroller.style.overflow = 'auto'
+    selfScroller.style.height = '200px'
+    document.body.appendChild(selfScroller)
+
+    const onLoadOlder = vi.fn()
+    const { result } = renderHook(() =>
+      useSlackScrollPaginate({
+        itemCount: 5,
+        inFlight: false,
+        hasCursor: false, // exhausted — no older page
+        enabled: true,
+        kind: 'self',
+        onLoadOlder,
+      })
+    )
+
+    act(() => {
+      result.current(selfScroller)
+    })
+    act(() => {
+      selfScroller.scrollTop = 10
+      selfScroller.dispatchEvent(new Event('scroll', { bubbles: false }))
+    })
+
+    expect(onLoadOlder).toHaveBeenCalledTimes(0)
+  })
 })

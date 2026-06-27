@@ -42,6 +42,14 @@ export interface SlackScrollPaginateInput {
   enabled: boolean
   /** Fires the next older-page load — wired to `() => void run(cursor)` by the caller. */
   onLoadOlder: () => void
+  /**
+   * Scroll-container shape (mirrors {@link SlackScrollKind}): `'radix-viewport'` for the native
+   * history list (the real scroller is the `[data-slot="scroll-area-viewport"]` descendant) or
+   * `'self'` for the GENERATIVE catalog `MessageList`, whose `overflow-y-auto` div is itself the
+   * scroller (bug slack-generative-scroll-pagination-v1). Defaults to `'radix-viewport'` so the
+   * existing native caller is unchanged.
+   */
+  kind?: SlackScrollKind
 }
 
 /**
@@ -53,7 +61,8 @@ export function useSlackScrollPaginate<T extends HTMLElement = HTMLDivElement>({
   inFlight,
   hasCursor,
   enabled,
-  onLoadOlder
+  onLoadOlder,
+  kind = 'radix-viewport'
 }: SlackScrollPaginateInput): (node: T | null) => void {
   // Root node held in STATE (not a ref) so the scroll-listener effect re-runs once the callback
   // ref attaches the node. In React 18 callback refs fire AFTER layout effects, so a ref read at
@@ -86,17 +95,20 @@ export function useSlackScrollPaginate<T extends HTMLElement = HTMLDivElement>({
     firingRef.current = false
   }
 
-  const resolveViewport = useCallback((root: T | null): HTMLElement | null => {
-    if (!root) {
-      return null
-    }
-    // The native history list is a Radix ScrollArea; the real scroller is the viewport descendant
-    // (the same element `useSlackScrollToLatest('radix-viewport')` finds).
-    const kind: SlackScrollKind = 'radix-viewport'
-    return kind === 'radix-viewport'
-      ? root.querySelector<HTMLElement>('[data-slot="scroll-area-viewport"]')
-      : root
-  }, [])
+  const resolveViewport = useCallback(
+    (root: T | null): HTMLElement | null => {
+      if (!root) {
+        return null
+      }
+      // 'radix-viewport' (native history): the real scroller is the viewport descendant (the same
+      // element `useSlackScrollToLatest('radix-viewport')` finds). 'self' (generative MessageList):
+      // the attached `overflow-y-auto` div IS the scroller.
+      return kind === 'radix-viewport'
+        ? root.querySelector<HTMLElement>('[data-slot="scroll-area-viewport"]')
+        : root
+    },
+    [kind]
+  )
 
   // Attach the passive scroll listener once the viewport is resolvable. Re-attaches when `enabled`
   // flips so a disabled list (thread dock) never listens.

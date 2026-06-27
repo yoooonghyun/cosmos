@@ -18,7 +18,7 @@
  * §2.5 SearchResultRow, §2.6 SearchResultList, §2.7 UserChip, §2.8 Notice, §2.9 Text.
  */
 
-import { useRef } from 'react'
+import { useCallback, useRef } from 'react'
 import { useDataBinding, useDispatchAction } from '@a2ui-sdk/react/0.9'
 import type { DynamicValue } from '@a2ui-sdk/react/0.9'
 import { Hash, Info, TriangleAlert } from 'lucide-react'
@@ -27,6 +27,8 @@ import { Avatar, AvatarFallback } from '@/components/ui/avatar'
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { cn } from '@/lib/utils'
 import { useSlackScrollToLatest } from '../useSlackScrollToLatest'
+import { useSlackScrollPaginate } from '../useSlackScrollPaginate'
+import { AdapterAction } from '../../shared/adapter'
 // slack-generative-adapter-v1 (design §6): the bound Slack lists reuse the SHARED adapter
 // controls + binding helpers VERBATIM (the single definition the Jira catalog also uses).
 // Slack registers LoadMoreButton only — never PaginationBar (append-only). Refresh moved to
@@ -311,8 +313,10 @@ export function MessageList({
   error,
   region
 }: MessageListNode): React.JSX.Element {
+  const dispatch = useDispatchAction()
   const rows = useBound<MessageRowNode[]>(surfaceId, messages, undefined)
   const isLoading = useDataBinding<boolean>(surfaceId, loading, false)
+  const canLoadMore = useDataBinding<boolean>(surfaceId, hasMore, false)
   const errorMessage = useDataBinding<string | undefined>(surfaceId, error, undefined)
   // bug slack-generated-message-order-v1: the shared dispatcher APPENDS each older page at the
   // bottom of the accumulated array (correct for Jira/Confluence), but Slack history paginates
@@ -326,6 +330,35 @@ export function MessageList({
   // + scrollbar-hover-only). One-shot on first non-empty render; a top load-more (prepend-older)
   // or in-place refresh keeps the latch, so the user's position is preserved.
   const scrollRef = useSlackScrollToLatest<HTMLDivElement>(items.length, 'self')
+  // bug slack-generative-scroll-pagination-v1: scroll-to-top auto-loads the next OLDER page, like
+  // the native list (slack-scroll-pagination-v1). The generative list grows via the shared
+  // adapter's `updateDataModel` (no run-cursor), so there is no main-side `run(cursor)` to call —
+  // instead `onLoadOlder` fires the SAME `adapter.loadMore` action `LoadMoreButton` dispatches
+  // (`{ surfaceId, region? }`), which main intercepts and routes through the AdapterDispatcher to
+  // append the older page. `inFlight`/`hasCursor` come from the bound `loading`/`hasMore` flags
+  // (the renderer-readable next-page signal). `kind='self'` because the SLACK_LIST_SCROLL_CLASS
+  // div is itself the scroller. The returned callback ref is MERGED with the bottom-jump ref onto
+  // that one div; the two layout effects are mutually exclusive (see useSlackScrollPaginate header).
+  const paginateRef = useSlackScrollPaginate<HTMLDivElement>({
+    itemCount: items.length,
+    inFlight: isLoading,
+    hasCursor: canLoadMore,
+    enabled: true,
+    kind: 'self',
+    onLoadOlder: () => {
+      dispatch(surfaceId, componentId, {
+        name: AdapterAction.LoadMore,
+        context: { surfaceId, ...(region ? { region } : {}) }
+      })
+    }
+  })
+  const mergedScrollRef = useCallback(
+    (node: HTMLDivElement | null): void => {
+      scrollRef.current = node
+      paginateRef(node)
+    },
+    [scrollRef, paginateRef]
+  )
   if (showSkeletonState(items.length, isLoading, loaded, errorMessage)) {
     return <MessageSkeleton />
   }
@@ -342,7 +375,7 @@ export function MessageList({
     // through the layout.tsx wrapper) so a LONE list fills to the panel bottom (no dead gap) and
     // N lists equal-split + each scroll independently. The count label, top load-more, and rows
     // stay inside the region (FR-005); a short list shows no inner scrollbar (FR-004).
-    <div ref={scrollRef} className={cn('flex w-full flex-col', SLACK_LIST_SCROLL_CLASS)} aria-busy={isLoading}>
+    <div ref={mergedScrollRef} className={cn('flex w-full flex-col', SLACK_LIST_SCROLL_CLASS)} aria-busy={isLoading}>
       <BoundListError message={errorMessage} />
       <div className="flex items-center justify-between gap-2 px-3 py-1.5">
         <p className="text-xs text-muted-foreground" aria-live="polite">
