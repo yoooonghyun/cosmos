@@ -255,16 +255,16 @@ function AppShell(): React.JSX.Element {
                       'group-data-[orientation=vertical]/tabs:w-10 group-data-[orientation=vertical]/tabs:justify-center',
                       'text-muted-foreground hover:text-foreground',
                       // Primary left indicator bar (3px, full height), hidden until active.
-                      'before:absolute before:left-[-8px] before:top-0 before:bottom-0 before:w-[3px] before:rounded-full before:bg-brand-accent before:opacity-0',
+                      'before:absolute before:left-[-8px] before:top-0 before:bottom-0 before:w-[3px] before:rounded-full before:bg-primary before:opacity-0',
                       // Neutralize the default vertical line variant after-indicator.
                       'after:hidden',
-                      // Active: --secondary filled pill + foreground icon + show the bar.
+                      // Active: --secondary filled pill + PRIMARY-colored icon + show the bar.
                       // `bg-secondary!` beats the line variant's unconditional
                       // group-data-[variant=line]/tabs-list:bg-transparent (tabs.tsx:66);
-                      // `text-foreground!` beats the base `dark:text-muted-foreground` idle
+                      // `text-primary!` beats the base `dark:text-muted-foreground` idle
                       // color, which out-specifies a plain class. tailwind-merge can't dedupe
                       // either variant-prefixed rule, so both need the trailing-`!`.
-                      isActive && 'bg-secondary! text-foreground! before:opacity-100'
+                      isActive && 'bg-secondary! text-primary! before:opacity-100'
                     )}
                   >
                     <Icon className="size-5" />

@@ -271,9 +271,10 @@
   --card-foreground: #1e1e1e;
   --popover: #ffffff;
   --popover-foreground: #1e1e1e;
-  /* settings-visual-v1: retired blue #4a9eff → brand purple. --primary is the
-     active/actionable color; dark-violet foreground stays legible on the pastel. */
-  --primary: #d8b4fe;
+  /* --primary == the cosmos logo color: the midpoint of the logo's pink→purple
+     gradient (#f9a8d4 → #d8b4fe), so the active/actionable color matches the mark.
+     Dark-violet foreground stays legible on the pastel. */
+  --primary: #e9aee9;
   --primary-foreground: #2e1065;
   --secondary: #f4f4f5;
   --secondary-foreground: #1e1e1e;
@@ -351,8 +352,9 @@
   --card-foreground: #e0e0e0;
   --popover: #252526;
   --popover-foreground: #e0e0e0;
-  /* settings-visual-v1: retired blue #4a9eff → brand purple (active/actionable). */
-  --primary: #d8b4fe;
+  /* --primary == the cosmos logo color: midpoint of the logo pink→purple gradient
+     (#f9a8d4 → #d8b4fe), so the active/actionable color matches the mark. */
+  --primary: #e9aee9;
   --primary-foreground: #2e1065;
   --secondary: #3a3a3c;
   --secondary-foreground: #dddddd;
