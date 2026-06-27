@@ -345,9 +345,14 @@ export class AgentRunner {
         const plan = planResumeRetry(this.defaultSessionId, nextAttempt, this.sessionLockEnv)
         if (plan.action === 'retry') {
           // Skip the normal error emission AND the drain for this attempt: re-run the SAME queued
-          // item after the registry-release backoff. The serializer invariant holds — `finish()`
-          // already cleared `this.running`, and we re-enter `spawnRun` (which re-sets `running`)
-          // only after the timer fires, so no two children are ever alive at once.
+          // item after the registry-release backoff.
+          // session-id-already-in-use-runtime-v2: re-arm `running` BEFORE the setTimeout so the
+          // runner stays "busy" during the backoff gap. Without this, `running` is false from
+          // `finish()` above, and a concurrent `submit()` call during the gap spawns a SECOND
+          // `claude --session-id <same-id>` child that collides with the pending retry — exactly
+          // the collision the serializer was built to prevent. `spawnRun` re-sets `running` again
+          // on entry (harmless double-set); no two children are ever alive at once.
+          this.running = true
           setTimeout(() => {
             this.spawnRun({ ...submit, inUseAttempts: nextAttempt })
           }, plan.delayMs)

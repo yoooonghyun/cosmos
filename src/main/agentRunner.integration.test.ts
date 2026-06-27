@@ -450,6 +450,53 @@ describe('AgentRunner integration — registry-release retry on "already in use"
 })
 
 // ---------------------------------------------------------------------------
+// 3c. BACKOFF-GAP RACE (session-id-already-in-use-runtime-v2)
+//
+// The real runtime failure: a submit() arriving DURING the backoff gap (while
+// this.running is false between finish() and the setTimeout firing) spawns a
+// SECOND child with the same --session-id, colliding with the pending retry.
+//
+// Fix: runner re-arms this.running = true before the setTimeout so the gap
+// is closed. Without the fix, spawn is called twice within the gap.
+// ---------------------------------------------------------------------------
+
+describe('AgentRunner integration — submit during backoff gap does not spawn second child', () => {
+  it('blocks a submit() during the in-use backoff gap — runner stays busy until retry fires', () => {
+    vi.useFakeTimers()
+    const h = makeRetryHarness()
+
+    // First run starts.
+    h.runner.run('first-run')
+    expect(h.spawn).toHaveBeenCalledTimes(1)
+
+    // Child 0 exits "already in use" → runner calls finish() (running=false) then
+    // schedules the retry setTimeout. THIS is the gap the bug exploited.
+    h.children[0].stderr.emit('data', SESSION_IN_USE_STDERR)
+    h.children[0].emit('close', 1)
+
+    // The gap: running must be true again (fix) so this submit is QUEUED, not spawned.
+    h.runner.run('gap-submit')
+
+    // Without the fix: spawn would be called a second time here (collision).
+    // With the fix: still exactly 1 spawn — the gap is closed.
+    expect(h.spawn).toHaveBeenCalledTimes(1)
+    expect(h.runner.isRunning).toBe(true)
+
+    // After the backoff fires, the retry (first-run) spawns — still 2, not 3.
+    vi.advanceTimersByTime(RESUME_RETRY_BACKOFF_MS[0])
+    expect(h.spawn).toHaveBeenCalledTimes(2)
+    expect(getUtterance(h.spawn.mock.calls[1][1] as string[])).toBe('first-run')
+
+    // Retry succeeds → gap-submit drains as child 3.
+    h.children[1].emit('close', 0)
+    expect(h.spawn).toHaveBeenCalledTimes(3)
+    expect(getUtterance(h.spawn.mock.calls[2][1] as string[])).toBe('gap-submit')
+
+    vi.useRealTimers()
+  })
+})
+
+// ---------------------------------------------------------------------------
 // 4. dispose() clears the queue — teardown never fires stale submits
 // ---------------------------------------------------------------------------
 
