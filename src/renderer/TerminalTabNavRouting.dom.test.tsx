@@ -14,6 +14,16 @@
  * It uses lightweight strips (not Monaco/the real FileViewer) so the test isolates the
  * focus→routing wiring without the editor/IPC weight; the focus-within tracking and the
  * routing/predicate/cycle code under test are the REAL modules.
+ *
+ * SCOPE / FALSE-CONFIDENCE WARNING (terminal-tab-nav-monaco-focus-v1): this harness fires
+ * `fireEvent.focus` on a PLAIN div whose `focusin` DOES bubble, so it validates only the
+ * routing/predicate once `viewerFocused` is true. It does NOT — and CANNOT — reproduce the real
+ * defect where the REAL Monaco editor mounts its keyboard-input <textarea> on `document.body`
+ * (no `overflowWidgetsDomNode`), OUTSIDE the FileViewer subtree, so the editor's focus never
+ * bubbles to the wrapper's `onFocus` and `viewerFocused` wrongly stayed false. That class of bug
+ * is covered by `fileExplorer/MonacoFocusNav.dom.test.tsx` (real `MonacoText`→`onViewerFocusChange`
+ * via Monaco's own `onDidFocusEditorText`), with the full real-editor keystroke deferred to e2e.
+ * Do NOT treat a green run here as proof the Monaco-focused shortcut routes correctly.
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'

@@ -57,9 +57,28 @@ function StateBlock({
 }
 
 /** Read-only Monaco editor mounting the file text (design §4.2). Themed to cosmos-dark. */
-function MonacoText({ relPath, text }: { relPath: string; text: string }): React.JSX.Element {
+function MonacoText({
+  relPath,
+  text,
+  onViewerFocusChange
+}: {
+  relPath: string
+  text: string
+  /**
+   * Report viewer focus (terminal-tab-nav-monaco-focus-v1, bug #…): Monaco mounts its hidden
+   * keyboard-input <textarea> on `document.body` (no `overflowWidgetsDomNode` is set), OUTSIDE this
+   * FileViewer subtree, so the editor's focus does NOT bubble to the outer div's `onFocus`. We must
+   * therefore drive viewer-focus from Monaco's OWN `onDidFocusEditorText`/`onDidBlurEditorText`
+   * rather than DOM `focusin`, or `Cmd+Option+Arrow` mis-routes to the terminal tabs.
+   */
+  onViewerFocusChange?: (focused: boolean) => void
+}): React.JSX.Element {
   const containerRef = useRef<HTMLDivElement | null>(null)
   const editorRef = useRef<editor.IStandaloneCodeEditor | null>(null)
+  // Keep the latest callback in a ref so the once-on-mount effect's focus listeners always call the
+  // current reporter without re-creating the editor when the parent re-renders.
+  const focusReporter = useRef(onViewerFocusChange)
+  focusReporter.current = onViewerFocusChange
 
   // Create the editor ONCE on mount; subsequent text/lang changes update the model in place.
   useEffect(() => {
@@ -78,7 +97,14 @@ function MonacoText({ relPath, text }: { relPath: string; text: string }): React
       ...buildViewerEditorOptions(relPath)
     })
     editorRef.current = ed
+    // Route Monaco's own text-input focus/blur to the viewer-focus reporter (see prop docs above):
+    // its keyboard <textarea> lives on document.body, so DOM focusin never reaches the FileViewer
+    // div. These listeners are the ONLY reliable signal that the editor holds focus.
+    const focusSub = ed.onDidFocusEditorText(() => focusReporter.current?.(true))
+    const blurSub = ed.onDidBlurEditorText(() => focusReporter.current?.(false))
     return () => {
+      focusSub.dispose()
+      blurSub.dispose()
       ed.dispose()
       editorRef.current = null
     }
@@ -124,19 +150,28 @@ function ImageView({ paneId, relPath }: { paneId: string; relPath: string }): Re
 function ViewerBody({
   paneId,
   viewer,
-  onRenderError
+  onRenderError,
+  onViewerFocusChange
 }: {
   paneId: string
   viewer: NonNullable<ViewerState>
   /** Flip this tab to the calm `render-error` block when a document renderer threw (FR-008). */
   onRenderError: (relPath: string) => void
+  /** Report viewer focus from Monaco's own focus events (see `MonacoText`). */
+  onViewerFocusChange?: (focused: boolean) => void
 }): React.JSX.Element {
   switch (viewer.kind) {
     case 'loading':
       // The calm dark surface IS the resting state — no spinner over it (design §4.3).
       return <div className="min-h-0 flex-1 bg-card" aria-busy="true" />
     case 'text':
-      return <MonacoText relPath={viewer.relPath} text={viewer.text} />
+      return (
+        <MonacoText
+          relPath={viewer.relPath}
+          text={viewer.text}
+          onViewerFocusChange={onViewerFocusChange}
+        />
+      )
     case 'image':
       return <ImageView paneId={paneId} relPath={viewer.relPath} />
     case 'pdf':
@@ -268,7 +303,12 @@ export function FileViewer({
         onClose={onClose}
         ariaLabel="Open files"
       />
-      <ViewerBody paneId={paneId} viewer={viewer} onRenderError={onRenderError} />
+      <ViewerBody
+        paneId={paneId}
+        viewer={viewer}
+        onRenderError={onRenderError}
+        onViewerFocusChange={onViewerFocusChange}
+      />
     </div>
   )
 }
