@@ -1,5 +1,4 @@
 import * as React from "react"
-import { AlertTriangle } from "lucide-react"
 
 import { Button } from "@/components/ui/button"
 import {
@@ -14,9 +13,19 @@ import {
 /**
  * ConfirmDialog — the ONE shared destructive-confirm modal
  * (disconnect-confirm-modal-v1, FR-004/FR-007). Composed from the existing shadcn
- * `Dialog` (no `alert-dialog` primitive) with a `destructive` confirm Button and an
- * `outline` Cancel. Reused at every disconnect site so the prompt is uniform by
- * construction; the integration-specific copy is passed in via `title`/`description`.
+ * `Dialog` with a `destructive` confirm Button and a `ghost` Cancel. Reused at every
+ * disconnect site so the prompt is uniform by construction; the integration-specific
+ * copy is passed in via `title`/`description`.
+ *
+ * Visual parity (disconnect-modal-design-fix): the body is the SAME canonical
+ * `DialogHeader` > `DialogTitle` + `DialogDescription` pair every sibling dialog uses
+ * (e.g. SettingsDialog), on the standard popover/background surface — NOT a red
+ * `Alert` card. So the title is `foreground` at the standard dialog-title size, the
+ * description is `muted-foreground` at the standard body size, and the background is
+ * the neutral system surface. The destructive SEMANTIC lives ONLY on the confirm
+ * action (the `destructive` Button); the rest of the modal stays in neutral system
+ * tokens, and both buttons use the app's prevailing default Button size so they match
+ * sibling dialogs (no off-system `size="sm"`).
  *
  * Closing via Esc / overlay / Cancel calls `onOpenChange(false)` WITHOUT confirming
  * (FR-003/FR-010) — only the destructive button calls `onConfirm`. The destructive
@@ -43,31 +52,25 @@ export function ConfirmDialog({
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="sm:max-w-sm" showCloseButton={false}>
+        {/* Canonical dialog body: the standard `DialogHeader` > `DialogTitle`
+            (foreground, standard title size) + `DialogDescription`
+            (muted-foreground, standard body size) on the neutral popover/background
+            surface — the SAME treatment every sibling dialog (SettingsDialog) uses,
+            so this modal reads on-system. The destructive semantic is carried ONLY
+            by the confirm Button below, not by the surrounding text/background. */}
         <DialogHeader>
-          {/* Override the shared Dialog title's `text-lg` down to `text-base` for
-              this small confirm so the heading reads proportionate to the compact
-              footer (size="sm") rather than oversized. Scoped here via className so
-              other dialogs keep the larger shared title. */}
-          <DialogTitle className="flex items-center gap-2 text-base">
-            <AlertTriangle
-              aria-hidden
-              className="size-4 shrink-0 text-destructive"
-            />
-            {title}
-          </DialogTitle>
+          <DialogTitle>{title}</DialogTitle>
           <DialogDescription>{description}</DialogDescription>
         </DialogHeader>
         <DialogFooter>
           {/* Cancel takes initial focus (autoFocus) so a stray Enter can never
-              trigger the destructive action. `ghost` Cancel + `destructive`
-              confirm mirrors the Settings Save-confirm footer so the two confirm
-              surfaces read identically. Both are size="sm" (h-8) to match the
-              app's prevailing compact button scale (the integration
-              connect/disconnect rows) rather than the bigger default h-9. */}
+              trigger the destructive action. A calm `ghost` Cancel + a
+              `destructive` confirm carries the destructive semantic on the action
+              alone. Both use the app's prevailing default Button size to match
+              sibling dialogs. */}
           <Button
             type="button"
             variant="ghost"
-            size="sm"
             autoFocus
             onClick={() => onOpenChange(false)}
           >
@@ -76,7 +79,6 @@ export function ConfirmDialog({
           <Button
             type="button"
             variant="destructive"
-            size="sm"
             onClick={onConfirm}
           >
             {confirmLabel}
