@@ -8,7 +8,6 @@ import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/comp
 import { cn } from '@/lib/utils'
 import { TerminalPanel } from './TerminalPanel'
 import { CosmosPanel } from './CosmosPanel'
-import { CosmosMark } from './CosmosMark'
 import { SlackPanel } from './SlackPanel'
 import { JiraPanel } from './JiraPanel'
 import { ConfluencePanel } from './ConfluencePanel'
@@ -53,12 +52,23 @@ const ClaudeCodeIcon: RailIcon = ({ className }) => (
   </svg>
 )
 
+// Cosmos rail glyph: the `cosmos-small-white.svg` four-point sparkle, MONOCHROME — the colored
+// background rect + radial gradient are dropped and the mark is `fill="currentColor"` so it tracks
+// the rail's active/idle color cascade exactly like the other rail icons (not the pastel brand mark).
+const CosmosGlyphIcon: RailIcon = ({ className }) => (
+  <svg role="img" viewBox="0 0 512 512" className={className} fill="currentColor" aria-hidden>
+    <g transform="translate(256,256) scale(2.78)">
+      <path d="M 0.00 -60.00 Q 9.55 -47.99 9.18 -22.17 Q 27.18 -40.68 42.43 -42.43 Q 40.68 -27.18 22.17 -9.18 Q 47.99 -9.55 60.00 0.00 Q 47.99 9.55 22.17 9.18 Q 40.68 27.18 42.43 42.43 Q 27.18 40.68 9.18 22.17 Q 9.55 47.99 0.00 60.00 Q -9.55 47.99 -9.18 22.17 Q -27.18 40.68 -42.43 42.43 Q -40.68 27.18 -22.17 9.18 Q -47.99 9.55 -60.00 0.00 Q -47.99 -9.55 -22.17 -9.18 Q -40.68 -27.18 -42.43 -42.43 Q -27.18 -40.68 -9.18 -22.17 Q -9.55 -47.99 0.00 -60.00 Z" />
+    </g>
+  </svg>
+)
+
 /** The rail item presentation for every surface, keyed by id (order = ALL_SURFACE_IDS). */
 const RAIL_ITEM: Record<SurfaceId, { label: string; Icon: RailIcon }> = {
   terminal: { label: 'Terminal', Icon: ClaudeCodeIcon },
   // cosmos-conversation-panel-v1: the rail id is 'cosmos' (renamed from 'generated-ui'); the WIRE
   // render target stays 'generated-ui' (see CosmosPanel + railVisibility). Brand mark = CosmosMark.
-  cosmos: { label: 'Cosmos', Icon: CosmosMark },
+  cosmos: { label: 'Cosmos', Icon: CosmosGlyphIcon },
   slack: { label: 'Slack', Icon: SiSlack },
   jira: { label: 'Jira', Icon: SiJira },
   confluence: { label: 'Confluence', Icon: SiConfluence },
