@@ -21,13 +21,14 @@ import { Document, Page, pdfjs } from 'react-pdf'
 import 'react-pdf/dist/Page/AnnotationLayer.css'
 import 'react-pdf/dist/Page/TextLayer.css'
 import { buildLocalFileSrc } from './localFileSrc'
+// Vite resolves bare package specifiers with `?url` to a hashed same-origin asset URL in BOTH
+// dev and packaged builds. The `new URL('pdfjs-dist/...', import.meta.url)` pattern does NOT
+// work for bare specifiers in Vite — Vite only rewrites relative paths inside `new URL()`.
+import pdfWorkerUrl from 'pdfjs-dist/build/pdf.worker.min.mjs?url'
 
 // Wire the pdf.js worker ONCE at module load (idempotent — assigning the same URL twice is
-// harmless). The `new URL(..., import.meta.url)` is resolved by Vite to a hashed bundled asset.
-pdfjs.GlobalWorkerOptions.workerSrc = new URL(
-  'pdfjs-dist/build/pdf.worker.min.mjs',
-  import.meta.url
-).toString()
+// harmless). The `?url` import is resolved by Vite to a hashed bundled asset URL.
+pdfjs.GlobalWorkerOptions.workerSrc = pdfWorkerUrl
 
 export function PdfView({
   paneId,
