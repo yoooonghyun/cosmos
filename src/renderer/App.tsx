@@ -56,7 +56,7 @@ const ClaudeCodeIcon: RailIcon = ({ className }) => (
 // background rect + radial gradient are dropped and the mark is `fill="currentColor"` so it tracks
 // the rail's active/idle color cascade exactly like the other rail icons (not the pastel brand mark).
 const CosmosGlyphIcon: RailIcon = ({ className }) => (
-  <svg role="img" viewBox="0 0 512 512" className={className} fill="currentColor" aria-hidden>
+  <svg role="img" viewBox="80 80 352 352" className={className} fill="currentColor" aria-hidden>
     <g transform="translate(256,256) scale(2.78)">
       <path d="M 0.00 -60.00 Q 9.55 -47.99 9.18 -22.17 Q 27.18 -40.68 42.43 -42.43 Q 40.68 -27.18 22.17 -9.18 Q 47.99 -9.55 60.00 0.00 Q 47.99 9.55 22.17 9.18 Q 40.68 27.18 42.43 42.43 Q 27.18 40.68 9.18 22.17 Q 9.55 47.99 0.00 60.00 Q -9.55 47.99 -9.18 22.17 Q -27.18 40.68 -42.43 42.43 Q -40.68 27.18 -22.17 9.18 Q -47.99 9.55 -60.00 0.00 Q -47.99 -9.55 -22.17 -9.18 Q -40.68 -27.18 -42.43 -42.43 Q -27.18 -40.68 -9.18 -22.17 Q -9.55 -47.99 0.00 -60.00 Z" />
     </g>
