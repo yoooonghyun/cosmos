@@ -179,25 +179,27 @@
  * `SLACK_LAYOUT_CLAMP_CLASS` / `SLACK_LIST_SCROLL_CLASS` pattern).
  */
 @utility scrollbar-hover-only {
-  scrollbar-width: none;
+  /* The track width is CONSTANT (always 8px) and the gutter is always reserved — revealing the
+     bar on hover changes ONLY the thumb's color, never the layout width, so message content never
+     shifts/shrinks on hover (bug slack-message-hover-width-shift-v1). The earlier width:0→8 toggle
+     WAS the shift. Electron is Chromium, so we drive this purely through `::-webkit-scrollbar`
+     (setting `scrollbar-width` can disable the pseudo-element styling on some Chromium builds). */
   scrollbar-gutter: stable;
 
   &::-webkit-scrollbar {
-    width: 0;
-    height: 0;
-  }
-  &:hover {
-    scrollbar-width: thin;
-  }
-  &:hover::-webkit-scrollbar {
     width: 8px;
     height: 8px;
   }
+  /* Hidden at rest = transparent thumb over a transparent track (the track space stays reserved,
+     so it reads as empty margin, not a visible bar). On hover the thumb fades in. */
   &::-webkit-scrollbar-thumb {
     border-radius: 9999px;
+    background: transparent;
+  }
+  &:hover::-webkit-scrollbar-thumb {
     background: color-mix(in oklab, var(--muted-foreground) 45%, transparent);
   }
-  &::-webkit-scrollbar-thumb:hover {
+  &:hover::-webkit-scrollbar-thumb:hover {
     background: color-mix(in oklab, var(--muted-foreground) 70%, transparent);
   }
   &::-webkit-scrollbar-track {

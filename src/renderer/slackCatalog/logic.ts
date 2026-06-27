@@ -573,6 +573,13 @@ export const SLACK_LIST_SCROLL_CLASS =
  * A lone list is the only flex child → it fills the full width. The `[&>*]` keys off DOM position
  * (the wrapper's only child is always the SDK `Column`/`Row` div), not any SDK class — so the chain
  * threads through regardless of SDK markup (FR-005/FR-012). Replaces {@link SLACK_LAYOUT_CLAMP_CLASS}.
+ *
+ * INVARIANT (feedback-slack-per-list-scroll): the `[&>*]:!flex-row` + per-list `min-h-0 flex-1`
+ * fill chain is LOAD-BEARING — it is what makes multiple message lists split side-by-side and each
+ * scroll INDEPENDENTLY (slack-list-scroll-fill-v2). Do NOT add `flex-wrap`/`content-start` here: a
+ * prior channel-name-above-list attempt did, which let the list line size to content height instead
+ * of filling, collapsing the per-list scroll into ONE unified surface scroll — a regression the user
+ * has rejected repeatedly. Per-list independent scroll OUTRANKS any header-placement nicety.
  */
 export const SLACK_LAYOUT_FILL_CLASS =
   'w-full min-w-0 max-w-full flex flex-col min-h-0 flex-1 ' +

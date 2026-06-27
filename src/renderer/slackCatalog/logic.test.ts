@@ -936,6 +936,14 @@ describe('SLACK_LAYOUT_FILL_CLASS (v2 first-party Column/Row wrapper — threads
     expect(SLACK_LAYOUT_FILL_CLASS).not.toContain('[&>*]:flex-col')
   })
 
+  it('does NOT add flex-wrap/content-start (feedback-slack-per-list-scroll: a channel-name-above-list attempt that did so collapsed per-list scroll into one unified scroll — reverted, must not return)', () => {
+    expect(SLACK_LAYOUT_FILL_CLASS).not.toContain('flex-wrap')
+    expect(SLACK_LAYOUT_FILL_CLASS).not.toContain('content-start')
+    // The per-list fill+split tokens stay intact (each list is its own flex-1 scroll column).
+    expect(SLACK_LAYOUT_FILL_CLASS).toContain('[&>*]:flex-1')
+    expect(SLACK_LAYOUT_FILL_CLASS).toContain('[&>*]:min-h-0')
+  })
+
   it('the first-party Column/Row wrappers apply the fill class (not the width-only clamp) — node-checkable wiring', () => {
     const layoutSrc = readFileSync(new URL('./layout.tsx', import.meta.url), 'utf8')
     expect(layoutSrc).toContain('SLACK_LAYOUT_FILL_CLASS')
