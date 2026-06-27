@@ -1228,6 +1228,22 @@ function registerIpcHandlers(): void {
     return fsExplorer?.read(payload.paneId, payload.relPath) ?? { ok: false, reason: 'out-of-root' }
   })
 
+  // file-viewer-multiformat-v1 (FR-007/FR-012): read a routed DOCUMENT file's RAW BYTES for the
+  // byte-consuming renderers (pdf/docx/sheet). Replaces the cross-scheme `cosmos-file://` fetch
+  // Chromium blocks from the http dev origin. Validated at the boundary (invalid → warn + ignore
+  // → out-of-root, never a crash). Main resolves the root by paneId, CONFINES the path, and
+  // enforces the per-format size cap BEFORE reading — an oversize/out-of-root/missing target
+  // yields a typed failure, never an out-of-root read and never an absolute-path leak.
+  ipcMain.handle(FsChannel.ReadBytes, (_e: IpcMainInvokeEvent, raw: unknown) => {
+    const payload = validateFsPath(raw, FsChannel.ReadBytes)
+    if (!payload) {
+      return { ok: false as const, reason: 'out-of-root' as const }
+    }
+    return (
+      fsExplorer?.readBytes(payload.paneId, payload.relPath) ?? { ok: false, reason: 'out-of-root' }
+    )
+  })
+
   // terminal-file-explorer-v1 (FR-015/FR-016): begin watching this pane's root. A pane with no
   // live root creates no watcher (FR-006). Fire-and-forget; validated.
   ipcMain.on(FsChannel.WatchStart, (_event: IpcMainEvent, raw: unknown) => {
@@ -2345,7 +2361,14 @@ function createWindow(): void {
     // cosmos-conversation-panel-v1 (step 2): the persistent default-conversation session
     // id — the runner passes `--session-id <this>` for the default ('generated-ui') target
     // and SERIALIZES default-target submits behind any in-flight run (no id collision).
-    { sandboxDir, defaultSessionId: defaultSession.sessionId }
+    // session-id-already-in-use-runtime-v1: thread the SAME registry env the PTY `--resume`
+    // path uses so a queued run drained before the prior child released its registry entry
+    // retries on a backoff instead of failing "Session ID is already in use".
+    {
+      sandboxDir,
+      defaultSessionId: defaultSession.sessionId,
+      sessionLockEnv: claudeSessionLockEnv
+    }
   )
 
   mainWindow.on('ready-to-show', () => {
