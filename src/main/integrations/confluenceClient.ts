@@ -528,8 +528,10 @@ export class ConfluenceClient {
    * `replies` array for that comment — it NEVER fails the whole comments read (plan §C OQ-1).
    * The body of each comment/reply is the raw `body-format=view` HTML carried UNCHANGED (the
    * renderer sanitizes at the display site, OQ-3). The author is the v2 `version.authorId`
-   * account id surfaced as `author.accountId` (no name resolver — the renderer falls back to
-   * the id; degrade-never-throw). The first-page failure of the TOP-LEVEL read maps via
+   * account id surfaced as `author.accountId`, then resolved to a non-secret display NAME via
+   * `GET /wiki/rest/api/user?accountId=…` (`author.displayName`) with a per-request name cache so
+   * each unique author is fetched once; ANY resolution failure leaves the name off so the renderer
+   * falls back to the raw id (degrade-never-throw). The first-page failure of the TOP-LEVEL read maps via
    * {@link mapConfluenceError}. A scope-less token is short-circuited by the manager BEFORE
    * this is called. The token is never returned.
    */
@@ -540,7 +542,7 @@ export class ConfluenceClient {
     const url = new URL(
       `${this.base(auth.cloudId)}/wiki/api/v2/pages/${encodeURIComponent(params.pageId)}/footer-comments`
     )
-    url.searchParams.set('body-format', 'view')
+    url.searchParams.set('body-format', 'storage')
     url.searchParams.set('limit', '50')
     if (params.cursor) {
       url.searchParams.set('cursor', params.cursor)
@@ -551,13 +553,73 @@ export class ConfluenceClient {
     }
     const results = Array.isArray(r.body.results) ? r.body.results : []
     const tops = results.filter(isRecord).map(mapFooterComment)
+    // A per-request author-name cache so each unique accountId is fetched ONCE across the
+    // whole comments tree (top-level + every replies read), mirroring Slack's resolveNames.
+    // Caches the in-flight PROMISE (not just the resolved value) so concurrent resolutions of
+    // the same id (the tops/replies resolve in parallel) share a single fetch — no race.
+    const names = new Map<string, Promise<string | undefined>>()
     // Fetch each top-level comment's direct replies (one level), best-effort and in parallel.
+    const withReplies = await Promise.all(
+      tops.map(async (c) => ({ ...c, replies: await this.commentChildren(auth, c.id, names) }))
+    )
+    // Resolve display names for the top-level authors (replies were resolved in commentChildren).
     const comments = await Promise.all(
-      tops.map(async (c) => ({ ...c, replies: await this.commentChildren(auth, c.id) }))
+      withReplies.map((c) => this.withAuthorName(auth, c, names))
     )
     const links = isRecord(r.body._links) ? r.body._links : {}
     const nextCursor = cursorFromNextLink(links.next)
     return { ok: true, data: { comments, ...(nextCursor ? { nextCursor } : {}) } }
+  }
+
+  /**
+   * Resolve a comment's author `accountId` to a non-secret display NAME and attach it as
+   * `author.displayName` (confluence-comment-author-name-v1). BEST-EFFORT: any failure (or an
+   * absent accountId) leaves `displayName` off, so the renderer falls back to the raw id —
+   * never blocks/crashes the comments render. The per-request `cache` ensures each unique id is
+   * fetched once. The comment's own `replies` are NOT recursed here (they are resolved at their
+   * own read site). The token is never returned. Pure w.r.t. the cache aside from the fetch.
+   */
+  private async withAuthorName(
+    auth: ConfluenceCallAuth,
+    comment: ConfluenceComment,
+    cache: Map<string, Promise<string | undefined>>
+  ): Promise<ConfluenceComment> {
+    const accountId = comment.author.accountId
+    if (typeof accountId !== 'string' || accountId === '') {
+      return comment
+    }
+    const displayName = await this.resolveUserName(auth, accountId, cache)
+    if (typeof displayName !== 'string' || displayName === '') {
+      return comment
+    }
+    return { ...comment, author: { ...comment.author, displayName } }
+  }
+
+  /**
+   * Resolve ONE Atlassian `accountId` to its public display name via
+   * `GET /wiki/rest/api/user?accountId=…` — reading `displayName` (falling back to `publicName`),
+   * the only non-secret name fields. Memoized in the per-request `cache` so each unique id is
+   * fetched once (a cached miss is stored as `undefined`, never re-fetched). ANY failure
+   * (network, non-2xx, malformed body, no name) resolves to `undefined` so the caller falls back
+   * to the raw id (degrade-never-throw). The token is attached but never returned.
+   */
+  private resolveUserName(
+    auth: ConfluenceCallAuth,
+    accountId: string,
+    cache: Map<string, Promise<string | undefined>>
+  ): Promise<string | undefined> {
+    const cached = cache.get(accountId)
+    if (cached) {
+      return cached
+    }
+    const pending = (async () => {
+      const url = new URL(`${this.base(auth.cloudId)}/wiki/rest/api/user`)
+      url.searchParams.set('accountId', accountId)
+      const r = await this.call(url.toString(), auth.token)
+      return r.ok ? confluenceUserName(r.body) : undefined
+    })()
+    cache.set(accountId, pending)
+    return pending
   }
 
   /**
@@ -569,19 +631,22 @@ export class ConfluenceClient {
    */
   private async commentChildren(
     auth: ConfluenceCallAuth,
-    commentId: string
+    commentId: string,
+    cache: Map<string, Promise<string | undefined>>
   ): Promise<ConfluenceComment[]> {
     const url = new URL(
       `${this.base(auth.cloudId)}/wiki/api/v2/footer-comments/${encodeURIComponent(commentId)}/children`
     )
-    url.searchParams.set('body-format', 'view')
+    url.searchParams.set('body-format', 'storage')
     url.searchParams.set('limit', '50')
     const r = await this.call(url.toString(), auth.token)
     if (!r.ok) {
       return []
     }
     const results = Array.isArray(r.body.results) ? r.body.results : []
-    return results.filter(isRecord).map(mapFooterComment)
+    const replies = results.filter(isRecord).map(mapFooterComment)
+    // Resolve each reply author's display name (shares the per-request cache with the tops).
+    return Promise.all(replies.map((reply) => this.withAuthorName(auth, reply, cache)))
   }
 
   /**
@@ -652,15 +717,38 @@ function bodyIndicatesVersionConflict(rawBody: string): boolean {
 
 /**
  * Extract the raw `body-format=view` HTML from a v2 footer-comment object
- * (confluence-dock-comments-v1, FR-003). Reads `body.view.value` — the Confluence
- * server-rendered comment HTML — UNCHANGED (sanitization is the renderer's job at the
- * `dangerouslySetInnerHTML` site, OQ-3). A missing/non-string value degrades to `''` (the safe
- * "no readable body" state — FR-012). Pure; never throws. Exported for the unit test.
+ * (confluence-dock-comments-v1, FR-003). Reads `body.storage.value` — the Confluence
+ * storage (XHTML-ish) comment body — which is the representation the list endpoints
+ * (`/pages/{id}/footer-comments` and `/footer-comments/{id}/children`) actually return
+ * for `body-format=storage` (`view` is not supported on those list endpoints and triggers
+ * HTTP 400). Sanitization is the renderer's job at the `dangerouslySetInnerHTML` site (OQ-3).
+ * A missing/non-string value degrades to `''` (the safe "no readable body" state — FR-012).
+ * Pure; never throws. Exported for the unit test.
  */
 export function footerCommentBody(comment: Record<string, unknown>): string {
   const body = isRecord(comment.body) ? comment.body : {}
-  const view = isRecord(body.view) ? body.view : {}
-  return typeof view.value === 'string' ? view.value : ''
+  const storage = isRecord(body.storage) ? body.storage : {}
+  return typeof storage.value === 'string' ? storage.value : ''
+}
+
+/**
+ * Extract the non-secret display name from a `GET /wiki/rest/api/user?accountId=…` response body
+ * (confluence-comment-author-name-v1). Prefers `displayName`, falling back to `publicName` — the
+ * two human-readable name fields the Confluence user endpoint returns. Returns `undefined` when
+ * neither is a non-empty string (so the caller degrades to the raw account id). NEVER reads or
+ * returns any secret/email field. Pure; never throws. Exported for the unit test.
+ */
+export function confluenceUserName(responseBody: unknown): string | undefined {
+  if (!isRecord(responseBody)) {
+    return undefined
+  }
+  if (typeof responseBody.displayName === 'string' && responseBody.displayName !== '') {
+    return responseBody.displayName
+  }
+  if (typeof responseBody.publicName === 'string' && responseBody.publicName !== '') {
+    return responseBody.publicName
+  }
+  return undefined
 }
 
 /**
@@ -669,8 +757,10 @@ export function footerCommentBody(comment: Record<string, unknown>): string {
  * v1 is one nesting level, plan §C OQ-1). Pure; never throws.
  *
  * Author: the v2 footer comment carries an author ACCOUNT ID (e.g. `version.authorId` or
- * `authorId`), not a display name — surfaced as `author.accountId`; the renderer falls back to
- * the id when no name is available (degrade-never-throw). `created` reads the ISO-8601
+ * `authorId`), not a display name — surfaced as `author.accountId`; the caller (`getComments`)
+ * resolves it to `author.displayName` via the user endpoint AFTER mapping (keeping this mapper
+ * pure), and the renderer falls back to the id when no name is available (degrade-never-throw).
+ * `created` reads the ISO-8601
  * `version.createdAt` when present (degrade-to-omit otherwise — FR-002). NO token is read.
  */
 export function mapFooterComment(comment: Record<string, unknown>): ConfluenceComment {

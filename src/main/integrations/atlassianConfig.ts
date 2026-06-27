@@ -52,7 +52,10 @@ export const JIRA_OAUTH_SCOPES = [
  * READING a page's footer comments (confluence-dock-comments-v1, FR-004) adds
  * `read:comment:confluence` (GET /wiki/api/v2/pages/{id}/footer-comments + each comment's
  * /children) — a NEW consent, so every already-connected user reconnects ONCE to grant it
- * (until then a comments read short-circuits to comment_read_not_authorized).
+ * (until then a comments read short-circuits to comment_read_not_authorized). RESOLVING a
+ * comment author's `version.authorId` to a display name (GET /wiki/rest/api/user) needs the
+ * granular `read:user:confluence` scope; without it the user endpoint 403s at runtime and the
+ * author renders as the raw account id (confluence-comment-author-name-v1).
  * `search:confluence` stays for the CQL search. `read:attachment:confluence`
  * (confluence-content-images-v1, FR-012) authorizes fetching the page-body
  * content/attachment image bytes the main-process `cosmos-confluence-img` protocol proxies.
@@ -67,6 +70,12 @@ export const CONFLUENCE_OAUTH_SCOPES = [
   'read:space:confluence',
   'read:attachment:confluence',
   'read:comment:confluence',
+  // GRANULAR user-read scope (confluence-comment-author-name-v1): authorizes
+  // GET /wiki/rest/api/user?accountId=… so a footer-comment's `version.authorId` can be
+  // resolved to a display NAME. WITHOUT it that endpoint 403s at runtime and the comment
+  // author renders as the raw account id (the scope gap the unit-test stub never exercised).
+  // A NEW consent, so already-connected users reconnect ONCE to grant it.
+  'read:user:confluence',
   'search:confluence',
   'write:page:confluence',
   'write:comment:confluence',

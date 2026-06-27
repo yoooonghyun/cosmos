@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import {
   ConfluenceClient,
+  confluenceUserName,
   cursorFromNextLink,
   mapConfluenceError,
   pageViewBody,
@@ -694,22 +695,36 @@ describe('ConfluenceClient.createComment (confluence-mcp-write-v1, comment FR)',
 })
 
 describe('ConfluenceClient.getComments (confluence-dock-comments-v1, FR-003)', () => {
-  // A top-level footer comment, v2 shape (authorId + version.createdAt + body.view.value).
+  // A top-level footer comment, v2 shape (authorId + version.createdAt + body.storage.value).
+  // The list endpoints (/pages/{id}/footer-comments and /footer-comments/{id}/children) only
+  // support body-format=storage — `view` is not in their response schema and returns HTTP 400.
   const topComment = (id: string, value: string) => ({
     id,
     version: { authorId: `acct-${id}`, createdAt: '2026-06-27T10:00:00.000Z' },
-    body: { view: { value } }
+    body: { storage: { value } }
   })
 
-  /** Route fetch: the top-level footer-comments URL vs each comment's /children URL. */
+  /**
+   * Route fetch: the user-resolution URL, the top-level footer-comments URL, and each comment's
+   * /children URL. `user(accountId)` defaults to a 200 with NO name fields (→ name resolves to
+   * undefined → renderer falls back to the raw id), so a test only overrides it to exercise
+   * name resolution.
+   */
   function routedFetch(map: {
     top: unknown
     topStatus?: number
     children: (commentId: string) => { body: unknown; status?: number }
+    user?: (accountId: string) => { body: unknown; status?: number }
   }): { fetchImpl: FetchLike; urls: string[] } {
     const urls: string[] = []
     const fetchImpl: FetchLike = async (url) => {
       urls.push(url)
+      const userMatch = url.match(/\/wiki\/rest\/api\/user\?/)
+      if (userMatch) {
+        const accountId = new URL(url).searchParams.get('accountId') ?? ''
+        const u = map.user ? map.user(accountId) : { body: {} }
+        return res(u.body, u.status ?? 200)
+      }
       const childMatch = url.match(/footer-comments\/([^/]+)\/children/)
       if (childMatch) {
         const c = map.children(decodeURIComponent(childMatch[1]))
@@ -746,9 +761,9 @@ describe('ConfluenceClient.getComments (confluence-dock-comments-v1, FR-003)', (
       expect(c2.replies).toHaveLength(0)
       expect(result.data.nextCursor).toBe('NXT')
     }
-    // The top-level page URL hits the footer-comments collection with body-format=view.
+    // The top-level page URL hits the footer-comments collection with body-format=storage.
     expect(urls[0]).toContain('/wiki/api/v2/pages/777/footer-comments')
-    expect(urls[0]).toContain('body-format=view')
+    expect(urls[0]).toContain('body-format=storage')
   })
 
   it('degrades a FAILED children read to no replies (best-effort), not a whole-read failure', async () => {
@@ -768,7 +783,7 @@ describe('ConfluenceClient.getComments (confluence-dock-comments-v1, FR-003)', (
 
   it('falls back gracefully when an author/timestamp are absent (degrade-never-throw)', async () => {
     const { fetchImpl } = routedFetch({
-      top: { results: [{ id: '9', body: { view: { value: '<p>hi</p>' } } }], _links: {} },
+      top: { results: [{ id: '9', body: { storage: { value: '<p>hi</p>' } } }], _links: {} },
       children: () => ({ body: { results: [] } })
     })
     const client = new ConfluenceClient({ fetchImpl })
@@ -811,5 +826,98 @@ describe('ConfluenceClient.getComments (confluence-dock-comments-v1, FR-003)', (
     const client = new ConfluenceClient({ fetchImpl })
     const result = await client.getComments(auth, { pageId: '777' })
     expect(JSON.stringify(result)).not.toContain('at-test')
+  })
+
+  it('resolves each author accountId to a display name on tops AND replies (author-name-v1)', async () => {
+    const { fetchImpl, urls } = routedFetch({
+      top: { results: [topComment('1', '<p>top</p>')], _links: {} },
+      children: () => ({ body: { results: [topComment('1a', '<p>reply</p>')] } }),
+      // The user endpoint returns the registered display name keyed by accountId.
+      user: (accountId) =>
+        accountId === 'acct-1'
+          ? { body: { accountId, displayName: 'Ada Lovelace', publicName: 'ada' } }
+          : { body: { accountId, displayName: 'Grace Hopper' } }
+    })
+    const client = new ConfluenceClient({ fetchImpl })
+    const result = await client.getComments(auth, { pageId: '777' })
+    expect(result.ok).toBe(true)
+    if (result.ok) {
+      const c1 = result.data.comments[0]
+      // Top-level author resolved to the display NAME (id kept alongside).
+      expect(c1.author.displayName).toBe('Ada Lovelace')
+      expect(c1.author.accountId).toBe('acct-1')
+      // The reply author is resolved too.
+      expect(c1.replies[0].author.displayName).toBe('Grace Hopper')
+      expect(c1.replies[0].author.accountId).toBe('acct-1a')
+    }
+    // The user endpoint was hit for resolution.
+    expect(urls.some((u) => u.includes('/wiki/rest/api/user?'))).toBe(true)
+  })
+
+  it('fetches each UNIQUE author once (per-request cache), not once per comment', async () => {
+    let userCalls = 0
+    const { fetchImpl } = routedFetch({
+      // Two top-level comments by the SAME author (acct-1 via topComment id reuse below).
+      top: {
+        results: [
+          { id: 'a', version: { authorId: 'acct-same' }, body: { storage: { value: '<p>1</p>' } } },
+          { id: 'b', version: { authorId: 'acct-same' }, body: { storage: { value: '<p>2</p>' } } }
+        ],
+        _links: {}
+      },
+      children: () => ({ body: { results: [] } }),
+      user: (accountId) => {
+        userCalls += 1
+        return { body: { accountId, displayName: 'Solo Author' } }
+      }
+    })
+    const client = new ConfluenceClient({ fetchImpl })
+    const result = await client.getComments(auth, { pageId: '777' })
+    expect(result.ok).toBe(true)
+    if (result.ok) {
+      expect(result.data.comments[0].author.displayName).toBe('Solo Author')
+      expect(result.data.comments[1].author.displayName).toBe('Solo Author')
+    }
+    // Same accountId across both comments → exactly ONE user fetch.
+    expect(userCalls).toBe(1)
+  })
+
+  it('falls back to the raw account id when name resolution fails (degrade-never-throw)', async () => {
+    const { fetchImpl } = routedFetch({
+      top: { results: [topComment('1', '<p>top</p>')], _links: {} },
+      children: () => ({ body: { results: [] } }),
+      // The user endpoint 500s → no displayName; the renderer falls back to accountId.
+      user: () => ({ body: { message: 'boom' }, status: 500 })
+    })
+    const client = new ConfluenceClient({ fetchImpl })
+    const result = await client.getComments(auth, { pageId: '777' })
+    expect(result.ok).toBe(true)
+    if (result.ok) {
+      const c1 = result.data.comments[0]
+      expect(c1.author.displayName).toBeUndefined()
+      expect(c1.author.accountId).toBe('acct-1')
+    }
+  })
+})
+
+describe('confluenceUserName (pure user-name extractor — author-name-v1)', () => {
+  it('returns displayName when present', () => {
+    expect(confluenceUserName({ displayName: 'Ada Lovelace', publicName: 'ada' })).toBe(
+      'Ada Lovelace'
+    )
+  })
+  it('falls back to publicName when displayName is absent/empty', () => {
+    expect(confluenceUserName({ publicName: 'grace' })).toBe('grace')
+    expect(confluenceUserName({ displayName: '', publicName: 'grace' })).toBe('grace')
+  })
+  it('returns undefined when neither name is a non-empty string (never throws)', () => {
+    expect(confluenceUserName({})).toBeUndefined()
+    expect(confluenceUserName({ displayName: 42 })).toBeUndefined()
+    expect(confluenceUserName(null)).toBeUndefined()
+    expect(confluenceUserName('nope')).toBeUndefined()
+    expect(confluenceUserName(undefined)).toBeUndefined()
+  })
+  it('never reads a secret/email field', () => {
+    expect(confluenceUserName({ email: 'a@b.com' })).toBeUndefined()
   })
 })
