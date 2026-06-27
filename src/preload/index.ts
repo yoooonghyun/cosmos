@@ -8,6 +8,7 @@
 import { contextBridge, ipcRenderer, type IpcRendererEvent } from 'electron'
 import {
   AgentChannel,
+  ConversationChannel,
   ConfluenceChannelName,
   FsChannel,
   GoogleCalendarChannelName,
@@ -22,6 +23,8 @@ import {
   type AgentStatusPayload,
   type AgentSubmitPayload,
   type ConfluenceApi,
+  type ConversationApi,
+  type ConversationResult,
   type CosmosApi,
   type FsApi,
   type FsChangedPayload,
@@ -69,8 +72,10 @@ import type {
   JiraSearchParams
 } from '../shared/jira'
 import type {
+  ConfluenceCommentParams,
   ConfluenceConnectionStatus,
   ConfluenceDefaultFeedParams,
+  ConfluenceGetCommentsParams,
   ConfluenceGetPageParams,
   ConfluenceSearchParams
 } from '../shared/confluence'
@@ -305,6 +310,16 @@ const confluenceApi: ConfluenceApi = {
   getPage(params: ConfluenceGetPageParams) {
     return ipcRenderer.invoke(ConfluenceChannelName.GetPage, params)
   },
+  // confluence-dock-comments-v1: read a page's footer comments (+ one-level reply tree).
+  // NEW preload method — requires a full `npm run dev` restart; HMR won't expose it live.
+  getComments(params: ConfluenceGetCommentsParams) {
+    return ipcRenderer.invoke(ConfluenceChannelName.GetComments, params)
+  },
+  // confluence-dock-comments-v1: add a footer comment to the open page (renderer write path,
+  // reuses the existing comment-write impl). NEW preload method — requires a full restart.
+  addComment(params: ConfluenceCommentParams) {
+    return ipcRenderer.invoke(ConfluenceChannelName.AddComment, params)
+  },
   onStatusChanged(listener: (status: ConfluenceConnectionStatus) => void): () => void {
     const handler = (_event: IpcRendererEvent, status: ConfluenceConnectionStatus): void =>
       listener(status)
@@ -368,6 +383,24 @@ const agentApi: AgentApi = {
   }
 }
 
+// cosmos-conversation-panel-v2 (step 3, FR-106): the Cosmos conversation timeline reaches
+// the renderer ONLY through this dedicated `window.cosmos.conversation` channel set.
+// `getDefault` is request/response (`invoke`) read on panel mount; `onUpdate` is an M->R
+// subscription pushed as the transcript grows. NO token/secret/raw-line/path crosses this
+// surface — only the normalized conversation model (FR-104/FR-106). NEW preload methods —
+// a full `npm run dev` restart is required; HMR won't expose them live.
+const conversationApi: ConversationApi = {
+  getDefault(): Promise<ConversationResult> {
+    return ipcRenderer.invoke(ConversationChannel.Fetch)
+  },
+  onUpdate(listener: (result: ConversationResult) => void): () => void {
+    const handler = (_event: IpcRendererEvent, result: ConversationResult): void =>
+      listener(result)
+    ipcRenderer.on(ConversationChannel.Update, handler)
+    return () => ipcRenderer.removeListener(ConversationChannel.Update, handler)
+  }
+}
+
 // session-persistence-v1 (FR-003): the persisted-session surface reaches the
 // renderer ONLY through this dedicated `window.cosmos.session` channel set. `load`
 // is request/response (`invoke`) read once at startup; `save` is fire-and-forget.
@@ -421,7 +454,8 @@ const api: CosmosApi = {
   agent: agentApi,
   shortcuts: shortcutApi,
   session: sessionApi,
-  settings: settingsApi
+  settings: settingsApi,
+  conversation: conversationApi
 }
 
 contextBridge.exposeInMainWorld('cosmos', api)

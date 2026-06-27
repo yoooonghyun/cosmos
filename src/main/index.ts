@@ -38,6 +38,7 @@ import { randomUUID } from 'node:crypto'
 import { execFileSync } from 'node:child_process'
 import {
   AgentChannel,
+  ConversationChannel,
   ConfluenceChannelName,
   FsChannel,
   GoogleCalendarChannelName,
@@ -84,7 +85,9 @@ import {
 import {
   validateAgentPrompt,
   validateAgentStatusPayload,
+  validateConfluenceAddComment,
   validateConfluenceDefaultFeed,
+  validateConfluenceGetComments,
   validateConfluenceGetPage,
   validateConfluenceSearch,
   validateFsPath,
@@ -111,13 +114,15 @@ import {
   validateClientConfigClear,
   validateClientConfigSave,
   validateUiAction,
-  validateUiGeneratingBeginPayload
+  validateUiGeneratingBeginPayload,
+  validateConversationResult
 } from '../shared/validate'
 import { PtyManager } from './ptyManager'
 import { SessionStore } from './sessionStore'
 import { validateSnapshot } from './sessionSnapshot'
 import { AgentRunner } from './agentRunner'
 import { AgentSessionStore } from './agentSessionStore'
+import { TranscriptReader } from './transcriptReader'
 import { selectDefaultSessionId } from './agentSessionQueue'
 import {
   CONFLUENCE_RENDER_UI_SERVER_NAME,
@@ -294,6 +299,10 @@ let confluenceBridge: ConfluenceBridge | null = null
 let googleCalendarManager: GoogleCalendarManager | null = null
 let googleCalendarBridge: GoogleCalendarBridge | null = null
 let agentRunner: AgentRunner | null = null
+// cosmos-conversation-panel-v2 (step 3): the main-only default-session transcript reader.
+// Owns ALL `~/.claude` access (confined to the one default-session transcript path); the
+// renderer reads the parsed conversation via the `conversation:*` channel only.
+let transcriptReader: TranscriptReader | null = null
 
 /* ------------------------------------------------------------------------- *
  * settings-oauth-clients-v1 — main-owned, safeStorage-encrypted client-config
@@ -394,6 +403,15 @@ const diskExplorerFs: ExplorerFs = {
       return readFileSync(absFile)
     } catch (err) {
       return { error: (err as NodeJS.ErrnoException)?.code === 'EACCES' ? 'denied' : 'not-found' }
+    }
+  },
+  statSize(absFile) {
+    // file-viewer-multiformat-v1 (FR-012): the file's size for the per-format document cap,
+    // WITHOUT reading the bytes. Total — any stat error → null ("size unknown, do not refuse").
+    try {
+      return statSync(absFile).size
+    } catch {
+      return null
     }
   },
   watch(absRoot, onEvent) {
@@ -1257,6 +1275,17 @@ function registerIpcHandlers(): void {
     sessionStore?.save(enriched)
   })
 
+  // cosmos-conversation-panel-v2 (step 3, FR-106): the Cosmos panel reads the full
+  // default-session conversation on demand (panel mount). The reader owns all `~/.claude`
+  // access (confined to the one default-session transcript path — FR-105) and NEVER throws:
+  // a missing file → empty, a corrupt file → unreadable (FR-108). The result is validated at
+  // the boundary so a malformed/secret-bearing frame is dropped (FR-118); a null validation
+  // falls back to the empty state. No renderer path is ever accepted (the invoke has no arg).
+  ipcMain.handle(ConversationChannel.Fetch, () => {
+    const result = transcriptReader?.read() ?? { ok: false as const, reason: 'empty' as const }
+    return validateConversationResult(result) ?? { ok: false as const, reason: 'empty' as const }
+  })
+
   // FR-006/FR-010: receive the user's interaction from the Generated-UI panel.
   // Validate at the boundary; an invalid payload is warned + ignored and does
   // NOT resolve any pending render_ui call (SC-006).
@@ -1802,6 +1831,22 @@ function registerConfluenceIpcHandlers(): void {
     }
     return confluenceManager.getPage(params)
   })
+  // confluence-dock-comments-v1: read a page's footer comments (+ one-level reply tree).
+  ipcMain.handle(ConfluenceChannelName.GetComments, (_e: IpcMainInvokeEvent, raw: unknown) => {
+    const params = validateConfluenceGetComments(raw)
+    if (!params || !confluenceManager) {
+      return badParams
+    }
+    return confluenceManager.getComments(params)
+  })
+  // confluence-dock-comments-v1: add a footer comment (renderer write path, reuses createComment).
+  ipcMain.handle(ConfluenceChannelName.AddComment, (_e: IpcMainInvokeEvent, raw: unknown) => {
+    const params = validateConfluenceAddComment(raw)
+    if (!params || !confluenceManager) {
+      return badParams
+    }
+    return confluenceManager.addComment(params)
+  })
 }
 
 /**
@@ -1953,6 +1998,28 @@ function pushGeneratingBeginToRenderer(payload: { target: UiRenderTarget }): voi
   }
   if (mainWindow && !mainWindow.isDestroyed()) {
     mainWindow.webContents.send(UiChannel.GeneratingBegin, validated)
+  }
+}
+
+/**
+ * Re-read the default-session transcript and push the updated conversation to the
+ * renderer's Cosmos panel (cosmos-conversation-panel-v2, step 3, FR-107). Triggered when a
+ * default-target (`'generated-ui'`) run completes — the runner already knows the run is
+ * done and `claude` has flushed the transcript by then (more robust than racing a partial
+ * mid-write). VALIDATE the result at the boundary (a malformed/secret-bearing frame is
+ * dropped, never sent — FR-118) and guard a destroyed window. NON-SECRET: only the
+ * normalized conversation model crosses (no raw line, path, token — FR-104/FR-106).
+ */
+function pushConversationUpdateToRenderer(): void {
+  if (!transcriptReader) {
+    return
+  }
+  const validated = validateConversationResult(transcriptReader.read())
+  if (!validated) {
+    return
+  }
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send(ConversationChannel.Update, validated)
   }
 }
 
@@ -2226,6 +2293,18 @@ function createWindow(): void {
     agentSessionStore.saveDefaultSessionId(defaultSession.sessionId)
   }
 
+  // cosmos-conversation-panel-v2 (step 3): the main-only transcript reader for the Cosmos
+  // conversation timeline. CONFINED to the one default-session transcript path
+  // (`~/.claude/projects/<dir-key>/<defaultSessionId>.jsonl` derived from the stable
+  // sandbox cwd) — never a renderer path, never another session (FR-105). Reads are
+  // resilient (missing → empty, corrupt → unreadable; never throws — FR-108).
+  transcriptReader = new TranscriptReader({
+    homeDir: app.getPath('home'),
+    sandboxDir,
+    loadDefaultSessionId: () => agentSessionStore.loadDefaultSessionId(),
+    fs: { existsSync, readFileSync: (p, enc) => readFileSync(p, enc), readdirSync }
+  })
+
   // Generative-UI foundation v1: the headless `claude -p` runner. A SEPARATE
   // channel from the interactive PTY (FR-008) that reaches the SAME UiBridge via
   // the shared render_ui --mcp-config (FR-007). Its render_ui registration targets
@@ -2252,6 +2331,14 @@ function createWindow(): void {
         const validated = validateAgentStatusPayload(outgoing)
         if (mainWindow && !mainWindow.isDestroyed() && validated) {
           mainWindow.webContents.send(AgentChannel.Status, validated)
+        }
+        // cosmos-conversation-panel-v2 (step 3, FR-107): on a COMPLETED run, re-read the
+        // default-session transcript and push the updated conversation to the Cosmos panel.
+        // `claude` has flushed the transcript by completion, so this is the robust live
+        // trigger (no racing a partial mid-write). A non-default-target run did not append
+        // to the default transcript, so the re-read is idempotent (same content) — harmless.
+        if (payload.state === 'completed') {
+          pushConversationUpdateToRenderer()
         }
       }
     },

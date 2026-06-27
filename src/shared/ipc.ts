@@ -37,6 +37,7 @@ export * from './ipc/confluence'
 export * from './ipc/googleCalendar'
 export * from './ipc/session'
 export * from './ipc/settings'
+export * from './ipc/conversation'
 
 import type { PtyApi } from './ipc/pty'
 import type { FsApi } from './ipc/fs'
@@ -49,6 +50,7 @@ import type { AgentApi } from './ipc/agent'
 import type { ShortcutApi } from './ipc/shortcut'
 import type { SessionApi } from './ipc/session'
 import type { SettingsApi } from './ipc/settings'
+import type { ConversationApi } from './ipc/conversation'
 
 /** Shape attached to `window` by the preload. */
 export interface CosmosApi {
@@ -63,4 +65,5 @@ export interface CosmosApi {
   shortcuts: ShortcutApi
   session: SessionApi
   settings: SettingsApi
+  conversation: ConversationApi
 }
