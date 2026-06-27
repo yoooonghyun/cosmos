@@ -2,6 +2,7 @@ import { describe, it, expect, vi } from 'vitest'
 import {
   adjacentActiveId,
   closeTab,
+  cycleActiveId,
   defaultRequestDecision,
   isFolderOpen,
   labelFromUtterance,
@@ -95,6 +96,39 @@ describe('adjacentActiveId (FR-006/FR-007)', () => {
 
   it('returns null when the only tab closes', () => {
     expect(adjacentActiveId([tab('a')], 'a', 'a')).toBeNull()
+  })
+})
+
+describe('cycleActiveId (terminal-focus-aware-tab-nav-v1 — shared Cmd+Opt+Arrow cycle)', () => {
+  const abc = [tab('a'), tab('b'), tab('c')]
+
+  it('steps forward by +1 (next)', () => {
+    expect(cycleActiveId(abc, 'a', 1)).toBe('b')
+    expect(cycleActiveId(abc, 'b', 1)).toBe('c')
+  })
+
+  it('steps backward by -1 (prev)', () => {
+    expect(cycleActiveId(abc, 'c', -1)).toBe('b')
+    expect(cycleActiveId(abc, 'b', -1)).toBe('a')
+  })
+
+  it('wraps around at both ends', () => {
+    expect(cycleActiveId(abc, 'c', 1)).toBe('a') // last → first
+    expect(cycleActiveId(abc, 'a', -1)).toBe('c') // first → last
+  })
+
+  it('returns null for an empty collection', () => {
+    expect(cycleActiveId([], 'a', 1)).toBeNull()
+  })
+
+  it('starts from index 0 when the active id is unknown/null (defensive)', () => {
+    expect(cycleActiveId(abc, null, 1)).toBe('b') // from 0 → +1
+    expect(cycleActiveId(abc, 'zzz', -1)).toBe('c') // from 0 → -1 wraps to last
+  })
+
+  it('is a no-op identity for a single tab (cycle of one)', () => {
+    expect(cycleActiveId([tab('a')], 'a', 1)).toBe('a')
+    expect(cycleActiveId([tab('a')], 'a', -1)).toBe('a')
   })
 })
 

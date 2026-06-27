@@ -34,7 +34,7 @@ import { PanelTabStrip, type PanelTab } from './PanelTabStrip'
 import { PanelFooter } from './PanelFooter'
 import { usePanelTabs } from './usePanelTabs'
 import { useTabShortcuts } from './useTabShortcuts'
-import { resolveCloseTarget } from './closeTabRouting'
+import { resolveCloseTarget, resolveTabNavTarget } from './closeTabRouting'
 import { mapTerminalKey } from './terminalKeymap'
 import {
   isFolderOpen,
@@ -116,7 +116,13 @@ function TerminalView({
    */
   onViewerStateChange: (
     paneId: string,
-    state: { viewerFocused: boolean; openFileCount: number; closeActiveFile: () => void }
+    state: {
+      viewerFocused: boolean
+      openFileCount: number
+      closeActiveFile: () => void
+      // terminal-focus-aware-tab-nav-v1: step the active open-file tab by delta (+1/-1) with wrap.
+      navFileTab: (delta: number) => void
+    }
   ) => void
   /** Register this pane's scrollback serializer with the panel; returns an unregister fn. */
   registerSerializer: (paneId: string, serialize: () => string) => () => void
@@ -441,7 +447,7 @@ function TerminalView({
   // The MIDDLE viewer column + RIGHT tree dock, both backed by ONE explorer hook instance (a click
   // in the dock retargets the viewer). Hooks run unconditionally; while !live the hook is inert.
   // The restored open-files slice seeds the strip on go-live (FR-004).
-  const { viewer, tree, openFileCount, closeActiveFile } = useExplorerPanes(
+  const { viewer, tree, openFileCount, closeActiveFile, navFileTab } = useExplorerPanes(
     paneId,
     live,
     restoredOpenFiles,
@@ -455,9 +461,10 @@ function TerminalView({
     onViewerStateChange(paneId, {
       viewerFocused: active && viewerFocused,
       openFileCount,
-      closeActiveFile
+      closeActiveFile,
+      navFileTab
     })
-  }, [paneId, active, viewerFocused, openFileCount, closeActiveFile, onViewerStateChange])
+  }, [paneId, active, viewerFocused, openFileCount, closeActiveFile, navFileTab, onViewerStateChange])
   return (
     // terminal-file-explorer-v1 3-pane §1.1: the tab body is a horizontal flex ROW. BEFORE a folder
     // is opened we render ONLY the VS-Code-style WELCOME view (the [Open a folder] CTA) — no split,
@@ -697,19 +704,38 @@ export function TerminalPanel({ active }: { active: boolean }): React.JSX.Elemen
   // change does not re-render the whole panel; the shortcut handler reads it at keystroke time.
   // Each pane reports here; only the entry matching `activeTabId` is consulted for routing (FR-012).
   const viewerStateByPaneRef = useRef<
-    Map<string, { viewerFocused: boolean; openFileCount: number; closeActiveFile: () => void }>
+    Map<
+      string,
+      {
+        viewerFocused: boolean
+        openFileCount: number
+        closeActiveFile: () => void
+        navFileTab: (delta: number) => void
+      }
+    >
   >(new Map())
   const handleViewerStateChange = useCallback(
-    (paneId: string, state: { viewerFocused: boolean; openFileCount: number; closeActiveFile: () => void }): void => {
+    (
+      paneId: string,
+      state: {
+        viewerFocused: boolean
+        openFileCount: number
+        closeActiveFile: () => void
+        navFileTab: (delta: number) => void
+      }
+    ): void => {
       viewerStateByPaneRef.current.set(paneId, state)
     },
     []
   )
 
-  // Tab keyboard shortcuts act on THIS strip only while the Terminal surface is active. `tab:close`
-  // is focus-aware (terminal-focus-aware-close-tab-v1): the active pane's lifted viewer state decides
-  // whether Ctrl/Cmd+W closes the file tab or the panel tab. `resolveClose`/`onCloseFileTab` read the
-  // active pane's report at call time so they always reflect the pane the user is looking at.
+  // Tab keyboard shortcuts act on THIS strip only while the Terminal surface is active. Two routes
+  // are focus-aware, reading the active pane's lifted viewer state at keystroke time so they reflect
+  // the pane the user is looking at:
+  //   - `tab:close` (terminal-focus-aware-close-tab-v1): Ctrl/Cmd+W closes the file tab vs panel tab.
+  //   - `tab:next`/`tab:prev` (terminal-focus-aware-tab-nav-v1): Cmd+Opt+Arrow moves the FILE tabs
+  //     when the editor/viewer pane holds focus, the TERMINAL tabs otherwise (the reported bug was
+  //     that nav always moved terminal tabs regardless of editor focus).
   useTabShortcuts({
     active,
     tabs,
@@ -727,6 +753,18 @@ export function TerminalPanel({ active }: { active: boolean }): React.JSX.Elemen
     onCloseFileTab: () => {
       if (activeTabId) {
         viewerStateByPaneRef.current.get(activeTabId)?.closeActiveFile()
+      }
+    },
+    resolveNav: () => {
+      const state = activeTabId ? viewerStateByPaneRef.current.get(activeTabId) : undefined
+      return resolveTabNavTarget({
+        viewerFocused: state?.viewerFocused ?? false,
+        openFileCount: state?.openFileCount ?? 0
+      })
+    },
+    onNavFileTab: (delta) => {
+      if (activeTabId) {
+        viewerStateByPaneRef.current.get(activeTabId)?.navFileTab(delta)
       }
     }
   })

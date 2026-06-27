@@ -106,6 +106,29 @@ export function adjacentActiveId<T extends TabLike>(
 }
 
 /**
+ * Pick the id reached by stepping `delta` tabs from the active one, with wrap-around
+ * (the SAME cycle the `tab:next`/`tab:prev` shortcut uses for terminal tabs). Shared so the
+ * file-viewer's Cmd+Opt+Arrow navigation cycles open files identically to the terminal tabs
+ * (terminal-focus-aware-tab-nav-v1). Pure; no DOM. `delta` is typically +1 (next) or -1 (prev).
+ *
+ *  - Empty collection → null (no tab to activate).
+ *  - An unknown/absent active id starts from index 0 (defensive — same as the inline rule).
+ */
+export function cycleActiveId<T extends TabLike>(
+  tabs: T[],
+  activeId: string | null,
+  delta: number
+): string | null {
+  if (tabs.length === 0) {
+    return null
+  }
+  const current = tabs.findIndex((t) => t.id === activeId)
+  const from = current < 0 ? 0 : current
+  const next = (((from + delta) % tabs.length) + tabs.length) % tabs.length
+  return tabs[next].id
+}
+
+/**
  * Remove `closedId` from the collection and re-pick the active tab per the
  * adjacent-activation rule (FR-004/FR-006/FR-007). Pure; returns a fresh state.
  *

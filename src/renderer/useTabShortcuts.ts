@@ -38,6 +38,17 @@ export interface TabShortcutOps {
   resolveClose?: () => CloseTarget
   /** Close the active open-file tab in the focused file viewer (FR-002/FR-003/FR-011). */
   onCloseFileTab?: () => void
+  /**
+   * Optional focus-aware `tab:next`/`tab:prev` routing (terminal-focus-aware-tab-nav-v1).
+   * Only the Terminal panel passes these. When `resolveNav` returns `'file-tab'` AND
+   * `onNavFileTab` is wired, Cmd+Opt+Arrow cycles the FOCUSED file viewer's open-file tabs
+   * instead of the terminal panel tabs (the reported bug: nav always moved terminal tabs
+   * regardless of editor focus). Any other case (no resolver, `'panel-tab'`, or no
+   * `onNavFileTab`) falls back to the existing terminal-tab wrap-around below.
+   */
+  resolveNav?: () => CloseTarget
+  /** Step the focused file viewer's active tab by `delta` (+1 next / -1 prev), with wrap. */
+  onNavFileTab?: (delta: number) => void
 }
 
 export function useTabShortcuts(ops: TabShortcutOps): void {
@@ -48,8 +59,18 @@ export function useTabShortcuts(ops: TabShortcutOps): void {
 
   useEffect(() => {
     const off = window.cosmos.shortcuts.onTrigger((payload) => {
-      const { active, tabs, activeTabId, onActivate, onNewTab, onCloseTab, resolveClose, onCloseFileTab } =
-        ref.current
+      const {
+        active,
+        tabs,
+        activeTabId,
+        onActivate,
+        onNewTab,
+        onCloseTab,
+        resolveClose,
+        onCloseFileTab,
+        resolveNav,
+        onNavFileTab
+      } = ref.current
       if (!active) {
         return
       }
@@ -69,12 +90,20 @@ export function useTabShortcuts(ops: TabShortcutOps): void {
           break
         case 'tab:next':
         case 'tab:prev': {
+          const delta = payload.command === 'tab:next' ? 1 : -1
+          // terminal-focus-aware-tab-nav-v1: when the active pane's file viewer/editor holds focus
+          // and has an open file, Cmd+Opt+Arrow cycles the FILE tabs (the strip the user is looking
+          // at), NOT the terminal tabs (the reported routing bug). The resolver/callback are only
+          // wired by the Terminal panel; every other panel falls straight through to its own tabs.
+          if (resolveNav?.() === 'file-tab' && onNavFileTab) {
+            onNavFileTab(delta)
+            break
+          }
           if (tabs.length === 0) {
             break
           }
           const current = tabs.findIndex((t) => t.id === activeTabId)
           const from = current < 0 ? 0 : current
-          const delta = payload.command === 'tab:next' ? 1 : -1
           const next = (from + delta + tabs.length) % tabs.length
           onActivate(tabs[next].id)
           break

@@ -13,6 +13,7 @@
 
 import { useCallback } from 'react'
 import { FolderTree } from 'lucide-react'
+import { cycleActiveId } from '../panelTabs'
 import { FileTree } from './FileTree'
 import { FileViewer } from './FileViewer'
 import { useFileExplorer, type RestoredOpenFiles } from './useFileExplorer'
@@ -33,6 +34,12 @@ export interface ExplorerPanes {
    * SAME `closeFile` op as the tab's `X`/Delete). No-op when no file is active. Stable identity.
    */
   closeActiveFile: () => void
+  /**
+   * Step the active open-file tab by `delta` (+1 next / -1 prev) with wrap-around
+   * (terminal-focus-aware-tab-nav-v1) — the SAME cycle the terminal `tab:next`/`tab:prev` uses, so
+   * Cmd+Opt+Arrow moves the FILE tabs when the editor/viewer pane holds focus. No-op when <1 file.
+   */
+  navFileTab: (delta: number) => void
 }
 
 /**
@@ -79,6 +86,24 @@ export function useExplorerPanes(
     }
   }, [activeRelPath, closeFile])
 
+  // terminal-focus-aware-tab-nav-v1: cycle the active open-file tab by `delta` with wrap, reusing
+  // the SHARED `cycleActiveId` (relPath IS the id) so file-tab navigation matches the terminal
+  // tab-strip wrap exactly. Activating via the existing `setActiveFile` keeps it identical to a
+  // click/Enter activation. No-op with 0 files (cycleActiveId → null).
+  const navFileTab = useCallback(
+    (delta: number) => {
+      const nextRel = cycleActiveId(
+        openFiles.map((f) => ({ id: f.relPath })),
+        activeRelPath,
+        delta
+      )
+      if (nextRel) {
+        setActiveFile(nextRel)
+      }
+    },
+    [openFiles, activeRelPath, setActiveFile]
+  )
+
   if (!live) {
     // §5.1 awaiting-directory: a quiet placeholder in the dock; the viewer mirrors it (no file yet).
     const placeholder = (
@@ -87,13 +112,14 @@ export function useExplorerPanes(
         <p className="text-xs text-muted-foreground">Open a folder to browse its files.</p>
       </div>
     )
-    // Not live → no viewer focus, no open files; the placeholder cannot route a file-tab close.
-    return { viewer: placeholder, tree: placeholder, openFileCount: 0, closeActiveFile }
+    // Not live → no viewer focus, no open files; the placeholder cannot route a file-tab close/nav.
+    return { viewer: placeholder, tree: placeholder, openFileCount: 0, closeActiveFile, navFileTab }
   }
 
   return {
     openFileCount: openFiles.length,
     closeActiveFile,
+    navFileTab,
     viewer: (
       <FileViewer
         paneId={paneId}
