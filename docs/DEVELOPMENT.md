@@ -824,6 +824,22 @@ path, NO token ever crosses to the renderer.
   silently never load. The renderer builds the `<img src>` with the PURE
   `src/renderer/fileExplorer/localFileSrc.ts` (duplicates the scheme/authority constants — a renderer
   module must not import a `src/main` module across the process boundary).
+- **Document bytes ride `fs:readBytes` IPC, NOT a `cosmos-file://` fetch (load-bearing gotcha).**
+  The `<img>` resource-load path can use `cosmos-file://` (Chromium loads a custom scheme as an
+  image SRC), but `fetch()`/XHR to a custom scheme is REFUSED from the http dev-server origin
+  ("URL scheme cosmos-file is not supported"). So the byte-consuming viewers (`PdfView`, `DocxView`,
+  `SheetView`) — which all need an `ArrayBuffer` — must NOT fetch the scheme. They share
+  `src/renderer/fileExplorer/fetchLocalFileBytes.ts`, which calls `window.cosmos.fs.readBytes(paneId,
+  relPath)` (channel `FsChannel.ReadBytes`, contract in `src/shared/ipc/fs.ts`) and returns an
+  `ArrayBuffer`, throwing on any typed failure so each viewer's existing try/catch shows its calm
+  `render-error` block. The main handler delegates to `FsExplorer.readBytes` (`src/main/fsExplorer.ts`),
+  which resolves the root by `paneId`, `pathConfine`-checks the target, and enforces the SAME per-format
+  `viewerCaps` size cap as `fs:read` BEFORE reading (over-cap → `too-large`). The result carries a
+  `Uint8Array` (structured-clone-safe); never raw bytes for text/image (those keep their existing
+  paths). DO NOT reintroduce a `cosmos-file://` fetch for documents — it works in the packaged
+  app-scheme origin but breaks under `npm run dev`. Caps + confinement are covered at the
+  node-integration layer (`src/main/fsExplorer.integration.test.ts`), the bridge at e2e
+  (`tests/e2e/app.e2e.spec.ts`).
 - **Monaco worker wiring — `?worker`, no plugin.** `src/renderer/fileExplorer/monacoSetup.ts` imports
   `monaco-editor/esm/vs/editor/editor.worker?worker` and sets `self.MonacoEnvironment.getWorker`
   directly. Vite (electron-vite renderer) bundles a `?worker` import as a real worker chunk for BOTH

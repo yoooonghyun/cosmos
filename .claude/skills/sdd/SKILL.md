@@ -105,10 +105,28 @@ spec doc. Use conventions of project's language/ecosystem. Rules:
 
 ## Step 4 — Create Testing
 
-Write tests against interface before any implementation. Tests must cover:
-- Spec-compliant happy path
-- Missing optional fields (must not error)
-- Invalid/missing required field (must log warning, return safe fallback)
+> **Delegate test AUTHORING to the `test-engineer` agent** (separate pass from the implementer —
+> author and review never share one context). The `developer` owns interface + implementation;
+> the `test-engineer` owns the tests. Hand it the spec + interface and have it write the tests
+> against the contract before implementation.
+
+The test-engineer MUST:
+1. **Read `docs/TEST-SCENARIOS.md` FIRST** (the test-scenario registry). Check whether the new
+   feature's scenarios contradict an EXISTING invariant (e.g. a layout/CSS seam, an IPC channel,
+   a shared behavior). If a new test would conflict with an existing scenario, STOP and surface it
+   — a contradiction between two desired behaviors is a product decision, not a test detail.
+2. **Pick the RIGHT layer(s)** so the test actually exercises the behavior (see the layer table in
+   `docs/TEST-SCENARIOS.md`). Node-unit (vitest, no jsdom) only sees pure logic + class strings —
+   it is NECESSARY but NOT SUFFICIENT for runtime. A renderer/UI behavior needs a **jsdom**
+   (`*.dom.test.tsx`, `npm run test:dom`) or **visual** (`npm run test:visual`) test; a
+   main-process server / IPC / protocol / spawn behavior needs a **node-integration**
+   (`npm run test:integration`) or **e2e** (`npm run test:e2e`) test. Do NOT certify a UI/IPC
+   feature on node-unit tests alone.
+3. Cover: spec-compliant happy path; missing optional fields (must not error); invalid/missing
+   required field (must log warning, return safe fallback); plus the runtime path the feature
+   actually changes.
+4. **Update `docs/TEST-SCENARIOS.md`** — add each new scenario (id, invariant, layer, file) and
+   record any cross-scenario tension. This is how future cycles detect conflicts up front.
 
 No implementation code in this step.
 

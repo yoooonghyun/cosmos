@@ -90,7 +90,26 @@ Apply **minimal** fix at root cause. Per project conventions:
 
 Write test that **captures this bug** so it can't silently return. Test must assert corrected behavior and would have **failed before** Step 4 fix — confirm that (revert fix mentally/temporarily, or reason precisely why old code fails it). Test passing with or without fix is not regression test.
 
-Follow project test conventions: vitest; `*.test.ts` runs in **node env (no jsdom)**, so put unit-testable logic in plain `logic.ts` beside component and test that — don't import `.tsx`/DOM component into `.test.ts`. Cover specific failing case from Step 1, plus obvious adjacent cases root cause implicates.
+**Delegate test AUTHORING to the `test-engineer` agent** (separate pass from whoever fixed it).
+Hand it the bug report + the root cause. It MUST:
+1. **Read `docs/TEST-SCENARIOS.md` first** -- check the new regression test does not contradict an
+   existing invariant (a CSS seam, IPC channel, shared behavior). A contradiction between two
+   wanted behaviors is a product decision -- surface it, don't silently override.
+2. **Write the test at the layer that actually reproduces the bug.** This is the crux: a node
+   `*.test.ts` (node env, no jsdom) only sees pure logic + class strings -- it CANNOT catch a DOM
+   wiring / event / focus bug (e.g. a ref-timing scroll listener), an IPC/protocol/spawn bug, or a
+   layout/pixel bug. A green node test is NECESSARY but NOT SUFFICIENT. Pick:
+   - renderer DOM / hook / event / focus bug -> **jsdom** `*.dom.test.tsx` (`npm run test:dom`)
+   - layout / pixel bug -> **visual** (`npm run test:visual`)
+   - main-process IPC / `cosmos-file` protocol / agent spawn-queue bug -> **node-integration**
+     (`npm run test:integration`) or **e2e** (`npm run test:e2e`)
+   - pure logic / reducer / validator -> node-unit (`*.test.ts`, `npm test`)
+   The test must FAIL before the fix (red) and pass after (green) -- confirm the red.
+3. Cover the specific failing case from Step 1 + obvious adjacent cases the root cause implicates.
+4. **Update `docs/TEST-SCENARIOS.md`** with the new regression scenario (id, invariant, layer, file).
+
+Keep node-unit logic in a plain `.ts` beside the component (the `.ts`/`.test.ts` split still holds for
+the node-unit layer) -- but do NOT certify a UI/IPC bug fixed on node-unit alone.
 
 > Best practice: writing failing test *before* fix (swap Steps 4 and 5) encouraged — proves repro, gives red→green signal. Order here matches common "diagnose, fix, then lock it in" flow; either fine as long as test genuinely fails without fix.
 
@@ -98,6 +117,10 @@ Follow project test conventions: vitest; `*.test.ts` runs in **node env (no jsdo
 
 Confirm fix is real and contained:
 - Run `npm run typecheck` and `npm test` — all green, including new regression test.
+- **Run the layer-appropriate suite the regression test lives in** and confirm it goes from red to
+  green: `npm run test:dom` (renderer DOM/hook), `npm run test:visual` (layout/pixel),
+  `npm run test:integration` (IPC/protocol/spawn), `npm run test:e2e` (full app). Node `npm test`
+  passing alone does NOT confirm a UI/IPC/runtime fix.
 - Re-run **original reproduction** from Step 1; confirm symptom gone.
 - For UI/renderer fixes, actually exercise surface (running `npm run dev`, or Playwright) — golden path AND broken edge case. Don't claim UI behavior fixed if you couldn't exercise it; say so explicitly.
 - Watch for regressions in adjacent behavior fix could affect (use `codegraph_impact`).
