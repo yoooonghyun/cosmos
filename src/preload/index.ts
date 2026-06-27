@@ -30,6 +30,7 @@ import {
   type FsChangedPayload,
   type FsListResult,
   type FsReadResult,
+  type FsReadBytesResult,
   type GoogleCalendarApi,
   type GoogleCalendarRequestDefaultViewPayload,
   type JiraApi,
@@ -170,6 +171,12 @@ const fsApi: FsApi = {
   },
   read(paneId: string, relPath: string): Promise<FsReadResult> {
     return ipcRenderer.invoke(FsChannel.Read, { paneId, relPath })
+  },
+  // file-viewer-multiformat-v1 (FR-007): the byte-consuming document renderers (pdf/docx/sheet)
+  // get their bytes over THIS validated, root-confined, size-capped IPC instead of fetching the
+  // privileged `cosmos-file://` scheme (which Chromium blocks from the http dev origin).
+  readBytes(paneId: string, relPath: string): Promise<FsReadBytesResult> {
+    return ipcRenderer.invoke(FsChannel.ReadBytes, { paneId, relPath })
   },
   watchStart(paneId: string): void {
     ipcRenderer.send(FsChannel.WatchStart, { paneId })

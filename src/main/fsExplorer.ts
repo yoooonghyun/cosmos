@@ -27,7 +27,7 @@ import { confine, type ConfineFs } from './pathConfine'
 import { looksLikeText } from './fileKind'
 import { resolveViewerKind } from './viewerKind'
 import { isTooLarge } from './viewerCaps'
-import type { FsEntry, FsListResult, FsReadResult } from '../shared/ipc'
+import type { FsEntry, FsListResult, FsReadResult, FsReadBytesResult } from '../shared/ipc'
 
 /**
  * Deterministic list order (FR-005): directories first, then files, each alphabetical
@@ -189,6 +189,37 @@ export function createFsExplorer(deps: {
     return { ok: false, reason: bytes.error }
   }
 
+  function readBytes(paneId: string, relPath: string): FsReadBytesResult {
+    const root = rootOf(paneId)
+    if (root === null) {
+      return { ok: false, reason: 'out-of-root' }
+    }
+    const c = confine(root, relPath, fs)
+    if (!c.ok) {
+      // `not-found` (in-root but absent) maps straight through; `out-of-root` is refused.
+      return { ok: false, reason: c.reason }
+    }
+    // file-viewer-multiformat-v1 (FR-007/FR-012): bytes are only ever requested for a routed
+    // DOCUMENT (pdf/docx/sheet) — the renderer fetched the marker from `fs:read` first. Enforce
+    // the per-format cap from `statSize` BEFORE reading so an oversize file is refused without
+    // loading it (the calm "File too large" block). A non-document extension is uncapped and
+    // simply reads (defensive: should not happen via the normal viewer flow).
+    const extKind = resolveViewerKind(relPath)
+    const size = fs.statSize(c.abs)
+    if (size === null) {
+      // Cannot stat (vanished / denied) — surface a benign read error, not a crash.
+      return { ok: false, reason: 'not-found' }
+    }
+    if (isTooLarge(extKind, size)) {
+      return { ok: false, reason: 'too-large' }
+    }
+    const bytes = fs.readFileBytes(c.abs)
+    if (bytes instanceof Uint8Array) {
+      return { ok: true, bytes }
+    }
+    return { ok: false, reason: bytes.error }
+  }
+
   function startWatch(paneId: string): void {
     const root = rootOf(paneId)
     if (root === null) {
@@ -259,13 +290,17 @@ export function createFsExplorer(deps: {
     return [...watches.keys()]
   }
 
-  return { list, read, startWatch, stopWatch, stopAll, watchedPanes }
+  return { list, read, readBytes, startWatch, stopWatch, stopAll, watchedPanes }
 }
 
 /** The manager surface (see {@link createFsExplorer}). */
 export interface FsExplorer {
   list(paneId: string, relPath: string): FsListResult
   read(paneId: string, relPath: string): FsReadResult
+  /** Read a routed DOCUMENT file's raw bytes for a byte-consuming renderer (FR-007). Confines
+   * + size-caps (FR-012) exactly like {@link read}, but returns the bytes (not a marker) so the
+   * renderer never has to fetch the blocked `cosmos-file://` scheme. Never throws. */
+  readBytes(paneId: string, relPath: string): FsReadBytesResult
   startWatch(paneId: string): void
   stopWatch(paneId: string): void
   stopAll(): void

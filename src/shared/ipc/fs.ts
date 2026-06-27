@@ -30,6 +30,12 @@ export const FsChannel = {
   /** R->M (invoke): read one file for the viewer (text marker / image marker /
    * not-previewable). FR-008/FR-009/FR-011. Image BYTES never ride this channel. */
   Read: 'fs:read',
+  /** R->M (invoke): read one DOCUMENT file's raw BYTES for a byte-consuming renderer
+   * (pdf/docx/sheet). file-viewer-multiformat-v1 FR-007. Replaces the cross-scheme
+   * `cosmos-file://` fetch that Chromium blocks from the http dev origin: the bytes ride
+   * THIS validated, root-confined IPC instead. Per-format size caps (FR-012) are enforced
+   * in main before the read; the result carries a `Uint8Array` or an `FsFailureReason`. */
+  ReadBytes: 'fs:readBytes',
   /** R->M (send): begin watching that pane's root. FR-015/FR-016. */
   WatchStart: 'fs:watchStart',
   /** R->M (send): release that pane's watcher. FR-016. */
@@ -111,6 +117,23 @@ export type FsReadResult =
   | { ok: false; reason: FsFailureReason }
 
 /**
+ * M->R response to `fs:readBytes` (file-viewer-multiformat-v1 FR-007). Carries the DOCUMENT
+ * file's RAW BYTES on success — the bytes the pdf/docx/sheet renderer parses. Unlike `fs:read`
+ * (which returns markers only), this channel DOES carry bytes, because the byte-consuming
+ * renderers cannot fetch the privileged `cosmos-file://` scheme via `fetch`/XHR from the http
+ * dev origin (Chromium refuses the cross-scheme request). The bytes are the user's own in-root
+ * file, already shown in the viewer, bounded by the same per-format size cap (FR-012):
+ *  - `{ ok: true, bytes }` — the file's bytes (a `Uint8Array`; structured-clone-safe over IPC).
+ *  - `{ ok: false, reason }` — `too-large` (over the per-format cap, FR-012), `out-of-root`
+ *    (forged / escaped / no live root), `not-found` (vanished), or `denied` (OS permission).
+ *    `binary` never occurs here (the caller only requests bytes for a routed document). NEVER
+ *    throws across the boundary — every failure is a typed reason.
+ */
+export type FsReadBytesResult =
+  | { ok: true; bytes: Uint8Array }
+  | { ok: false; reason: FsFailureReason }
+
+/**
  * R->M payload for `fs:list` / `fs:read` (FR-022/FR-025). Carries the `paneId` so main
  * resolves the root itself and the root-RELATIVE `relPath` of the directory/file. The
  * renderer NEVER sends a root or an absolute path; `relPath === ''` addresses the root
@@ -164,6 +187,12 @@ export interface FsApi {
    * text marker, an image marker, or a not-previewable reason — never raw bytes on a
    * binary, never throws (FR-011/FR-023). */
   read(paneId: string, relPath: string): Promise<FsReadResult>
+  /** R->M (invoke). Read a routed DOCUMENT file's raw BYTES for a byte-consuming renderer
+   * (pdf/docx/sheet) — file-viewer-multiformat-v1 FR-007. Resolves to `{ ok: true, bytes }`
+   * (a `Uint8Array`) or a typed failure (`too-large`/`out-of-root`/`not-found`/`denied`);
+   * never throws. This REPLACES the blocked `cosmos-file://` cross-scheme fetch — the bytes
+   * ride this validated, root-confined, size-capped boundary instead. */
+  readBytes(paneId: string, relPath: string): Promise<FsReadBytesResult>
   /** R->M (send). Begin watching this pane's root (FR-015/FR-016). A pane with no live
    * root creates no watcher (FR-006). */
   watchStart(paneId: string): void
