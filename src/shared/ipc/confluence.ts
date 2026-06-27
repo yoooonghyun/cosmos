@@ -9,8 +9,12 @@
  */
 
 import type {
+  ConfluenceCommentParams,
+  ConfluenceCommentResult,
   ConfluenceConnectionStatus,
   ConfluenceDefaultFeedParams,
+  ConfluenceGetCommentsParams,
+  ConfluenceGetCommentsResult,
   ConfluenceGetPageParams,
   ConfluencePage,
   ConfluencePageDetail,
@@ -48,6 +52,17 @@ export const ConfluenceChannelName = {
   DefaultFeed: 'confluence:defaultFeed',
   /** R->M (invoke): read one page's detail. FR-C04. */
   GetPage: 'confluence:getPage',
+  /**
+   * R->M (invoke): read a page's footer comments (top-level + one-level reply tree).
+   * Requires the `read:comment:confluence` scope (confluence-dock-comments-v1, FR-003/FR-004).
+   */
+  GetComments: 'confluence:getComments',
+  /**
+   * R->M (invoke): add a footer comment to a page — the renderer write path that REUSES the
+   * existing `ConfluenceManager.createComment` (no second write impl). Requires the already-
+   * granted `write:comment:confluence` scope (confluence-dock-comments-v1, FR-006).
+   */
+  AddComment: 'confluence:addComment',
   /** M->R (event): connection status changed. FR-A12. */
   StatusChanged: 'confluence:statusChanged'
 } as const
@@ -88,6 +103,24 @@ export interface ConfluenceApi {
   ): Promise<ConfluenceResult<ConfluencePage<ConfluenceSearchResult>>>
   /** R->M. Read one page's detail. FR-C04. */
   getPage(params: ConfluenceGetPageParams): Promise<ConfluenceResult<ConfluencePageDetail>>
+  /**
+   * R->M. Read a page's footer comments — top-level comments each with a one-level
+   * `replies` array (confluence-dock-comments-v1, FR-003). Requires `read:comment:confluence`;
+   * a token without it resolves to a `comment_read_not_authorized` result so the dock surfaces
+   * a calm reconnect affordance (FR-004). No token crosses this channel (FR-011).
+   */
+  getComments(
+    params: ConfluenceGetCommentsParams
+  ): Promise<ConfluenceResult<ConfluenceGetCommentsResult>>
+  /**
+   * R->M. Add a footer comment to the open page — the renderer write path REUSING the
+   * existing comment-write impl (confluence-dock-comments-v1, FR-006). Requires the already-
+   * granted `write:comment:confluence`; a token without it resolves to `write_not_authorized`.
+   * No token crosses this channel (FR-011).
+   */
+  addComment(
+    params: ConfluenceCommentParams
+  ): Promise<ConfluenceResult<ConfluenceCommentResult>>
   /**
    * M->R. Subscribe to connection-status changes. Returns an unsubscribe fn so the
    * panel can detach on unmount (avoids leaks / double-binding on HMR). FR-A12.

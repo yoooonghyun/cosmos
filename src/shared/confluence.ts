@@ -157,6 +157,11 @@ export interface ConfluencePage<T> {
  *                      attempted write (`write:page:confluence` for create/update,
  *                      `write:comment:confluence` for a comment); the write was not
  *                      attempted (no client call). Reconnect to grant it.
+ *   comment_read_not_authorized — the stored token lacks `read:comment:confluence`
+ *                      (the default for every pre-existing connection); a footer-comments
+ *                      READ was not attempted (no client call). Distinct from
+ *                      `reconnect_needed` so the dock branches to a calm "reconnect to view
+ *                      comments" affordance, not an error (confluence-dock-comments-v1, FR-004).
  *   version_conflict — an update raced a concurrent edit: the page version moved
  *                      underneath the read-then-write window so Confluence rejected
  *                      the stale version (HTTP 409 / 400-version). Recoverable —
@@ -168,6 +173,7 @@ export type ConfluenceErrorKind =
   | 'rate_limited'
   | 'network'
   | 'write_not_authorized'
+  | 'comment_read_not_authorized'
   | 'version_conflict'
 
 /** A failed Confluence read (FR-X07). Carries NO secret (FR-X02, SC-009). */
@@ -288,11 +294,72 @@ export interface ConfluenceCommentResult {
   pageId: string
 }
 
+/**
+ * One footer comment on a page (confluence-dock-comments-v1, FR-002/FR-003). Carries
+ * ONLY non-secret content — author display name/account id, the comment body, an optional
+ * timestamp, and a one-level nested `replies` array. NEVER a token (FR-011).
+ *
+ * `body` is the raw `body-format=view` HTML (server-rendered, macros expanded), carried
+ * UNCHANGED across IPC exactly like {@link ConfluencePageDetail.body}; the renderer
+ * sanitizes it with DOMPurify at the `dangerouslySetInnerHTML` display site (OQ-3). `''`
+ * when the comment has no readable body (the safe "no readable body" state — FR-012).
+ */
+export interface ConfluenceComment {
+  /** Comment id. */
+  id: string
+  /**
+   * The comment author (non-secret). Footer-comment v2 returns an author account id (not a
+   * display name), so `displayName` may be absent and the renderer falls back to `accountId`.
+   * Either field may be absent (degrade-to-omit — never crashes).
+   */
+  author: { displayName?: string; accountId?: string }
+  /** ISO-8601 creation timestamp when Confluence provides one; absent otherwise (FR-002). */
+  created?: string
+  /**
+   * Comment body as Confluence server-rendered HTML (`body-format=view`); a RAW, UNTRUSTED
+   * HTML string sanitized in the renderer before display (FR-003/OQ-3). `''` when empty.
+   */
+  body: string
+  /**
+   * Direct replies to this comment — ONE nesting level only (plan §C OQ-1). A best-effort
+   * children read that fails or is absent yields `[]` (never an error on the whole section).
+   */
+  replies: ConfluenceComment[]
+}
+
+/** Params for reading a page's footer comments (confluence-dock-comments-v1, FR-003). Non-secret. */
+export interface ConfluenceGetCommentsParams {
+  /** The id of the page whose footer comments to read (required). */
+  pageId: string
+  /** Cursor for the next page of top-level comments; absent for the first page. */
+  cursor?: string
+}
+
+/**
+ * Success data for a footer-comments read: the top-level comments (each with a one-level
+ * `replies` array) plus an optional forward cursor. `nextCursor` MAY be carried for a future
+ * load-more but is NOT consumed by the v1 UI (plan §C OQ-1).
+ */
+export interface ConfluenceGetCommentsResult {
+  /** Top-level footer comments, each with its one-level `replies`. */
+  comments: ConfluenceComment[]
+  /** Opaque cursor for the next page of top-level comments, or absent when no more. */
+  nextCursor?: string
+}
+
 /** The granular OAuth scope a Confluence page create/update requires. */
 export const CONFLUENCE_WRITE_SCOPE = 'write:page:confluence'
 
 /** The granular OAuth scope a Confluence footer-comment create requires. */
 export const CONFLUENCE_COMMENT_SCOPE = 'write:comment:confluence'
+
+/**
+ * The granular OAuth scope reading a page's footer comments requires
+ * (confluence-dock-comments-v1, FR-004). NOT in the original Confluence scope set, so an
+ * existing connection must disconnect + reconnect ONCE to grant it — until then a comments
+ * read short-circuits to `comment_read_not_authorized` (no client call).
+ */
+export const CONFLUENCE_COMMENT_READ_SCOPE = 'read:comment:confluence'
 
 /** User-facing message when a page write is attempted without the page-write scope (reconnect to grant it). */
 export const CONFLUENCE_WRITE_NOT_AUTHORIZED_MESSAGE =
@@ -303,6 +370,10 @@ export const CONFLUENCE_WRITE_NOT_AUTHORIZED_MESSAGE =
 export const CONFLUENCE_COMMENT_NOT_AUTHORIZED_MESSAGE =
   'cosmos is not authorized to comment on Confluence pages yet. Disconnect and ' +
   'reconnect Confluence to grant comment access, then try again.'
+
+/** User-facing message when comments are read without the comment-read scope (reconnect to grant it). */
+export const CONFLUENCE_COMMENT_READ_NOT_AUTHORIZED_MESSAGE =
+  'Reconnect Confluence to view comments on this page.'
 
 /** User-facing message for a stale-version update conflict (re-read the page, then retry). */
 export const CONFLUENCE_VERSION_CONFLICT_MESSAGE =

@@ -48,6 +48,7 @@ function makeClient(overrides?: Partial<ConfluenceClient>): ConfluenceClient {
     createPage: vi.fn(async () => ({ ok: true, data: { id: '777', title: 'Notes' } })),
     updatePage: vi.fn(async () => ({ ok: true, data: { id: '777', title: 'Notes', version: 4 } })),
     createComment: vi.fn(async () => ({ ok: true, data: { id: 'c1', pageId: '777' } })),
+    getComments: vi.fn(async () => ({ ok: true, data: { comments: [] } })),
     ...overrides
   } as unknown as ConfluenceClient
 }
@@ -60,6 +61,11 @@ const writeTokens: StoredTokenSet = {
 const commentTokens: StoredTokenSet = {
   ...connectedTokens,
   scopes: ['read:page:confluence', 'write:comment:confluence', 'offline_access']
+}
+
+const commentReadTokens: StoredTokenSet = {
+  ...connectedTokens,
+  scopes: ['read:page:confluence', 'read:comment:confluence', 'offline_access']
 }
 
 const refreshOk = async (): Promise<TokenExchangeResult> => ({
@@ -381,5 +387,75 @@ describe('ConfluenceManager.createComment (separate comment scope, confluence-mc
       { token: 'at-1', cloudId: 'cloud-9' },
       { pageId: '777', body: 'looks good' }
     )
+  })
+})
+
+describe('ConfluenceManager.getComments (separate comment-READ scope, confluence-dock-comments-v1)', () => {
+  it('reports the comment-read capability from the stored scopes (separate from comment write)', () => {
+    expect(
+      makeManager({ store: makeFakeStore(commentReadTokens).store }).manager.getCommentReadCapability()
+    ).toBe(true)
+    // A comment-WRITE token does NOT grant the comment-READ scope (independent gates, FR-007).
+    expect(
+      makeManager({ store: makeFakeStore(commentTokens).store }).manager.getCommentReadCapability()
+    ).toBe(false)
+  })
+
+  it('short-circuits to comment_read_not_authorized when the read scope is absent (no client call)', async () => {
+    const { store } = makeFakeStore(commentTokens) // has write but NOT read:comment
+    const client = makeClient()
+    const { manager } = makeManager({ store, client })
+    const result = await manager.getComments({ pageId: '777' })
+    expect(result.ok).toBe(false)
+    if (!result.ok) {
+      expect(result.kind).toBe('comment_read_not_authorized')
+    }
+    expect(client.getComments).not.toHaveBeenCalled()
+  })
+
+  it('routes the read through run()/client when the comment-read scope is present', async () => {
+    const { store } = makeFakeStore(commentReadTokens)
+    const client = makeClient()
+    const { manager } = makeManager({ store, client })
+    const result = await manager.getComments({ pageId: '777', cursor: 'CUR' })
+    expect(result.ok).toBe(true)
+    expect(client.getComments).toHaveBeenCalledWith(
+      { token: 'at-1', cloudId: 'cloud-9' },
+      { pageId: '777', cursor: 'CUR' }
+    )
+  })
+
+  it('read-not-authorized does NOT disable the independent comment-write add (FR-007)', async () => {
+    // A token with comment-WRITE but no comment-READ: getComments gates off; addComment works.
+    const { store } = makeFakeStore(commentTokens)
+    const client = makeClient()
+    const { manager } = makeManager({ store, client })
+
+    const read = await manager.getComments({ pageId: '777' })
+    expect(read.ok).toBe(false)
+    if (!read.ok) {
+      expect(read.kind).toBe('comment_read_not_authorized')
+    }
+
+    const add = await manager.addComment({ pageId: '777', body: 'hi' })
+    expect(add.ok).toBe(true)
+    expect(client.createComment).toHaveBeenCalledTimes(1)
+  })
+
+  it('addComment reuses createComment: short-circuits to write_not_authorized without the write scope', async () => {
+    // A token with comment-READ but no comment-WRITE: getComments works; addComment gates off.
+    const { store } = makeFakeStore(commentReadTokens)
+    const client = makeClient()
+    const { manager } = makeManager({ store, client })
+
+    const read = await manager.getComments({ pageId: '777' })
+    expect(read.ok).toBe(true)
+
+    const add = await manager.addComment({ pageId: '777', body: 'hi' })
+    expect(add.ok).toBe(false)
+    if (!add.ok) {
+      expect(add.kind).toBe('write_not_authorized')
+    }
+    expect(client.createComment).not.toHaveBeenCalled()
   })
 })

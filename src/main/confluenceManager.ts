@@ -21,6 +21,8 @@ import type {
   ConfluenceCreateParams,
   ConfluenceCreateResult,
   ConfluenceDefaultFeedParams,
+  ConfluenceGetCommentsParams,
+  ConfluenceGetCommentsResult,
   ConfluenceGetPageParams,
   ConfluencePage,
   ConfluencePageDetail,
@@ -32,6 +34,8 @@ import type {
 } from '../shared/confluence'
 import {
   CONFLUENCE_COMMENT_NOT_AUTHORIZED_MESSAGE,
+  CONFLUENCE_COMMENT_READ_NOT_AUTHORIZED_MESSAGE,
+  CONFLUENCE_COMMENT_READ_SCOPE,
   CONFLUENCE_COMMENT_SCOPE,
   CONFLUENCE_WRITE_NOT_AUTHORIZED_MESSAGE,
   CONFLUENCE_WRITE_SCOPE
@@ -302,6 +306,20 @@ export class ConfluenceManager {
   }
 
   /**
+   * Whether the stored token grants `read:comment:confluence` (read a page's footer
+   * comments — confluence-dock-comments-v1, FR-004). Read from the persisted
+   * `StoredTokenSet.scopes`. False when not connected or when the scope is absent (the
+   * default for every connection made before this scope was added), so a comments READ
+   * short-circuits to `comment_read_not_authorized` WITHOUT calling the client — the user
+   * reconnects ONCE to grant it. INDEPENDENT of the comment-WRITE capability (FR-007): one
+   * missing does not disable the other.
+   */
+  getCommentReadCapability(): boolean {
+    const tokens = this.deps.tokenStore.load()
+    return Array.isArray(tokens?.scopes) && tokens.scopes.includes(CONFLUENCE_COMMENT_READ_SCOPE)
+  }
+
+  /**
    * Create a page (a Confluence write). Short-circuits to `write_not_authorized` when
    * the stored token lacks the page-write scope (no client call); otherwise routes
    * through `run()` so the same proactive/reactive refresh + `reconnect_needed` handling
@@ -343,6 +361,34 @@ export class ConfluenceManager {
     return this.run((auth) => this.deps.client.createComment(auth, params))
   }
 
+  /**
+   * Read a page's footer comments (confluence-dock-comments-v1, FR-003). Gated on the
+   * SEPARATE `read:comment:confluence` scope: short-circuits to `comment_read_not_authorized`
+   * (no client call) when absent so the dock surfaces a calm reconnect affordance; otherwise
+   * routes through `run()` so it inherits the same refresh + `reconnect_needed` handling as
+   * the other reads. INDEPENDENT of the comment-write capability (FR-007).
+   */
+  getComments(
+    params: ConfluenceGetCommentsParams
+  ): Promise<ConfluenceResult<ConfluenceGetCommentsResult>> {
+    if (!this.getCommentReadCapability()) {
+      return Promise.resolve(this.commentReadNotAuthorized())
+    }
+    return this.run((auth) => this.deps.client.getComments(auth, params))
+  }
+
+  /**
+   * Add a footer comment from the renderer dock (confluence-dock-comments-v1, FR-006). REUSES
+   * the existing {@link createComment} (the SINGLE comment-write impl — same
+   * `write:comment:confluence` gate, same client call). No second write path. Gated
+   * INDEPENDENTLY of the comment-read capability (FR-007).
+   */
+  addComment(
+    params: ConfluenceCommentParams
+  ): Promise<ConfluenceResult<ConfluenceCommentResult>> {
+    return this.createComment(params)
+  }
+
   /** The structured scope-gap result returned for a page write without the page-write scope. */
   private writeNotAuthorized(): ConfluenceResult<never> {
     return {
@@ -358,6 +404,20 @@ export class ConfluenceManager {
       ok: false,
       kind: 'write_not_authorized',
       message: CONFLUENCE_COMMENT_NOT_AUTHORIZED_MESSAGE
+    }
+  }
+
+  /**
+   * The structured scope-gap result returned for a comments READ without the
+   * `read:comment:confluence` scope (confluence-dock-comments-v1, FR-004). A distinct
+   * `comment_read_not_authorized` kind so the dock branches to a calm reconnect affordance
+   * rather than an error tone.
+   */
+  private commentReadNotAuthorized(): ConfluenceResult<never> {
+    return {
+      ok: false,
+      kind: 'comment_read_not_authorized',
+      message: CONFLUENCE_COMMENT_READ_NOT_AUTHORIZED_MESSAGE
     }
   }
 }

@@ -22,11 +22,14 @@
  */
 
 import type {
+  ConfluenceComment,
   ConfluenceCommentParams,
   ConfluenceCommentResult,
   ConfluenceCreateParams,
   ConfluenceCreateResult,
   ConfluenceError,
+  ConfluenceGetCommentsParams,
+  ConfluenceGetCommentsResult,
   ConfluencePage,
   ConfluencePageDetail,
   ConfluenceResult,
@@ -515,6 +518,73 @@ export class ConfluenceClient {
   }
 
   /**
+   * Read a page's footer comments (confluence-dock-comments-v1, FR-003). Two-step shape:
+   *   1. GET /wiki/api/v2/pages/{pageId}/footer-comments?body-format=view&limit=N → the
+   *      top-level footer comments.
+   *   2. For EACH top-level comment, GET /wiki/api/v2/footer-comments/{commentId}/children
+   *      ?body-format=view&limit=M → its direct replies (ONE nesting level for v1).
+   *
+   * Children reads are BOUNDED + BEST-EFFORT: a failed/absent children read yields an empty
+   * `replies` array for that comment — it NEVER fails the whole comments read (plan §C OQ-1).
+   * The body of each comment/reply is the raw `body-format=view` HTML carried UNCHANGED (the
+   * renderer sanitizes at the display site, OQ-3). The author is the v2 `version.authorId`
+   * account id surfaced as `author.accountId` (no name resolver — the renderer falls back to
+   * the id; degrade-never-throw). The first-page failure of the TOP-LEVEL read maps via
+   * {@link mapConfluenceError}. A scope-less token is short-circuited by the manager BEFORE
+   * this is called. The token is never returned.
+   */
+  async getComments(
+    auth: ConfluenceCallAuth,
+    params: ConfluenceGetCommentsParams
+  ): Promise<ConfluenceResult<ConfluenceGetCommentsResult>> {
+    const url = new URL(
+      `${this.base(auth.cloudId)}/wiki/api/v2/pages/${encodeURIComponent(params.pageId)}/footer-comments`
+    )
+    url.searchParams.set('body-format', 'view')
+    url.searchParams.set('limit', '50')
+    if (params.cursor) {
+      url.searchParams.set('cursor', params.cursor)
+    }
+    const r = await this.call(url.toString(), auth.token)
+    if (!r.ok) {
+      return r.error
+    }
+    const results = Array.isArray(r.body.results) ? r.body.results : []
+    const tops = results.filter(isRecord).map(mapFooterComment)
+    // Fetch each top-level comment's direct replies (one level), best-effort and in parallel.
+    const comments = await Promise.all(
+      tops.map(async (c) => ({ ...c, replies: await this.commentChildren(auth, c.id) }))
+    )
+    const links = isRecord(r.body._links) ? r.body._links : {}
+    const nextCursor = cursorFromNextLink(links.next)
+    return { ok: true, data: { comments, ...(nextCursor ? { nextCursor } : {}) } }
+  }
+
+  /**
+   * Best-effort read of a comment's DIRECT replies (one level — confluence-dock-comments-v1,
+   * plan §C OQ-1). GET /wiki/api/v2/footer-comments/{commentId}/children?body-format=view.
+   * ANY failure (network, non-2xx, malformed body) degrades to `[]` so a failed children read
+   * never errors the whole comments section. Replies are shaped with `replies: []` (v1 is one
+   * nesting level — replies-of-replies are not fetched). The token is never returned.
+   */
+  private async commentChildren(
+    auth: ConfluenceCallAuth,
+    commentId: string
+  ): Promise<ConfluenceComment[]> {
+    const url = new URL(
+      `${this.base(auth.cloudId)}/wiki/api/v2/footer-comments/${encodeURIComponent(commentId)}/children`
+    )
+    url.searchParams.set('body-format', 'view')
+    url.searchParams.set('limit', '50')
+    const r = await this.call(url.toString(), auth.token)
+    if (!r.ok) {
+      return []
+    }
+    const results = Array.isArray(r.body.results) ? r.body.results : []
+    return results.filter(isRecord).map(mapFooterComment)
+  }
+
+  /**
    * Issue a write request (PUT/POST) returning the parsed body AND the raw HTTP status /
    * Retry-After / unparsed body so the caller can discriminate a version conflict
    * (confluence-mcp-write-v1, §C2) before falling back to {@link mapConfluenceError}. Unlike
@@ -578,6 +648,58 @@ function bodyIndicatesVersionConflict(rawBody: string): boolean {
   }
   const lower = rawBody.toLowerCase()
   return lower.includes('version') && (lower.includes('conflict') || lower.includes('match'))
+}
+
+/**
+ * Extract the raw `body-format=view` HTML from a v2 footer-comment object
+ * (confluence-dock-comments-v1, FR-003). Reads `body.view.value` — the Confluence
+ * server-rendered comment HTML — UNCHANGED (sanitization is the renderer's job at the
+ * `dangerouslySetInnerHTML` site, OQ-3). A missing/non-string value degrades to `''` (the safe
+ * "no readable body" state — FR-012). Pure; never throws. Exported for the unit test.
+ */
+export function footerCommentBody(comment: Record<string, unknown>): string {
+  const body = isRecord(comment.body) ? comment.body : {}
+  const view = isRecord(body.view) ? body.view : {}
+  return typeof view.value === 'string' ? view.value : ''
+}
+
+/**
+ * Map ONE v2 footer-comment object to a {@link ConfluenceComment} with an EMPTY `replies`
+ * array (the caller fills `replies` for top-level comments; replies themselves stay flat —
+ * v1 is one nesting level, plan §C OQ-1). Pure; never throws.
+ *
+ * Author: the v2 footer comment carries an author ACCOUNT ID (e.g. `version.authorId` or
+ * `authorId`), not a display name — surfaced as `author.accountId`; the renderer falls back to
+ * the id when no name is available (degrade-never-throw). `created` reads the ISO-8601
+ * `version.createdAt` when present (degrade-to-omit otherwise — FR-002). NO token is read.
+ */
+export function mapFooterComment(comment: Record<string, unknown>): ConfluenceComment {
+  const id =
+    typeof comment.id === 'string'
+      ? comment.id
+      : typeof comment.id === 'number'
+        ? String(comment.id)
+        : ''
+  const version = isRecord(comment.version) ? comment.version : {}
+  const accountId =
+    typeof comment.authorId === 'string' && comment.authorId !== ''
+      ? comment.authorId
+      : typeof version.authorId === 'string' && version.authorId !== ''
+        ? version.authorId
+        : undefined
+  const created =
+    typeof version.createdAt === 'string' && version.createdAt !== ''
+      ? version.createdAt
+      : typeof comment.createdAt === 'string' && comment.createdAt !== ''
+        ? comment.createdAt
+        : undefined
+  return {
+    id,
+    author: { ...(accountId ? { accountId } : {}) },
+    ...(created ? { created } : {}),
+    body: footerCommentBody(comment),
+    replies: []
+  }
 }
 
 /**

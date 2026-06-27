@@ -33,10 +33,12 @@ export interface AtlassianStatus {
 
 /**
  * A failed read (FR-X07); `rate_limited` carries a Retry-After cooldown.
- * `write_not_authorized` (Jira generative-UI v1) and `version_conflict`
- * (confluence-mcp-write-v1) cannot arise from a read path, but the union mirrors the
+ * `write_not_authorized` (Jira generative-UI v1), `version_conflict`
+ * (confluence-mcp-write-v1), and `comment_read_not_authorized` (confluence-dock-comments-v1)
+ * are surfaced by their callers BEFORE the generic `ErrorState`, but the union mirrors the
  * shared `JiraErrorKind` / `ConfluenceErrorKind` so a `JiraError`/`ConfluenceError`/
- * `AtlassianError` assigns cleanly; ErrorState renders them via the generic error fallback.
+ * `AtlassianError` assigns cleanly; ErrorState renders any unhandled kind via the generic
+ * error fallback.
  */
 export interface AtlassianError {
   ok: false
@@ -46,6 +48,7 @@ export interface AtlassianError {
     | 'rate_limited'
     | 'network'
     | 'write_not_authorized'
+    | 'comment_read_not_authorized'
     | 'version_conflict'
   message: string
   retryAfterSeconds?: number

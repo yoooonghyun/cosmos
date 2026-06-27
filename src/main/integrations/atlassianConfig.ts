@@ -49,6 +49,10 @@ export const JIRA_OAUTH_SCOPES = [
  * for create). Page writes (create + update — confluence-mcp-write-v1) use
  * `write:page:confluence`; footer-comment writes (confluence-mcp-write-v1) add the
  * GRANULAR `write:comment:confluence` scope (POST /wiki/api/v2/footer-comments).
+ * READING a page's footer comments (confluence-dock-comments-v1, FR-004) adds
+ * `read:comment:confluence` (GET /wiki/api/v2/pages/{id}/footer-comments + each comment's
+ * /children) — a NEW consent, so every already-connected user reconnects ONCE to grant it
+ * (until then a comments read short-circuits to comment_read_not_authorized).
  * `search:confluence` stays for the CQL search. `read:attachment:confluence`
  * (confluence-content-images-v1, FR-012) authorizes fetching the page-body
  * content/attachment image bytes the main-process `cosmos-confluence-img` protocol proxies.
@@ -62,6 +66,7 @@ export const CONFLUENCE_OAUTH_SCOPES = [
   'read:page:confluence',
   'read:space:confluence',
   'read:attachment:confluence',
+  'read:comment:confluence',
   'search:confluence',
   'write:page:confluence',
   'write:comment:confluence',

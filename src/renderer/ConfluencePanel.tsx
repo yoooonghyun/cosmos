@@ -45,6 +45,7 @@ import {
   PageDetailBody,
   PageDetailTitle
 } from './confluenceCatalog/components'
+import { CommentsSection } from './confluenceCatalog/CommentsSection'
 import { PanelTabStrip, type PanelTab } from './PanelTabStrip'
 import { PanelRefreshButton } from './PanelRefreshButton'
 import { panelRefreshInputsFor } from './panelRefreshLogic'
@@ -330,24 +331,26 @@ function PageDetail({
   if (!detail) {
     return <EmptyLine>Page not found.</EmptyLine>
   }
+  // confluence-dock-comments-v1: the comments section + bottom-pinned composer own the dock
+  // scroll layout. The page header + body render as the section's `children` at the top of the
+  // shared ScrollArea; the comments list + reply tree sit beneath them; the composer is pinned
+  // below the scroll. Keyed (via PageDetail `key={pageId}`) so retarget remounts + reloads.
   return (
-    <ScrollArea className="h-full">
-      <div className="flex flex-col gap-4 p-3">
-        <div className="flex flex-col gap-2">
-          {/* The link affordance moved to the top back-row header (#100); the body title is
-              plain text so the page is not titled twice as a link. */}
-          <h2 className="text-base font-medium leading-snug text-foreground">{detail.title}</h2>
-          {detail.space && (
-            <div className="flex flex-wrap items-center gap-2">
-              <Badge variant="outline" className="px-1.5 py-0 text-[10px]">
-                {detail.space}
-              </Badge>
-            </div>
-          )}
-        </div>
-        <PageDetailBody body={detail.body} />
+    <CommentsSection pageId={pageId} onReconnect={onReconnect}>
+      <div className="flex flex-col gap-2">
+        {/* The link affordance moved to the top back-row header (#100); the body title is
+            plain text so the page is not titled twice as a link. */}
+        <h2 className="text-base font-medium leading-snug text-foreground">{detail.title}</h2>
+        {detail.space && (
+          <div className="flex flex-wrap items-center gap-2">
+            <Badge variant="outline" className="px-1.5 py-0 text-[10px]">
+              {detail.space}
+            </Badge>
+          </div>
+        )}
       </div>
-    </ScrollArea>
+      <PageDetailBody body={detail.body} />
+    </CommentsSection>
   )
 }
 

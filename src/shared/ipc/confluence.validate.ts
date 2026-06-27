@@ -8,6 +8,7 @@ import type {
   ConfluenceCommentParams,
   ConfluenceCreateParams,
   ConfluenceDefaultFeedParams,
+  ConfluenceGetCommentsParams,
   ConfluenceGetPageParams,
   ConfluenceOpName,
   ConfluencePageDetail,
@@ -236,6 +237,60 @@ export function validateConfluenceComment(
   }
   if (typeof raw.body !== 'string' || raw.body.trim().length === 0) {
     warn('[confluence] ignoring comment — required "body" must be a non-empty, non-whitespace string:', raw)
+    return null
+  }
+  return { pageId: raw.pageId, body: raw.body }
+}
+
+/**
+ * Validate a `confluence:getComments` params payload (confluence-dock-comments-v1, FR-003,
+ * FR-010). Required: `pageId` non-empty string. Optional: `cursor` string when present. A
+ * missing/empty `pageId` reads nothing (warn + return null). Carries no secret. Pure; never
+ * throws.
+ */
+export function validateConfluenceGetComments(
+  raw: unknown,
+  warn: WarnFn = defaultWarn
+): ConfluenceGetCommentsParams | null {
+  if (!isObject(raw)) {
+    warn('[confluence] ignoring confluence:getComments — payload is not an object:', raw)
+    return null
+  }
+  if (!isNonEmptyString(raw.pageId)) {
+    warn('[confluence] ignoring confluence:getComments — required "pageId" must be a non-empty string:', raw)
+    return null
+  }
+  if (!optionalCursorOk(raw.cursor)) {
+    warn('[confluence] ignoring confluence:getComments — optional "cursor" must be a string:', raw)
+    return null
+  }
+  return {
+    pageId: raw.pageId,
+    ...(typeof raw.cursor === 'string' ? { cursor: raw.cursor } : {})
+  }
+}
+
+/**
+ * Validate a `confluence:addComment` params payload (confluence-dock-comments-v1, FR-006,
+ * FR-010). The renderer add-comment path reuses the same `ConfluenceCommentParams` shape as
+ * the MCP write: required `pageId` non-empty string + required `body` non-empty/non-whitespace
+ * string (an empty comment adds nothing). A missing required field comments nothing (warn +
+ * return null). Carries no secret. Pure; never throws.
+ */
+export function validateConfluenceAddComment(
+  raw: unknown,
+  warn: WarnFn = defaultWarn
+): ConfluenceCommentParams | null {
+  if (!isObject(raw)) {
+    warn('[confluence] ignoring confluence:addComment — payload is not an object:', raw)
+    return null
+  }
+  if (!isNonEmptyString(raw.pageId)) {
+    warn('[confluence] ignoring confluence:addComment — required "pageId" must be a non-empty string:', raw)
+    return null
+  }
+  if (typeof raw.body !== 'string' || raw.body.trim().length === 0) {
+    warn('[confluence] ignoring confluence:addComment — required "body" must be a non-empty, non-whitespace string:', raw)
     return null
   }
   return { pageId: raw.pageId, body: raw.body }

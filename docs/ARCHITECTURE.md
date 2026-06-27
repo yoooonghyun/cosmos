@@ -567,9 +567,23 @@ serving **both** surfaces:
   unchanged, so there is **no new IPC channel, no main handler, no surface builder, and no fire-or-defer
   correlation**. The back row clears `genUiPage`, returning the tab to the generated list it overlaid
   (the list is the live A2UI host underneath, restored verbatim with no re-fetch); a `useEffect` keyed on
-  `activeTabId` resets `genUiPage` on tab switch so an open detail never bleeds across tabs. Read-only —
-  no new OAuth scope, no token on payload/surface. **The Confluence generative panel stays read-only** (no write
-  control/dispatcher, and the page-create
+  `activeTabId` resets `genUiPage` on tab switch so an open detail never bleeds across tabs. The page
+  detail itself is read-only (no new OAuth scope for the detail read), but the dock body ALSO hosts a
+  **comments section (view + add)** beneath `PageDetail` (`confluence-dock-comments-v1`): a NATIVE
+  renderer component reaching main over two NEW renderer-IPC methods — `window.cosmos.confluence.getComments`
+  (a main-side read fetching footer comments WITH their nested reply tree from
+  `/wiki/api/v2/pages/{id}/footer-comments` + per-comment `/footer-comments/{id}/children`) and
+  `window.cosmos.confluence.addComment` (a write that REUSES the existing `ConfluenceManager.createComment`
+  — the single comment-write impl, now with two callers: the MCP tool and this dock). NOT the agent/MCP
+  path. Comment bodies are `view` HTML rendered through the SAME DOMPurify sanitize gate as the page body.
+  Reading comments requires the granular **`read:comment:confluence`** scope (added to the Confluence set
+  → one-time reconnect; until granted the section shows an inline reconnect affordance via the existing
+  `connect()`); adding reuses the already-granted `write:comment:confluence`. Read and write capabilities
+  are gated INDEPENDENTLY; every not-authorized / loading / empty / error / not-connected state degrades
+  gracefully in the dock — never crash, never leak a token. After a successful add the section re-fetches
+  the page's comments (no optimistic insert in v1); comments load on dock open + reload on retarget, and a
+  stale in-flight result for a no-longer-open page is discarded. **The Confluence generative panel stays
+  read-only** (no write control/dispatcher, and the page-create
   tool is intentionally NOT in the panel's `--allowedTools` grant — `CONFLUENCE_TOOL_GRANTS`); the
   `confluence_create_page` write lives only on the MCP server for the interactive TUI. Both panels
   render the not-connected / loading / idle-empty / error / reconnect-needed states and reuse the
@@ -644,8 +658,10 @@ HTML-escaped). Scopes: Jira `read:jira-work` + `read:jira-user` + **`write:jira-
 `read:page:confluence` + `read:space:confluence` + **`read:attachment:confluence`** (added by
 confluence-content-images-v1 so the bearer can download embedded content/attachment images — a
 scope change that forces a one-time disconnect+reconnect for already-connected users) +
-**`write:page:confluence`** (the single create
-write scope) plus the one **classic** scope `search:confluence` — kept because the v1 CQL
+**`read:comment:confluence`** (added by confluence-dock-comments-v1 so the dock can READ footer comments
++ their reply tree — likewise a one-time reconnect) + **`write:page:confluence`** (create + update) +
+**`write:comment:confluence`** (footer-comment create, used by BOTH the MCP tool and the dock's
+`addComment`) plus the one **classic** scope `search:confluence` — kept because the v1 CQL
 `/wiki/rest/api/search` endpoint has no granular search-scope equivalent and is the only classic
 content scope still honored on a granular-migrated app (the deprecated `read:confluence-content.all`
 family now 401s "scope does not match"); both plus `offline_access`. Deferred:

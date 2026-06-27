@@ -692,3 +692,124 @@ describe('ConfluenceClient.createComment (confluence-mcp-write-v1, comment FR)',
     expect(JSON.stringify(result)).not.toContain('at-test')
   })
 })
+
+describe('ConfluenceClient.getComments (confluence-dock-comments-v1, FR-003)', () => {
+  // A top-level footer comment, v2 shape (authorId + version.createdAt + body.view.value).
+  const topComment = (id: string, value: string) => ({
+    id,
+    version: { authorId: `acct-${id}`, createdAt: '2026-06-27T10:00:00.000Z' },
+    body: { view: { value } }
+  })
+
+  /** Route fetch: the top-level footer-comments URL vs each comment's /children URL. */
+  function routedFetch(map: {
+    top: unknown
+    topStatus?: number
+    children: (commentId: string) => { body: unknown; status?: number }
+  }): { fetchImpl: FetchLike; urls: string[] } {
+    const urls: string[] = []
+    const fetchImpl: FetchLike = async (url) => {
+      urls.push(url)
+      const childMatch = url.match(/footer-comments\/([^/]+)\/children/)
+      if (childMatch) {
+        const c = map.children(decodeURIComponent(childMatch[1]))
+        return res(c.body, c.status ?? 200)
+      }
+      return res(map.top, map.topStatus ?? 200)
+    }
+    return { fetchImpl, urls }
+  }
+
+  it('shapes top-level comments each with their one-level replies', async () => {
+    const { fetchImpl, urls } = routedFetch({
+      top: {
+        results: [topComment('1', '<p>top one</p>'), topComment('2', '<p>top two</p>')],
+        _links: { next: '/wiki/api/v2/pages/777/footer-comments?cursor=NXT' }
+      },
+      children: (id) =>
+        id === '1'
+          ? { body: { results: [topComment('1a', '<p>reply to one</p>')] } }
+          : { body: { results: [] } }
+    })
+    const client = new ConfluenceClient({ fetchImpl })
+    const result = await client.getComments(auth, { pageId: '777' })
+    expect(result.ok).toBe(true)
+    if (result.ok) {
+      expect(result.data.comments).toHaveLength(2)
+      const [c1, c2] = result.data.comments
+      expect(c1.id).toBe('1')
+      expect(c1.author.accountId).toBe('acct-1')
+      expect(c1.created).toBe('2026-06-27T10:00:00.000Z')
+      expect(c1.body).toBe('<p>top one</p>')
+      expect(c1.replies).toHaveLength(1)
+      expect(c1.replies[0]).toMatchObject({ id: '1a', body: '<p>reply to one</p>', replies: [] })
+      expect(c2.replies).toHaveLength(0)
+      expect(result.data.nextCursor).toBe('NXT')
+    }
+    // The top-level page URL hits the footer-comments collection with body-format=view.
+    expect(urls[0]).toContain('/wiki/api/v2/pages/777/footer-comments')
+    expect(urls[0]).toContain('body-format=view')
+  })
+
+  it('degrades a FAILED children read to no replies (best-effort), not a whole-read failure', async () => {
+    const { fetchImpl } = routedFetch({
+      top: { results: [topComment('1', '<p>top</p>')], _links: {} },
+      // The children read 500s — the comment must still render with replies: [].
+      children: () => ({ body: { message: 'boom' }, status: 500 })
+    })
+    const client = new ConfluenceClient({ fetchImpl })
+    const result = await client.getComments(auth, { pageId: '777' })
+    expect(result.ok).toBe(true)
+    if (result.ok) {
+      expect(result.data.comments).toHaveLength(1)
+      expect(result.data.comments[0].replies).toEqual([])
+    }
+  })
+
+  it('falls back gracefully when an author/timestamp are absent (degrade-never-throw)', async () => {
+    const { fetchImpl } = routedFetch({
+      top: { results: [{ id: '9', body: { view: { value: '<p>hi</p>' } } }], _links: {} },
+      children: () => ({ body: { results: [] } })
+    })
+    const client = new ConfluenceClient({ fetchImpl })
+    const result = await client.getComments(auth, { pageId: '777' })
+    expect(result.ok).toBe(true)
+    if (result.ok) {
+      const c = result.data.comments[0]
+      expect(c.author).toEqual({}) // no accountId/displayName — renderer falls back to 'Unknown'
+      expect(c.created).toBeUndefined()
+      expect(c.body).toBe('<p>hi</p>')
+    }
+  })
+
+  it('maps a top-level 403 to reconnect_needed via mapConfluenceError', async () => {
+    const fetchImpl: FetchLike = async () => res({ message: 'no' }, 403)
+    const client = new ConfluenceClient({ fetchImpl })
+    const result = await client.getComments(auth, { pageId: '777' })
+    expect(result.ok).toBe(false)
+    if (!result.ok) {
+      expect(result.kind).toBe('reconnect_needed')
+    }
+  })
+
+  it('maps a top-level 429 to rate_limited (honoring Retry-After)', async () => {
+    const fetchImpl: FetchLike = async () => res({}, 429, '7')
+    const client = new ConfluenceClient({ fetchImpl })
+    const result = await client.getComments(auth, { pageId: '777' })
+    expect(result.ok).toBe(false)
+    if (!result.ok) {
+      expect(result.kind).toBe('rate_limited')
+      expect(result.retryAfterSeconds).toBe(7)
+    }
+  })
+
+  it('never attaches a token to the result (SC-009)', async () => {
+    const { fetchImpl } = routedFetch({
+      top: { results: [topComment('1', '<p>x</p>')], _links: {} },
+      children: () => ({ body: { results: [] } })
+    })
+    const client = new ConfluenceClient({ fetchImpl })
+    const result = await client.getComments(auth, { pageId: '777' })
+    expect(JSON.stringify(result)).not.toContain('at-test')
+  })
+})
