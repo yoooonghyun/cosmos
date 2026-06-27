@@ -117,6 +117,8 @@ import { PtyManager } from './ptyManager'
 import { SessionStore } from './sessionStore'
 import { validateSnapshot } from './sessionSnapshot'
 import { AgentRunner } from './agentRunner'
+import { AgentSessionStore } from './agentSessionStore'
+import { selectDefaultSessionId } from './agentSessionQueue'
 import {
   CONFLUENCE_RENDER_UI_SERVER_NAME,
   GOOGLE_CALENDAR_RENDER_UI_SERVER_NAME,
@@ -1964,14 +1966,14 @@ function createWindow(): void {
     // titlebar-brand-accent: drop the native title bar but KEEP the macOS traffic-light
     // buttons (close/min/max). On macOS `'hidden'` removes the bar chrome and leaves the
     // lights, which we vertically center inside the renderer's custom title strip (28px tall,
-    // `bg-background` with a centered "cosmos" wordmark) via `trafficLightPosition`. The 16px
-    // lights centered in 28px ⇒ y≈6; x=14 insets them from the left. NOTE: this option only
+    // `bg-background` with a centered "cosmos" wordmark) via `trafficLightPosition`. The ~12px
+    // lights centered in 28px ⇒ y≈8; x=14 insets them from the left. NOTE: this option only
     // takes effect at window creation, so a running dev session must be FULLY restarted (not
     // HMR) to see it. Windows/Linux have no traffic lights — there the strip is just a
     // draggable title bar and the OS draws its own controls; native window controls /
     // `titleBarOverlay` for those platforms are a follow-up if cosmos ever ships off macOS.
     titleBarStyle: 'hidden',
-    trafficLightPosition: { x: 14, y: 6 },
+    trafficLightPosition: { x: 14, y: 8 },
     ...(existsSync(appIconPath()) ? { icon: appIconPath() } : {}),
     webPreferences: {
       preload: join(__dirname, '../preload/index.mjs'),
@@ -2204,6 +2206,26 @@ function createWindow(): void {
     cancelActive: () => uiBridge?.cancelActive()
   })
 
+  // cosmos-conversation-panel-v1 (step 2): mint-or-continue the DEFAULT conversation's
+  // PERSISTENT claude session id. Persisted as plain JSON under userData (a non-secret
+  // uuid; never logged as a token, never crosses to the renderer). On first launch a
+  // fresh id is minted + persisted; on every later run AND after relaunch the SAME id is
+  // reused so the default conversation is continuous and `claude` appends to the same
+  // transcript jsonl. The sandbox cwd (resolveSandboxDir → `<userData>/sandbox`) is
+  // STABLE across runs/restarts, so the cwd-hash-derived transcript path never scatters.
+  const agentSessionStore = new AgentSessionStore({
+    filePath: join(app.getPath('userData'), 'agent-session.json'),
+    dirPath: app.getPath('userData'),
+    fs: { existsSync, readFileSync, writeFileSync, mkdirSync, renameSync, rmSync }
+  })
+  const defaultSession = selectDefaultSessionId(
+    agentSessionStore.loadDefaultSessionId(),
+    randomUUID
+  )
+  if (defaultSession.minted) {
+    agentSessionStore.saveDefaultSessionId(defaultSession.sessionId)
+  }
+
   // Generative-UI foundation v1: the headless `claude -p` runner. A SEPARATE
   // channel from the interactive PTY (FR-008) that reaches the SAME UiBridge via
   // the shared render_ui --mcp-config (FR-007). Its render_ui registration targets
@@ -2233,7 +2255,10 @@ function createWindow(): void {
         }
       }
     },
-    { sandboxDir }
+    // cosmos-conversation-panel-v1 (step 2): the persistent default-conversation session
+    // id — the runner passes `--session-id <this>` for the default ('generated-ui') target
+    // and SERIALIZES default-target submits behind any in-flight run (no id collision).
+    { sandboxDir, defaultSessionId: defaultSession.sessionId }
   )
 
   mainWindow.on('ready-to-show', () => {

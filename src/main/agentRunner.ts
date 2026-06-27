@@ -30,6 +30,7 @@ import { spawn as nodeSpawn, type ChildProcess } from 'node:child_process'
 import { isExecutableResolvable } from './ptyManager'
 import { allowedToolForTarget, groundingPromptForTarget, renderMcpConfigJsonForTarget } from './mcpConfig'
 import { viewContextGroundingClause } from './viewContextGrounding'
+import { decideSubmit, isPersistentSessionTarget } from './agentSessionQueue'
 import {
   DEFAULT_UI_RENDER_TARGET,
   type AgentStatusPayload,
@@ -62,6 +63,23 @@ export interface AgentRunnerOptions {
    * surfaces an `error` rather than spawning a missing binary (FR-014).
    */
   resolveExecutable?: (command: string) => boolean
+  /**
+   * cosmos-conversation-panel-v1 (step 2): the PERSISTENT, create-or-continue
+   * session id for the DEFAULT conversation (the `'generated-ui'` wire target the
+   * Cosmos panel hosts). When set, every default-target run passes
+   * `--session-id <this>` so the conversation is CONTINUOUS (each submit builds on
+   * the prior context) and `claude` RECORDS the transcript jsonl on disk; the
+   * caller persists this id so it survives relaunch. Omit (undefined) to keep the
+   * pre-feature ephemeral behaviour. NON-DEFAULT targets never use it.
+   */
+  defaultSessionId?: string
+}
+
+/** One queued default-conversation submit, awaiting the in-flight run to finish. */
+interface QueuedSubmit {
+  utterance: string
+  target: UiRenderTarget
+  viewContext?: ViewContext
 }
 
 export class AgentRunner {
@@ -70,11 +88,21 @@ export class AgentRunner {
   private readonly command: string
   private readonly spawn: SpawnFn
   private readonly resolveExecutable: (command: string) => boolean
+  /** Persistent default-conversation session id, or undefined (ephemeral). */
+  private readonly defaultSessionId?: string
 
   /** The in-flight child, or null when idle (single-run state). */
   private child: ChildProcess | null = null
   /** True while a run is in flight (single-run guard). */
   private running = false
+  /**
+   * FIFO of default-conversation submits waiting for the in-flight run to finish
+   * (cosmos-conversation-panel-v1 step 2). A continuous conversation is sequential,
+   * so default-target submits SERIALIZE here instead of being dropped — drained one
+   * at a time as each run completes, so two `claude -p --session-id <same id>` never
+   * collide. Non-default targets are never enqueued (today's drop-while-busy).
+   */
+  private readonly queue: QueuedSubmit[] = []
 
   constructor(sinks: AgentRunnerSinks, options: AgentRunnerOptions) {
     this.sinks = sinks
@@ -82,6 +110,7 @@ export class AgentRunner {
     this.command = options.command ?? 'claude'
     this.spawn = options.spawn ?? nodeSpawn
     this.resolveExecutable = options.resolveExecutable ?? isExecutableResolvable
+    this.defaultSessionId = options.defaultSessionId
   }
 
   /** True while a headless run is in flight. */
@@ -111,16 +140,42 @@ export class AgentRunner {
     target: UiRenderTarget = DEFAULT_UI_RENDER_TARGET,
     viewContext?: ViewContext
   ): void {
-    // Single-run / blocked-while-running: ignore a submit while busy.
-    if (this.running) {
-      return
-    }
-
-    // Defense in depth — the renderer + validator already guard FR-004.
+    // Defense in depth — the renderer + validator already guard FR-004. Reject an
+    // empty utterance BEFORE the busy/queue decision so it never occupies a slot.
     if (utterance.trim().length === 0) {
       return
     }
 
+    // cosmos-conversation-panel-v1 (step 2): a submit while busy is QUEUED for the
+    // default (persistent-session) conversation — it is one continuous, sequential
+    // conversation, so it must not collide on `--session-id` nor be silently dropped.
+    // Any other target keeps today's blocked-while-busy DROP. Idle → spawn now.
+    const decision = decideSubmit({
+      running: this.running,
+      isPersistentTarget: this.usesPersistentSession(target)
+    })
+    if (decision.action === 'drop') {
+      return
+    }
+    if (decision.action === 'enqueue') {
+      this.queue.push({ utterance, target, viewContext })
+      return
+    }
+    this.spawnRun({ utterance, target, viewContext })
+  }
+
+  /** True when this run uses the persistent default-conversation session id. */
+  private usesPersistentSession(target: UiRenderTarget): boolean {
+    return this.defaultSessionId !== undefined && isPersistentSessionTarget(target)
+  }
+
+  /**
+   * Spawn ONE `claude -p` run (the body extracted from {@link run} so the queue can
+   * re-invoke it). Assumes the busy/queue decision has already cleared this submit
+   * to start now. A pre-check / spawn failure emits `error` and drains the queue so
+   * a queued conversation never stalls behind a failed run.
+   */
+  private spawnRun({ utterance, target, viewContext }: QueuedSubmit): void {
     // Electron PATH caveat: a GUI-launched app may not inherit the shell PATH, so
     // `claude` may be unresolvable. Pre-check and fail fast with an `error` status
     // rather than spawning a missing binary (FR-014).
@@ -129,6 +184,7 @@ export class AgentRunner {
         state: 'error',
         message: `"${this.command}" was not found on PATH. Install Claude Code or ensure it is on PATH.`
       })
+      this.drainQueue()
       return
     }
 
@@ -152,6 +208,15 @@ export class AgentRunner {
       '--output-format',
       'json'
     ]
+
+    // cosmos-conversation-panel-v1 (step 2): the DEFAULT conversation passes a
+    // PERSISTENT `--session-id` so the FIRST run creates the session and every later
+    // run (this launch AND after relaunch) CONTINUES it — continuous context + a
+    // recorded transcript jsonl. `--session-id <id>` is create-or-continue, the same
+    // flag the terminal pane-spawn reuse uses. Non-default targets stay ephemeral.
+    if (this.usesPersistentSession(target)) {
+      args.push('--session-id', this.defaultSessionId as string)
+    }
 
     // Per-target grounding (jira): force the run to render only REAL fetched tickets and
     // never fabricate, since the render tool's description carries a placeholder example.
@@ -181,6 +246,9 @@ export class AgentRunner {
         state: 'error',
         message: `Failed to start "${this.command}": ${errorMessage(err)}`
       })
+      // The slot never became busy; drain any queued default-conversation submit
+      // so a failed spawn does not strand the conversation.
+      this.drainQueue()
       return
     }
 
@@ -207,6 +275,7 @@ export class AgentRunner {
         state: 'error',
         message: `Failed to start "${this.command}": ${err.message}`
       })
+      this.drainQueue()
     })
 
     child.on('close', (code: number | null) => {
@@ -223,7 +292,27 @@ export class AgentRunner {
           message: runErrorMessage(code, stdout, stderr)
         })
       }
+      // cosmos-conversation-panel-v1 (step 2): the run finished and freed the slot —
+      // start the next queued default-conversation submit (if any), serializing so
+      // two `--session-id <same id>` runs never overlap.
+      this.drainQueue()
     })
+  }
+
+  /**
+   * Start the next queued default-conversation submit, if any (cosmos-conversation-
+   * panel-v1 step 2). Called once a run frees the slot (`close`/`error`) or a spawn
+   * never started it. Only runs when idle, so the conversation stays strictly
+   * sequential — one `--session-id <id>` run at a time, never a collision.
+   */
+  private drainQueue(): void {
+    if (this.running) {
+      return
+    }
+    const next = this.queue.shift()
+    if (next) {
+      this.spawnRun(next)
+    }
   }
 
   /**
@@ -234,6 +323,10 @@ export class AgentRunner {
    */
   dispose(): void {
     const active = this.child
+    // Drop any queued default-conversation submits so a teardown (reload/close/quit)
+    // does not later fire a stale submit. Clearing BEFORE finish()'s drain path is
+    // moot here (dispose never drains), but keeps teardown total.
+    this.queue.length = 0
     this.finish()
     if (!active) {
       return

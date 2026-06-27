@@ -33,6 +33,7 @@ const SANDBOX = '/tmp/cosmos-sandbox'
 function makeRunner(opts?: {
   resolvable?: boolean
   spawnThrows?: boolean
+  defaultSessionId?: string
 }): Harness {
   const child = makeFakeChild()
   const spawn = vi.fn(() => {
@@ -47,9 +48,37 @@ function makeRunner(opts?: {
   const runner = new AgentRunner(sinks, {
     sandboxDir: SANDBOX,
     spawn: spawn as unknown as SpawnFn,
-    resolveExecutable
+    resolveExecutable,
+    ...(opts?.defaultSessionId ? { defaultSessionId: opts.defaultSessionId } : {})
   })
   return { runner, statuses, spawn, child, resolveExecutable }
+}
+
+/**
+ * As makeRunner but each spawn returns a FRESH fake child (so a queued run gets its
+ * own lifecycle). Records every spawned child in order. Used by the serialization tests.
+ */
+function makeSerialRunner(defaultSessionId: string): {
+  runner: AgentRunner
+  statuses: AgentStatusPayload[]
+  spawn: ReturnType<typeof vi.fn>
+  children: ReturnType<typeof makeFakeChild>[]
+} {
+  const children: ReturnType<typeof makeFakeChild>[] = []
+  const spawn = vi.fn(() => {
+    const c = makeFakeChild()
+    children.push(c)
+    return c
+  }) as unknown as ReturnType<typeof vi.fn>
+  const statuses: AgentStatusPayload[] = []
+  const sinks: AgentRunnerSinks = { onStatus: (p) => statuses.push(p) }
+  const runner = new AgentRunner(sinks, {
+    sandboxDir: SANDBOX,
+    spawn: spawn as unknown as SpawnFn,
+    resolveExecutable: vi.fn(() => true),
+    defaultSessionId
+  })
+  return { runner, statuses, spawn, children }
 }
 
 beforeEach(() => {
@@ -333,5 +362,107 @@ describe('AgentRunner.dispose — teardown (FR-006, reload/close/quit)', () => {
     const h = makeRunner()
     expect(() => h.runner.dispose()).not.toThrow()
     expect(h.statuses).toHaveLength(0)
+  })
+})
+
+describe('AgentRunner — persistent default session id (cosmos-conversation-panel-v1 step 2)', () => {
+  it('passes --session-id <persistedId> for the DEFAULT target so the conversation is continuous', () => {
+    const h = makeRunner({ defaultSessionId: 'cosmos-default-id' })
+    h.runner.run('build a form') // default target = generated-ui
+    const [, args] = h.spawn.mock.calls[0]
+    expect(args[args.indexOf('--session-id') + 1]).toBe('cosmos-default-id')
+    // Still JSON output (the result/structured output is preserved).
+    expect(args[args.indexOf('--output-format') + 1]).toBe('json')
+  })
+
+  it('reuses the SAME --session-id across sequential default runs (continuity within a launch)', () => {
+    const s = makeSerialRunner('cosmos-default-id')
+    s.runner.run('first')
+    s.children[0].emit('close', 0) // first completes
+    s.runner.run('second')
+    const [, firstArgs] = s.spawn.mock.calls[0]
+    const [, secondArgs] = s.spawn.mock.calls[1]
+    expect(firstArgs[firstArgs.indexOf('--session-id') + 1]).toBe('cosmos-default-id')
+    expect(secondArgs[secondArgs.indexOf('--session-id') + 1]).toBe('cosmos-default-id')
+  })
+
+  it('does NOT pass --session-id for a non-default target (integrations stay ephemeral)', () => {
+    const h = makeRunner({ defaultSessionId: 'cosmos-default-id' })
+    h.runner.run('show my issues', 'jira')
+    const [, args] = h.spawn.mock.calls[0]
+    expect(args).not.toContain('--session-id')
+  })
+
+  it('does NOT pass --session-id when no defaultSessionId is configured (pre-feature ephemeral behaviour)', () => {
+    const h = makeRunner()
+    h.runner.run('build a form')
+    const [, args] = h.spawn.mock.calls[0]
+    expect(args).not.toContain('--session-id')
+  })
+})
+
+describe('AgentRunner — submit serialization for the default conversation (step 2)', () => {
+  it('QUEUES a default submit while busy and spawns it when the in-flight run completes (no drop, no collision)', () => {
+    const s = makeSerialRunner('cosmos-default-id')
+    s.runner.run('first')
+    expect(s.spawn).toHaveBeenCalledTimes(1)
+
+    // A second default submit while the first is in flight is QUEUED, not spawned, not dropped.
+    s.runner.run('second')
+    expect(s.spawn).toHaveBeenCalledTimes(1)
+
+    // When the first run closes, the queued run starts — strictly sequential.
+    s.children[0].emit('close', 0)
+    expect(s.spawn).toHaveBeenCalledTimes(2)
+    // The queued run carried the second utterance and the SAME session id.
+    const [, secondArgs] = s.spawn.mock.calls[1]
+    expect(secondArgs[secondArgs.indexOf('-p') + 1]).toBe('second')
+    expect(secondArgs[secondArgs.indexOf('--session-id') + 1]).toBe('cosmos-default-id')
+  })
+
+  it('drains multiple queued submits in FIFO order, one at a time', () => {
+    const s = makeSerialRunner('cosmos-default-id')
+    s.runner.run('a')
+    s.runner.run('b')
+    s.runner.run('c')
+    expect(s.spawn).toHaveBeenCalledTimes(1) // only the first spawned; b, c queued
+
+    s.children[0].emit('close', 0)
+    expect(s.spawn).toHaveBeenCalledTimes(2) // b starts
+    expect(s.spawn.mock.calls[1][1][s.spawn.mock.calls[1][1].indexOf('-p') + 1]).toBe('b')
+
+    s.children[1].emit('close', 0)
+    expect(s.spawn).toHaveBeenCalledTimes(3) // c starts
+    expect(s.spawn.mock.calls[2][1][s.spawn.mock.calls[2][1].indexOf('-p') + 1]).toBe('c')
+  })
+
+  it('starts the queued run even when the in-flight run FAILS (a failed run never strands the conversation)', () => {
+    const s = makeSerialRunner('cosmos-default-id')
+    s.runner.run('first')
+    s.runner.run('second')
+    // First run fails (non-zero exit) — the queue still drains.
+    s.children[0].emit('close', 1)
+    expect(s.spawn).toHaveBeenCalledTimes(2)
+    expect(s.statuses.some((st) => st.state === 'error')).toBe(true)
+  })
+
+  it('dispose() clears the queue so a teardown does not later fire a stale queued submit', () => {
+    const s = makeSerialRunner('cosmos-default-id')
+    s.runner.run('first')
+    s.runner.run('queued') // queued behind the in-flight run
+    s.runner.dispose() // kills the in-flight child AND clears the queue
+
+    // The disposed child's late close must not drain a now-cleared queue into a new spawn.
+    s.children[0].emit('close', 0)
+    expect(s.spawn).toHaveBeenCalledTimes(1)
+  })
+
+  it('a non-default submit while busy is still DROPPED (today’s behaviour unchanged)', () => {
+    const s = makeSerialRunner('cosmos-default-id')
+    s.runner.run('first') // default, in flight
+    s.runner.run('show issues', 'jira') // non-default while busy -> dropped, not queued
+    s.children[0].emit('close', 0)
+    // No queued run started for the dropped jira submit.
+    expect(s.spawn).toHaveBeenCalledTimes(1)
   })
 })
