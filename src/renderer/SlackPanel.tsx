@@ -88,6 +88,7 @@ import { usePerTabNav } from './usePerTabNav'
 import { useTabShortcuts } from './useTabShortcuts'
 import { canSubmitSlackMessage } from './slackComposerLogic'
 import { useSlackScrollToLatest } from './useSlackScrollToLatest'
+import { useSlackScrollPaginate } from './useSlackScrollPaginate'
 import { loadAllChannels } from './slackChannelSearchLogic'
 import { useConfirm } from './useConfirm'
 import { ConfirmDialog } from '@/components/ui/confirm-dialog'
@@ -629,6 +630,31 @@ function MessageList({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
+  // slack-scroll-pagination-v1: auto-load the next OLDER page when the user scrolls NEAR THE TOP
+  // of the self-scrolling history list, anchoring the scroll position on each prepend so the view
+  // does not jump. ONLY the self-scrolling `olderAbove` history variant opts in (FR-001/004/012);
+  // the thread dock (scroll=false) and any newer-direction list pass enabled=false. The returned
+  // callback ref is MERGED with `scrollRef` (the sibling bottom-jump) onto the one ScrollArea Root;
+  // the two layout effects are mutually exclusive by construction (see useSlackScrollPaginate header).
+  const paginateRef = useSlackScrollPaginate<HTMLDivElement>({
+    itemCount: items.length,
+    inFlight: loadingMore,
+    hasCursor: cursor != null,
+    enabled: scroll && olderAbove,
+    onLoadOlder: () => {
+      if (cursor) {
+        void run(cursor)
+      }
+    }
+  })
+  const mergedScrollRef = useCallback(
+    (node: HTMLDivElement | null): void => {
+      scrollRef.current = node
+      paginateRef(node)
+    },
+    [scrollRef, paginateRef]
+  )
+
   if (error?.kind === 'reconnect_needed') {
     return <ReconnectState onReconnect={onReconnect} />
   }
@@ -679,7 +705,7 @@ function MessageList({
     return body
   }
   return (
-    <ScrollArea ref={scrollRef} className={messageListWrapClass(scroll)}>
+    <ScrollArea ref={mergedScrollRef} className={messageListWrapClass(scroll)}>
       {body}
     </ScrollArea>
   )
