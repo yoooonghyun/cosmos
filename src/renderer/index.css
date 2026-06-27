@@ -179,22 +179,45 @@
  * `SLACK_LAYOUT_CLAMP_CLASS` / `SLACK_LIST_SCROLL_CLASS` pattern).
  */
 @utility scrollbar-hover-only {
-  /* The track width is CONSTANT (always 8px) and the gutter is always reserved — revealing the
-     bar on hover changes ONLY the thumb's color, never the layout width, so message content never
-     shifts/shrinks on hover (bug slack-message-hover-width-shift-v1). The earlier width:0→8 toggle
-     WAS the shift. Electron is Chromium, so we drive this purely through `::-webkit-scrollbar`
-     (setting `scrollbar-width` can disable the pseudo-element styling on some Chromium builds). */
+  /* Goal: the scrollbar is hidden AT REST and revealed ONLY while the pointer is over this
+     specific scroll region — and STAYS hidden at rest even during/after an active or programmatic
+     scroll (e.g. the scroll-to-latest jump). Matches the native Slack list, which is a Radix
+     ScrollArea (`type="hover"`, a JS-driven overlay) and therefore never shows an OS bar.
+
+     The inconsistency this fixes (bug slack-genui-scrollbar-hover-only-v2): the generative list is a
+     PLAIN `overflow-y-auto` div, so on macOS it is subject to the OS/Chromium scrollbar. With only a
+     transparent-thumb resting state, the bar appeared sometimes-but-not-always because:
+       1. macOS OVERLAY scrollbars are composited by the OS, NOT via `::-webkit-scrollbar` — so a
+          transparent thumb does not hide them. They flash on every scroll (incl. the scroll-to-latest
+          `scrollTop = scrollHeight`) then fade on the OS timer = the "sometimes visible" flicker.
+       2. Defining `::-webkit-scrollbar` with explicit geometry switches Chromium to a CLASSIC,
+          fully-CSS-governed scrollbar for this element, taking the OS overlay out of the picture so
+          our transparent-at-rest / colored-on-hover rule is the ONLY thing that paints the thumb.
+
+     Constant width / no shift (bug slack-message-hover-width-shift-v1): the track box is ALWAYS 8px
+     and `scrollbar-gutter: stable` reserves it in both states, so revealing the bar changes ONLY the
+     thumb's COLOR, never the layout width (the earlier width:0→8 toggle WAS the shift). We drive this
+     purely through `::-webkit-scrollbar`; `scrollbar-width` is intentionally NOT set (it can disable
+     the pseudo-element styling on some Chromium builds and re-enable the OS overlay).
+
+     STRICT hover-only (hidden even WHILE scrolling): achievable here because a CLASSIC styled thumb is
+     painted EXACTLY as CSS says — Chromium does not auto-recolor a styled thumb during active scroll —
+     so a transparent resting thumb stays invisible mid-scroll; only the container `:hover` colors it.
+     The one residual is the macOS system overlay's own transient on a non-`:hover` programmatic jump,
+     which the classic-mode switch above removes for this element. */
   scrollbar-gutter: stable;
 
   &::-webkit-scrollbar {
     width: 8px;
     height: 8px;
   }
-  /* Hidden at rest = transparent thumb over a transparent track (the track space stays reserved,
-     so it reads as empty margin, not a visible bar). On hover the thumb fades in. */
+  /* Hidden at rest = a fully transparent thumb (the reserved track reads as empty margin, not a bar).
+     The reveal is keyed STRICTLY on the scroll region's own `:hover`, so an active/programmatic scroll
+     never shows it. A short color transition smooths the reveal/hide (no width animates → no shift). */
   &::-webkit-scrollbar-thumb {
     border-radius: 9999px;
     background: transparent;
+    transition: background 120ms ease;
   }
   &:hover::-webkit-scrollbar-thumb {
     background: color-mix(in oklab, var(--muted-foreground) 45%, transparent);
@@ -202,7 +225,8 @@
   &:hover::-webkit-scrollbar-thumb:hover {
     background: color-mix(in oklab, var(--muted-foreground) 70%, transparent);
   }
-  &::-webkit-scrollbar-track {
+  &::-webkit-scrollbar-track,
+  &:hover::-webkit-scrollbar-track {
     background: transparent;
   }
 }

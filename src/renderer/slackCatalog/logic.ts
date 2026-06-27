@@ -574,16 +574,24 @@ export const SLACK_LIST_SCROLL_CLASS =
  * (the wrapper's only child is always the SDK `Column`/`Row` div), not any SDK class — so the chain
  * threads through regardless of SDK markup (FR-005/FR-012). Replaces {@link SLACK_LAYOUT_CLAMP_CLASS}.
  *
- * INVARIANT (feedback-slack-per-list-scroll): the `[&>*]:!flex-row` + per-list `min-h-0 flex-1`
- * fill chain is LOAD-BEARING — it is what makes multiple message lists split side-by-side and each
- * scroll INDEPENDENTLY (slack-list-scroll-fill-v2). Do NOT add `flex-wrap`/`content-start` here: a
- * prior channel-name-above-list attempt did, which let the list line size to content height instead
- * of filling, collapsing the per-list scroll into ONE unified surface scroll — a regression the user
- * has rejected repeatedly. Per-list independent scroll OUTRANKS any header-placement nicety.
+ * INVARIANT (feedback-slack-per-list-scroll): the per-list `[&>*]:min-h-0 [&>*]:flex-1` fill chain
+ * is LOAD-BEARING — it is what makes each message list its OWN `overflow-y-auto` scroll region that
+ * FILLS (never collapses into one unified surface scroll). Do NOT add `flex-wrap`/`content-start`
+ * here: a prior channel-name-above-list attempt did, which let the list line size to content height
+ * instead of filling, collapsing per-list scroll into one unified scroll — a regression the user
+ * rejected repeatedly.
+ *
+ * We do NOT force the interior to `!flex-row`. The SDK container keeps its NATURAL direction, which
+ * is exactly right (and what the visual harness verifies): a Slack `Row` interior is already
+ * `flex-row`, so MULTIPLE lists laid out in a Row split SIDE-BY-SIDE and each scrolls; a `Column`
+ * interior stays `flex-col`, so a non-list HEADER (e.g. the channel name) sits ABOVE its list
+ * instead of beside it (bug slack-genui-channel-name-above-list-v1). Forcing `!flex-row` here was
+ * what rowed a Column's header next to the list. Per-list independent scroll is preserved either
+ * way (each list keeps `flex-1 min-h-0 overflow-y-auto`).
  */
 export const SLACK_LAYOUT_FILL_CLASS =
   'w-full min-w-0 max-w-full flex flex-col min-h-0 flex-1 ' +
-  '[&>*]:flex [&>*]:!flex-row [&>*]:min-h-0 [&>*]:min-w-0 [&>*]:flex-1'
+  '[&>*]:flex [&>*]:min-h-0 [&>*]:min-w-0 [&>*]:flex-1'
 
 /**
  * Chain-fill class the SlackPanel tabpanel HOST adds so its surface child participates in the

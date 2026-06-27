@@ -928,12 +928,15 @@ describe('SLACK_LAYOUT_FILL_CLASS (v2 first-party Column/Row wrapper — threads
     expect(SLACK_LAYOUT_FILL_CLASS).toContain('[&>*]:min-w-0')
   })
 
-  it('forces the SDK child to !flex-row so multiple lists lay out SIDE-BY-SIDE (세로 분할), not stacked', () => {
-    // The SDK Column is natively `flex-col` (stacks lists top/bottom = horizontal dividers, poor
-    // readability). The positional repair overrides it with `!flex-row` so sibling lists become
-    // full-height columns split by vertical dividers; a lone list still fills the full width.
-    expect(SLACK_LAYOUT_FILL_CLASS).toContain('[&>*]:!flex-row')
-    expect(SLACK_LAYOUT_FILL_CLASS).not.toContain('[&>*]:flex-col')
+  it('does NOT force !flex-row — keeps the SDK container natural direction so a Column header stacks above its list while a Row of lists splits side-by-side (slack-genui-channel-name-above-list-v1)', () => {
+    // Forcing `!flex-row` rowed a Column's header NEXT to its list (the channel-name-beside bug).
+    // The fill chain threads flex/min-h-0/min-w-0/flex-1 to the interior WITHOUT overriding its
+    // direction: a Slack Row interior (flex-row) splits multiple lists side-by-side; a Column
+    // interior (flex-col) keeps a header ABOVE the list. Per-list scroll holds either way (each
+    // list keeps flex-1 + overflow). The visual harness asserts both pixel outcomes.
+    expect(SLACK_LAYOUT_FILL_CLASS).not.toContain('!flex-row')
+    expect(SLACK_LAYOUT_FILL_CLASS).toContain('[&>*]:flex-1')
+    expect(SLACK_LAYOUT_FILL_CLASS).toContain('[&>*]:min-h-0')
   })
 
   it('does NOT add flex-wrap/content-start (feedback-slack-per-list-scroll: a channel-name-above-list attempt that did so collapsed per-list scroll into one unified scroll — reverted, must not return)', () => {
