@@ -319,19 +319,20 @@ describe('AgentRunner.run — error paths (FR-014)', () => {
   })
 })
 
-describe('AgentRunner.run — single-run guard (spec Resolved Decision: blocked-while-running)', () => {
-  it('ignores a second run while a run is in flight (no second spawn)', () => {
-    const h = makeRunner()
+describe('AgentRunner.run — in-flight guard (unified-agent-session-v1: serialize, never overlap)', () => {
+  it('does not spawn a second child while a run is in flight (the second submit is queued, not concurrent)', () => {
+    // makeRunner reuses ONE fake child, so this asserts the in-flight guard only:
+    // no second spawn while busy. (FIFO drain is exercised with makeSerialRunner below.)
+    const h = makeRunner({ defaultSessionId: 'cosmos-default-id' })
     h.runner.run('first')
     h.runner.run('second')
 
     expect(h.spawn).toHaveBeenCalledTimes(1)
-    // Only one started emitted (the second submit was ignored).
+    // Only one started emitted — the second submit is queued, not run concurrently.
     expect(h.statuses.filter((s) => s.state === 'started')).toHaveLength(1)
 
-    // After the first run completes, a new run is allowed again.
+    // After the first run completes, the queued submit drains and spawns.
     h.child.emit('close', 0)
-    h.runner.run('third')
     expect(h.spawn).toHaveBeenCalledTimes(2)
   })
 
@@ -386,11 +387,30 @@ describe('AgentRunner — persistent default session id (cosmos-conversation-pan
     expect(secondArgs[secondArgs.indexOf('--session-id') + 1]).toBe('cosmos-default-id')
   })
 
-  it('does NOT pass --session-id for a non-default target (integrations stay ephemeral)', () => {
+  it('passes the SAME --session-id for a NON-default target (unified-agent-session-v1 FR-001) — integrations now accumulate in the one conversation', () => {
+    // The core change: a non-default target (jira/slack/confluence/calendar) USED to run
+    // ephemerally (no --session-id); now every target runs against the one persistent
+    // session so the Cosmos panel records it.
+    for (const target of ['jira', 'slack', 'confluence', 'google-calendar'] as const) {
+      const h = makeRunner({ defaultSessionId: 'cosmos-default-id' })
+      h.runner.run('show me things', target)
+      const [, args] = h.spawn.mock.calls[0]
+      expect(args[args.indexOf('--session-id') + 1]).toBe('cosmos-default-id')
+    }
+  })
+
+  it('uses the session id for a non-default target WITHOUT broadening its tool grants (session decoupled from target — FR-002/FR-007)', () => {
+    // FR-007 guard: unifying the session must NOT change the per-target least-privilege grants.
     const h = makeRunner({ defaultSessionId: 'cosmos-default-id' })
     h.runner.run('show my issues', 'jira')
     const [, args] = h.spawn.mock.calls[0]
-    expect(args).not.toContain('--session-id')
+    expect(args[args.indexOf('--session-id') + 1]).toBe('cosmos-default-id')
+    const allowed = args[args.indexOf('--allowedTools') + 1].split(',')
+    // Still the jira-only render grant; no generic render_ui leaked in by the unification.
+    expect(allowed).toContain('mcp__cosmos-jira-render-ui__render_jira_ui')
+    expect(allowed).not.toContain('mcp__cosmos-render-ui__render_ui')
+    const mcpConfig = JSON.parse(args[args.indexOf('--mcp-config') + 1])
+    expect(Object.keys(mcpConfig.mcpServers)).toEqual(['cosmos-jira-render-ui', 'cosmos-jira'])
   })
 
   it('does NOT pass --session-id when no defaultSessionId is configured (pre-feature ephemeral behaviour)', () => {
@@ -457,12 +477,47 @@ describe('AgentRunner — submit serialization for the default conversation (ste
     expect(s.spawn).toHaveBeenCalledTimes(1)
   })
 
-  it('a non-default submit while busy is still DROPPED (today’s behaviour unchanged)', () => {
+  it('ENQUEUES a NON-default submit while busy and drains it after the in-flight run (FR-004/FR-005) — the bug fix: it was dropped before', () => {
     const s = makeSerialRunner('cosmos-default-id')
-    s.runner.run('first') // default, in flight
-    s.runner.run('show issues', 'jira') // non-default while busy -> dropped, not queued
-    s.children[0].emit('close', 0)
-    // No queued run started for the dropped jira submit.
+    s.runner.run('first') // default (generated-ui), in flight
+    // A jira submit while busy is now QUEUED (was dropped) — so the integration
+    // conversation is never lost and accumulates in the one session.
+    s.runner.run('show issues', 'jira', { selectedIssueKey: 'PROJ-9' })
+    expect(s.spawn).toHaveBeenCalledTimes(1) // not spawned yet, but not dropped
+
+    s.children[0].emit('close', 0) // first completes -> queued jira run starts
+    expect(s.spawn).toHaveBeenCalledTimes(2)
+    const [, jiraArgs] = s.spawn.mock.calls[1]
+    // The drained run kept its own target (jira grants) AND view-context (FR-006)
+    // AND ran on the SAME session id (FR-001).
+    expect(jiraArgs[jiraArgs.indexOf('-p') + 1]).toBe('show issues')
+    expect(jiraArgs[jiraArgs.indexOf('--session-id') + 1]).toBe('cosmos-default-id')
+    expect(jiraArgs[jiraArgs.indexOf('--allowedTools') + 1]).toContain('render_jira_ui')
+    expect(jiraArgs[jiraArgs.indexOf('--append-system-prompt') + 1]).toContain('PROJ-9')
+  })
+
+  it('drains interleaved multi-TARGET submits FIFO and never spawns two children concurrently (SC-003)', () => {
+    const s = makeSerialRunner('cosmos-default-id')
+    s.runner.run('a', 'generated-ui')
+    s.runner.run('b', 'jira')
+    s.runner.run('c', 'slack')
+    // Only one in-flight child at any time — the others are queued, never overlapping.
     expect(s.spawn).toHaveBeenCalledTimes(1)
+    expect(s.children).toHaveLength(1)
+
+    s.children[0].emit('close', 0)
+    expect(s.spawn).toHaveBeenCalledTimes(2) // b (jira) starts
+    expect(s.children).toHaveLength(2)
+    expect(s.spawn.mock.calls[1][1][s.spawn.mock.calls[1][1].indexOf('-p') + 1]).toBe('b')
+
+    s.children[1].emit('close', 0)
+    expect(s.spawn).toHaveBeenCalledTimes(3) // c (slack) starts
+    expect(s.spawn.mock.calls[2][1][s.spawn.mock.calls[2][1].indexOf('-p') + 1]).toBe('c')
+
+    // Every run used the one shared session id (no collision possible — SC-003).
+    for (const call of s.spawn.mock.calls) {
+      const args = call[1] as string[]
+      expect(args[args.indexOf('--session-id') + 1]).toBe('cosmos-default-id')
+    }
   })
 })

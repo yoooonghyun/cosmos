@@ -1,20 +1,5 @@
 import { describe, it, expect, vi } from 'vitest'
-import {
-  PERSISTENT_SESSION_TARGET,
-  isPersistentSessionTarget,
-  selectDefaultSessionId,
-  decideSubmit
-} from './agentSessionQueue'
-
-describe('isPersistentSessionTarget (cosmos-conversation-panel-v1 step 2)', () => {
-  it('is true only for the default render target', () => {
-    expect(isPersistentSessionTarget(PERSISTENT_SESSION_TARGET)).toBe(true)
-    expect(isPersistentSessionTarget('generated-ui')).toBe(true)
-    expect(isPersistentSessionTarget('jira')).toBe(false)
-    expect(isPersistentSessionTarget('slack')).toBe(false)
-    expect(isPersistentSessionTarget('confluence')).toBe(false)
-  })
-})
+import { selectDefaultSessionId, decideSubmit } from './agentSessionQueue'
 
 describe('selectDefaultSessionId — create-or-continue', () => {
   it('mints a fresh id when nothing is persisted (and flags it for the caller to persist)', () => {
@@ -42,17 +27,19 @@ describe('selectDefaultSessionId — create-or-continue', () => {
   })
 })
 
-describe('decideSubmit — spawn / enqueue / drop', () => {
-  it('spawns immediately when idle, regardless of target', () => {
-    expect(decideSubmit({ running: false, isPersistentTarget: true })).toEqual({ action: 'spawn' })
-    expect(decideSubmit({ running: false, isPersistentTarget: false })).toEqual({ action: 'spawn' })
+describe('decideSubmit — spawn / enqueue (unified-agent-session-v1)', () => {
+  it('spawns immediately when idle', () => {
+    expect(decideSubmit({ running: false })).toEqual({ action: 'spawn' })
   })
 
-  it('ENQUEUES a default-conversation submit while busy (serialize the continuous conversation)', () => {
-    expect(decideSubmit({ running: true, isPersistentTarget: true })).toEqual({ action: 'enqueue' })
+  it('ENQUEUES while busy — every target serializes on the one shared session (FR-004/FR-005)', () => {
+    // The regression this feature fixes: a busy submit USED to `drop` for non-default
+    // targets; now it ALWAYS enqueues because all targets share the one session id.
+    expect(decideSubmit({ running: true })).toEqual({ action: 'enqueue' })
   })
 
-  it('DROPS a non-default submit while busy (today’s blocked-while-busy is unchanged)', () => {
-    expect(decideSubmit({ running: true, isPersistentTarget: false })).toEqual({ action: 'drop' })
+  it('never returns a drop outcome (the per-target ephemeral drop path is removed — FR-013)', () => {
+    expect(decideSubmit({ running: true }).action).not.toBe('drop')
+    expect(decideSubmit({ running: false }).action).not.toBe('drop')
   })
 })

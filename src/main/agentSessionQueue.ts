@@ -1,32 +1,27 @@
 /**
  * Pure persistent-session-id selection + submit-serialization decisions for the
- * default-agent conversation (cosmos-conversation-panel-v1, step 2).
+ * unified-agent conversation (unified-agent-session-v1; extends
+ * cosmos-conversation-panel-v1 step 2).
  *
  * No Electron / fs / child_process imports — just the create-or-continue id rule
- * and the per-session queue-vs-spawn-vs-drop decision, kept node-testable so the
- * two load-bearing rules are exercised without launching a real `claude`.
+ * and the queue-vs-spawn decision, kept node-testable so the two load-bearing
+ * rules are exercised without launching a real `claude`.
  *
- * Why a persistent session id: the default-agent (the `'generated-ui'` wire
- * target the Cosmos panel hosts) must be ONE continuous `claude` conversation, so
- * every Open-Prompt submit passes `--session-id <persistedId>`: the first run
- * CREATES the session, every later run (this launch AND after relaunch) CONTINUES
- * it, and `claude` records the transcript jsonl on disk for the later history step.
+ * Why ONE persistent session id for ALL targets: every Open-Prompt submit — from
+ * any panel (Jira, Slack, Confluence, Calendar, Generated UI) — runs against the
+ * SAME persistent `claude` session, so every conversation accumulates in the one
+ * default-session transcript the Cosmos panel reads. Each run passes
+ * `--session-id <persistedId>`: the first run CREATES the session, every later run
+ * (this launch AND after relaunch) CONTINUES it, and `claude` records the
+ * transcript jsonl on disk for the history reader. The render `target` is decoupled
+ * — it governs ONLY which panel a generated surface renders into, never which
+ * session a run uses (unified-agent-session-v1 FR-001..FR-003).
  *
- * Why serialize: two concurrent `claude -p --session-id <same id>` collide
- * ("Session ID is already in use" — the class the terminal session-lock work hit).
- * A single ongoing conversation is inherently sequential, so default-target
- * submits QUEUE behind the in-flight run rather than being dropped.
+ * Why serialize ALL targets: two concurrent `claude -p --session-id <same id>`
+ * collide ("Session ID is already in use"). Because every target now shares the one
+ * session id, EVERY submit is mutually exclusive — a submit while busy QUEUES behind
+ * the in-flight run (FIFO) rather than being dropped (FR-004/FR-005).
  */
-
-import { DEFAULT_UI_RENDER_TARGET, type UiRenderTarget } from '../shared/ipc'
-
-/** The render target whose runs share the one persistent, queued conversation. */
-export const PERSISTENT_SESSION_TARGET: UiRenderTarget = DEFAULT_UI_RENDER_TARGET
-
-/** True when `target` is the default conversation that uses the persistent session id. */
-export function isPersistentSessionTarget(target: UiRenderTarget): boolean {
-  return target === PERSISTENT_SESSION_TARGET
-}
 
 /** The outcome of {@link selectDefaultSessionId}. */
 export interface SessionIdSelection {
@@ -53,32 +48,28 @@ export function selectDefaultSessionId(
 }
 
 /** What the runner should do with a freshly-received submit. */
-export type SubmitDecision =
-  | { action: 'spawn' }
-  | { action: 'enqueue' }
-  | { action: 'drop' }
+export type SubmitDecision = { action: 'spawn' } | { action: 'enqueue' }
 
 /**
- * Decide what to do with a submit given whether a run is in flight and whether the
- * submit targets the persistent (default) conversation.
+ * Decide what to do with a submit given whether a run is in flight.
+ *
+ * Because every target now shares the ONE persistent session id
+ * (unified-agent-session-v1 FR-001..FR-005), the decision no longer depends on the
+ * render target — it is purely the in-flight guard:
  *
  * - Idle → `spawn` (run it now), regardless of target.
- * - In flight + persistent-session target → `enqueue` (serialize behind the
- *   in-flight run; a continuous conversation is sequential, never collide on the id).
- * - In flight + any other target → `drop` (today's single-run / blocked-while-busy
- *   behaviour is unchanged for non-default targets).
+ * - In flight → `enqueue` (serialize behind the in-flight run; every run is mutually
+ *   exclusive on the shared session id, so a busy submit QUEUES, never drops).
+ *
+ * There is NO `drop` outcome any more: the old per-target ephemeral path (a
+ * non-default target dropping while busy) is removed (FR-013). The `target` is
+ * carried through purely for `ui:render` routing, decoupled from this decision.
  *
  * Pure: no I/O, no mutation — the caller acts on the returned action.
  */
-export function decideSubmit(args: {
-  running: boolean
-  isPersistentTarget: boolean
-}): SubmitDecision {
+export function decideSubmit(args: { running: boolean }): SubmitDecision {
   if (!args.running) {
     return { action: 'spawn' }
   }
-  if (args.isPersistentTarget) {
-    return { action: 'enqueue' }
-  }
-  return { action: 'drop' }
+  return { action: 'enqueue' }
 }
