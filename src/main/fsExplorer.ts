@@ -152,10 +152,12 @@ export function createFsExplorer(deps: {
       return { ok: false, reason: c.reason }
     }
     // file-viewer-multiformat-v1 (FR-005/FR-007/FR-012): route by the viewer REGISTRY.
-    // A DOCUMENT extension (pdf/docx/xlsx) routes to its renderer by NAME alone — its bytes
-    // never ride IPC (the renderer fetches them from `cosmos-file://`, FR-007), exactly like
-    // the image marker. So for those we DON'T read the bytes; we only `statSize` to enforce
-    // the per-format cap (FR-012) — over the cap → `too-large`, else the document marker.
+    // A DOCUMENT extension (pdf/docx/xlsx) routes to its renderer by NAME alone — `read` returns
+    // only the document MARKER here (no bytes), exactly like the image marker. The renderer then
+    // pulls the bytes via the `fs:readBytes` IPC (NOT a `cosmos-file://` fetch — Chromium
+    // CORS-blocks fetch/XHR to that custom scheme from the dev http origin). So for documents we
+    // only `statSize` to enforce the per-format cap (FR-012) — over the cap → `too-large`, else
+    // the document marker.
     // An image likewise needs no byte read (marker only). Only a non-document, non-image file
     // is read + sniffed to decide text vs the calm "no preview" fallback (FR-006).
     const extKind = resolveViewerKind(relPath)
