@@ -1,12 +1,24 @@
 /**
- * GeneratedUiPanel — now TABBED (panel-tabs v1, Track B / Phase 6).
+ * CosmosPanel — the always-present general-purpose A2UI surface (formerly GeneratedUiPanel).
  *
- * The panel hosts an independent ordered set of VS Code-style tabs (FR-001). Each
- * tab owns its own A2UI surface; the panel mounts ONLY the active tab's
- * `<A2UIProvider>` + renderer subtree (inactive tabs keep their surface spec in hook
- * state, re-processed on switch — FR-003 — so we never mount N providers fighting
- * over the one `ui:render` channel). With zero tabs the panel shows its idle
- * placeholder (FR-018); the composer is always present (FR-016).
+ * cosmos-conversation-panel-v1 STEP 1 (rail/panel swap only): the "Generated UI" rail panel was
+ * renamed to "Cosmos". This component keeps the CURRENT tabbed render behavior intact — it still
+ * hosts the live A2UI surface for the general-purpose agent. The conversation-history timeline is
+ * a FOLLOW-UP step; nothing about the render path changed here beyond the rail identity.
+ *
+ * IMPORTANT — rail id vs. wire target diverge here (cosmos-conversation-panel-v1, OQ-2/OQ-5):
+ *  - The RAIL `SurfaceId` is now `'cosmos'` → `usePublishComposer('cosmos', …)` so the ONE
+ *    App-level Open-Prompt composer routes here while Cosmos is the active surface.
+ *  - The WIRE `UiRenderTarget` stays `'generated-ui'` → `target: 'generated-ui'` so the agent's
+ *    `render_ui` frames (which still stamp `'generated-ui'`) land here, and the persisted snapshot
+ *    key stays `'generated-ui'` → `useRestoredGenerativePanel('generated-ui')` so a restored
+ *    session still feeds this panel (no schema migration).
+ *
+ * The panel hosts an independent ordered set of VS Code-style tabs (FR-001). Each tab owns its own
+ * A2UI surface; the panel mounts ONLY the active tab's `<A2UIProvider>` + renderer subtree
+ * (inactive tabs keep their surface spec in hook state, re-processed on switch — FR-003 — so we
+ * never mount N providers fighting over the one `ui:render` channel). With zero tabs the panel
+ * shows its idle placeholder (FR-018); the composer is always present (FR-016).
  *
  * The originating-tab correlation (FR-012/012a/013/014/015/027) lives in the shared
  * `useGenerativePanelTabs` hook; this component is chrome (strip + idle placeholder)
@@ -19,7 +31,7 @@
 
 import { useEffect, useMemo } from 'react'
 import { A2UIProvider } from '@a2ui-sdk/react/0.9'
-import { Sparkles } from 'lucide-react'
+import { CosmosMark } from './CosmosMark'
 import { PanelTabStrip, type PanelTab } from './PanelTabStrip'
 import { PanelRefreshButton } from './PanelRefreshButton'
 import { panelRefreshInputsFor } from './panelRefreshLogic'
@@ -32,17 +44,21 @@ import { surfaceSpinnerVisible } from './promptComposerLogic'
 import { useTabShortcuts } from './useTabShortcuts'
 import { useRestoredGenerativePanel } from './SessionProvider'
 
-export function GeneratedUiPanel({ active }: { active: boolean }): React.JSX.Element {
+export function CosmosPanel({ active }: { active: boolean }): React.JSX.Element {
+  // Snapshot key stays the WIRE target 'generated-ui' (OQ-5 — no schema migration), so a restored
+  // session still feeds the Cosmos panel even though the rail id is now 'cosmos'.
   const restored = useRestoredGenerativePanel('generated-ui')
   const { tabs, activeTabId, activeTab, setActive, submit, newTab, closeTab, update } =
     useGenerativePanelTabs({
+      // WIRE render target stays 'generated-ui' (OQ-2) — the agent's render_ui frames still
+      // stamp this; the rail id divergence is intentional.
       target: 'generated-ui',
-      panelName: 'Generated UI',
+      panelName: 'Cosmos',
       cancelOnClose: true,
       ...(restored ? { initial: restored } : {})
     })
 
-  // Tab keyboard shortcuts act on THIS strip only while the Generated UI surface is active.
+  // Tab keyboard shortcuts act on THIS strip only while the Cosmos surface is active.
   useTabShortcuts({ active, tabs, activeTabId, onActivate: setActive, onNewTab: newTab, onCloseTab: closeTab })
 
   // Always keep ≥1 tab (Terminal-unified layout): seed one on mount and reopen a fresh
@@ -85,10 +101,11 @@ export function GeneratedUiPanel({ active }: { active: boolean }): React.JSX.Ele
   const refreshInputs = panelRefreshInputsFor(activeTab)
 
   // open-prompt-hoist-v1: publish this panel's composer wiring to the shared registry so the
-  // ONE App-level composer routes to it while Generated UI is the active surface. Generated UI
-  // is always available (no connection gate), carries no view-context chip.
+  // ONE App-level composer routes to it while Cosmos is the active surface. Published under the
+  // RAIL id 'cosmos' (not the wire target) so it matches the active SurfaceId. Cosmos is always
+  // available (no connection gate), carries no view-context chip.
   usePublishComposer(
-    'generated-ui',
+    'cosmos',
     useMemo(
       () => ({
         onSubmit: submit,
@@ -103,7 +120,7 @@ export function GeneratedUiPanel({ active }: { active: boolean }): React.JSX.Ele
   return (
     <section
       className="flex h-full min-w-0 flex-col border-l border-border bg-card"
-      aria-label="Generated UI"
+      aria-label="Cosmos"
     >
       <PanelTabStrip
         tabs={stripTabs}
@@ -118,7 +135,7 @@ export function GeneratedUiPanel({ active }: { active: boolean }): React.JSX.Ele
             requestId={refreshInputs.requestId}
           />
         }
-        ariaLabel="Generated UI tabs"
+        ariaLabel="Cosmos tabs"
       />
 
       <div className="min-h-0 flex-1 overflow-auto p-3 text-card-foreground" role="tabpanel">
@@ -147,7 +164,7 @@ export function GeneratedUiPanel({ active }: { active: boolean }): React.JSX.Ele
             <ActiveTabSurface
               surface={activeTab.surface}
               catalogId="standard"
-              panelName="GeneratedUiPanel"
+              panelName="CosmosPanel"
             />
           </A2UIProvider>
         )}
@@ -155,7 +172,7 @@ export function GeneratedUiPanel({ active }: { active: boolean }): React.JSX.Ele
 
       {/* open-prompt-hoist-v1: the composer is now ONE App-level instance routed to the
           active surface; this panel publishes its wiring via usePublishComposer above. */}
-      <PanelFooter surfaceName="Generated UI" icon={Sparkles} activeTab={activeStripTab} />
+      <PanelFooter surfaceName="Cosmos" icon={CosmosMark} activeTab={activeStripTab} />
     </section>
   )
 }

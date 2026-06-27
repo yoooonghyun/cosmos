@@ -15,14 +15,14 @@ const allDisabled: EnabledIntegrations = {
 }
 
 describe('visibleSurfaceIds — rail = always-present + enabled gateable (FR-004/FR-005)', () => {
-  it('first-run (all disabled) shows only terminal + generated-ui (SC-005)', () => {
-    expect(visibleSurfaceIds(allDisabled)).toEqual(['terminal', 'generated-ui'])
+  it('first-run (all disabled) shows only terminal + cosmos (SC-005)', () => {
+    expect(visibleSurfaceIds(allDisabled)).toEqual(['terminal', 'cosmos'])
   })
 
   it('shows an integration only when enabled, in fixed rail order (SC-003)', () => {
     expect(
       visibleSurfaceIds({ ...allDisabled, jira: true, slack: true })
-    ).toEqual(['terminal', 'generated-ui', 'slack', 'jira'])
+    ).toEqual(['terminal', 'cosmos', 'slack', 'jira'])
   })
 
   it('fully enabled rail preserves the canonical order', () => {
@@ -36,10 +36,10 @@ describe('visibleSurfaceIds — rail = always-present + enabled gateable (FR-004
     ).toEqual(ALL_SURFACE_IDS)
   })
 
-  it('always keeps terminal + generated-ui regardless of the enabled map', () => {
+  it('always keeps terminal + cosmos regardless of the enabled map', () => {
     const visible = visibleSurfaceIds(allDisabled)
     expect(visible).toContain('terminal')
-    expect(visible).toContain('generated-ui')
+    expect(visible).toContain('cosmos')
   })
 })
 
@@ -55,12 +55,12 @@ describe('resolveFallbackSurface — disable-active refocus (FR-014/SC-007)', ()
   })
 
   it('keeps an always-present surface active even with everything disabled', () => {
-    expect(resolveFallbackSurface('generated-ui', allDisabled)).toBe('generated-ui')
+    expect(resolveFallbackSurface('cosmos', allDisabled)).toBe('cosmos')
   })
 
   it('falls back to the first visible item if terminal were ever absent (defensive)', () => {
     // Synthesize an impossible "terminal hidden" set to prove the defensive branch.
-    const visible: SurfaceId[] = ['generated-ui', 'slack']
-    expect(resolveFallbackSurface('jira', allDisabled, visible)).toBe('generated-ui')
+    const visible: SurfaceId[] = ['cosmos', 'slack']
+    expect(resolveFallbackSurface('jira', allDisabled, visible)).toBe('cosmos')
   })
 })

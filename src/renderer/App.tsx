@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
-import { Settings, Sparkles } from 'lucide-react'
+import { Settings } from 'lucide-react'
 import { SiConfluence, SiGooglecalendar, SiJira, SiSlack } from 'react-icons/si'
 import { siClaudecode } from 'simple-icons'
 import { Button } from '@/components/ui/button'
@@ -7,7 +7,8 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip'
 import { cn } from '@/lib/utils'
 import { TerminalPanel } from './TerminalPanel'
-import { GeneratedUiPanel } from './GeneratedUiPanel'
+import { CosmosPanel } from './CosmosPanel'
+import { CosmosMark } from './CosmosMark'
 import { SlackPanel } from './SlackPanel'
 import { JiraPanel } from './JiraPanel'
 import { ConfluencePanel } from './ConfluencePanel'
@@ -32,12 +33,12 @@ import './App.css'
  * inactive) so switching only toggles visibility — the Terminal's live PTY
  * session and any pending render_ui surface are never torn down.
  *
- * settings-redesign-v1 (FR-004/FR-005): only Terminal + Generated UI are always in
+ * settings-redesign-v1 (FR-004/FR-005): only Terminal + Cosmos are always in
  * the rail; the four integrations show only when `enabled` (their panels stay mounted
  * regardless, so a re-enable is instant). `SurfaceId` is the shared rail type.
  */
 
-// Icons mix lucide (Generated UI → Sparkles), react-icons/si brand logos
+// Icons mix the inline CosmosMark (Cosmos brand sparkle), react-icons/si brand logos
 // (Jira/Confluence/Slack/Google Calendar), and the Claude Code logo from simple-icons (its own
 // mark, distinct from the Claude sunburst). All render an SVG that accepts
 // `className` and inherits `currentColor`, so the rail's active/idle color cascade
@@ -55,7 +56,9 @@ const ClaudeCodeIcon: RailIcon = ({ className }) => (
 /** The rail item presentation for every surface, keyed by id (order = ALL_SURFACE_IDS). */
 const RAIL_ITEM: Record<SurfaceId, { label: string; Icon: RailIcon }> = {
   terminal: { label: 'Terminal', Icon: ClaudeCodeIcon },
-  'generated-ui': { label: 'Generated UI', Icon: Sparkles },
+  // cosmos-conversation-panel-v1: the rail id is 'cosmos' (renamed from 'generated-ui'); the WIRE
+  // render target stays 'generated-ui' (see CosmosPanel + railVisibility). Brand mark = CosmosMark.
+  cosmos: { label: 'Cosmos', Icon: CosmosMark },
   slack: { label: 'Slack', Icon: SiSlack },
   jira: { label: 'Jira', Icon: SiJira },
   confluence: { label: 'Confluence', Icon: SiConfluence },
@@ -309,11 +312,11 @@ function AppShell(): React.JSX.Element {
               <TerminalPanel active={surface === 'terminal'} />
             </TabsContent>
             <TabsContent
-              value="generated-ui"
+              value="cosmos"
               forceMount
               className="app__ui data-[state=inactive]:hidden"
             >
-              <GeneratedUiPanel active={surface === 'generated-ui'} />
+              <CosmosPanel active={surface === 'cosmos'} />
             </TabsContent>
             <TabsContent value="slack" forceMount className="app__ui data-[state=inactive]:hidden">
               <SlackPanel active={surface === 'slack'} />

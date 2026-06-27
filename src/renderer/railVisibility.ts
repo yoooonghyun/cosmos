@@ -9,11 +9,19 @@
 
 import type { EnabledIntegrations, GateableIntegration } from '../shared/ipc'
 
-/** Every rail surface id (Terminal + Generated UI are NOT integrations — FR-005). */
-export type SurfaceId = 'terminal' | 'generated-ui' | GateableIntegration
+/**
+ * Every rail surface id (Terminal + Cosmos are NOT integrations — FR-005).
+ *
+ * NOTE (cosmos-conversation-panel-v1): the rail surface id `'cosmos'` is DISTINCT from the
+ * wire `UiRenderTarget` `'generated-ui'` (`src/shared/ipc/common.ts`). The Cosmos panel renders
+ * the general-purpose agent's render frames, which still target the WIRE `'generated-ui'`; only
+ * the rail id was renamed. Do NOT "finish the rename" into the wire target or the persisted
+ * snapshot key — that would break render routing + session restore.
+ */
+export type SurfaceId = 'terminal' | 'cosmos' | GateableIntegration
 
 /** The always-present surfaces — never gated, never have an Enable toggle (FR-005). */
-export const ALWAYS_PRESENT: SurfaceId[] = ['terminal', 'generated-ui']
+export const ALWAYS_PRESENT: SurfaceId[] = ['terminal', 'cosmos']
 
 /** The gateable integration surfaces, in canonical rail order (FR-004). */
 export const GATEABLE_SURFACES: GateableIntegration[] = [
