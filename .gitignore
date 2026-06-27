@@ -14,3 +14,6 @@ dist/
 .env
 .env.*
 !.env.example
+
+# Playwright visual-test run artifacts
+test-results/

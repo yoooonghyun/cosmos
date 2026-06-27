@@ -1,0 +1,17 @@
+/**
+ * Test-app CSS entry — imports the cosmos renderer CSS (which includes the
+ * Tailwind v4 base + all @utility definitions like scrollbar-hover-only) and
+ * adds an explicit @source directive so the Tailwind scanner picks up class
+ * strings from the renderer source files (including SLACK_LIST_SCROLL_CLASS /
+ * SLACK_LAYOUT_FILL_CLASS defined as runtime strings in logic.ts).
+ */
+@import "../../../src/renderer/index.css";
+
+/*
+ * Tell Tailwind v4 to scan the renderer source AND the test scenes for class
+ * tokens. Without this, class strings assembled at runtime in logic.ts
+ * (e.g. "overflow-y-auto min-h-0 flex-1 ...") are not seen by the file
+ * scanner and the utilities are not emitted.
+ */
+@source "../../../src/renderer/**/*.{ts,tsx}";
+@source "./**/*.{ts,tsx}";
