@@ -194,6 +194,16 @@ export interface GenerativePanelTabs extends PanelTabsController<GenerativeTab> 
   fireOrDefer: (request: () => void) => void
   /** Close a tab, cancelling any unresolved blocking surface + dropping correlation. */
   closeTab: (tabId: string) => void
+  /**
+   * True while a user compose is awaiting its render frame (the shared `originatingTabIdRef`
+   * slot is non-null), recomputed each render (jira-kanban-generation-v1 Symptom 1). A panel's
+   * default-load effect reads this to AVOID racing a pending compose: `submit()` sets the
+   * originating ref synchronously BEFORE the later `ui:generatingBegin` spinner signal arrives,
+   * so for the window between submit and that signal an empty tab still looks idle (`inFlight`
+   * is no longer set optimistically) — `inCompose` is the only flag that is already true there.
+   * It flips back to false when the frame lands or the run errors (both null the ref).
+   */
+  inCompose: boolean
 }
 
 export interface GenerativePanelTabsOptions {
@@ -658,6 +668,17 @@ export function useGenerativePanelTabs(
     [tabs, close, cancelOnClose]
   )
 
+  // jira-kanban-generation-v1 (Symptom 1): recompute the compose-in-flight signal on EVERY
+  // render so a consumer effect re-reads it after a submit re-renders the panel. Timing: a
+  // compose's `submit()` calls `open`/`update` (which queue a state update → re-render) and
+  // THEN sets `originatingTabIdRef.current = targetTabId` synchronously, before that re-render
+  // runs. React flushes the queued state update only after the event handler returns, so by the
+  // time this render-phase read executes the ref is already non-null. A plain ref read at render
+  // is therefore correct here (no extra state needed): the value the consumer's effect sees on
+  // the submit-triggered render reflects the just-set correlation. It returns to false when the
+  // frame lands or the run errors (the subscriptions null the ref, then `update` re-renders).
+  const inCompose = originatingTabIdRef.current !== null
+
   return {
     ...controller,
     submit,
@@ -665,6 +686,7 @@ export function useGenerativePanelTabs(
     newTabWithDefault,
     requestDefaultInActiveTab,
     fireOrDefer: fireOrDeferDefault,
-    closeTab
+    closeTab,
+    inCompose
   }
 }

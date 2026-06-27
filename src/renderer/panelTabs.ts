@@ -243,6 +243,40 @@ export function shouldFlushDeferredDefault(
 }
 
 /**
+ * Decide whether the Jira default-board lazy-load effect should fire for the active tab
+ * (jira-kanban-generation-v1 Symptom 1 — the spinner-vs-skeleton race fix). Pure /
+ * node-testable apart from the React effect that owns the flags.
+ *
+ * The default-load effect ran whenever the active tab was "empty + idle" (no surface, no
+ * loadingDefault, no error). `ui-catalog-pull-spinner-signal-v1` made the submit no longer
+ * set `inFlight` optimistically (it is now gated on the later `ui:generatingBegin`
+ * begin-signal), so in the window between a compose submit and that signal the tab looks
+ * exactly like a fresh idle tab — and the old `!inFlight` guard no longer caught it. Result:
+ * the default read fired (`loadingDefault`) and the skeleton showed for the whole run instead
+ * of the "Generating…" spinner.
+ *
+ * `inCompose` closes that window: it is true the instant a compose is awaiting its frame
+ * (the hook's `originatingTabIdRef` is non-null), which is set synchronously at submit BEFORE
+ * the begin-signal arrives. So the auto-load only fires for a GENUINELY idle empty tab — never
+ * one whose surface was just cleared by a pending compose.
+ */
+export function shouldAutoLoadDefaultView(input: {
+  hasSurface: boolean
+  loadingDefault: boolean
+  hasError: boolean
+  inFlight: boolean
+  inCompose: boolean
+}): boolean {
+  return (
+    input.hasSurface !== true &&
+    input.loadingDefault !== true &&
+    input.hasError !== true &&
+    input.inFlight !== true &&
+    input.inCompose !== true
+  )
+}
+
+/**
  * The outcome of committing an inline tab rename (tab-rename-v1 FR-005/FR-006/FR-007).
  * `commit: false` ⇒ revert to the pre-edit label and DO NOT mark the tab renamed
  * (the empty/whitespace path). `commit: true` ⇒ apply `label` (the trimmed value)

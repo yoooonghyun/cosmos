@@ -14,6 +14,7 @@ import {
   openTab,
   setActiveTab,
   shouldApplyAutoLabel,
+  shouldAutoLoadDefaultView,
   shouldFlushDeferredDefault,
   terminalLabel,
   UNTITLED_LABEL,
@@ -244,6 +245,44 @@ describe('shouldFlushDeferredDefault (new-tab-base-view-v1 FR-011)', () => {
 
   it('is false when neither condition holds', () => {
     expect(shouldFlushDeferredDefault(false, 'tab-2')).toBe(false)
+  })
+})
+
+describe('shouldAutoLoadDefaultView (jira-kanban-generation-v1 Symptom 1)', () => {
+  const base = {
+    hasSurface: false,
+    loadingDefault: false,
+    hasError: false,
+    inFlight: false,
+    inCompose: false
+  }
+
+  it('loads the default board for a genuinely idle empty tab', () => {
+    expect(shouldAutoLoadDefaultView(base)).toBe(true)
+  })
+
+  it('does NOT load while a compose is awaiting its frame (the spinner-vs-skeleton race)', () => {
+    // The regression: after ui-catalog-pull-spinner-signal-v1, a freshly-submitted tab is
+    // { hasSurface:false, loadingDefault:false, hasError:false, inFlight:false } in the window
+    // between submit and the begin-signal. Without `inCompose` this looked idle and fired the
+    // default read, showing the skeleton for the whole run. `inCompose` must suppress it.
+    expect(shouldAutoLoadDefaultView({ ...base, inCompose: true })).toBe(false)
+  })
+
+  it('does not load when a surface is already present', () => {
+    expect(shouldAutoLoadDefaultView({ ...base, hasSurface: true })).toBe(false)
+  })
+
+  it('does not load while a default read is already outstanding', () => {
+    expect(shouldAutoLoadDefaultView({ ...base, loadingDefault: true })).toBe(false)
+  })
+
+  it('does not load when the tab carries an error', () => {
+    expect(shouldAutoLoadDefaultView({ ...base, hasError: true })).toBe(false)
+  })
+
+  it('does not load once the begin-signal has set inFlight (the spinner is showing)', () => {
+    expect(shouldAutoLoadDefaultView({ ...base, inFlight: true })).toBe(false)
   })
 })
 

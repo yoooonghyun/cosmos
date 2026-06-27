@@ -61,6 +61,7 @@ import {
   autoRefreshValues
 } from './activeTabSurfaceRefresh'
 import { surfaceSpinnerVisible } from './promptComposerLogic'
+import { shouldAutoLoadDefaultView } from './panelTabs'
 import { useTabShortcuts } from './useTabShortcuts'
 import { useConfirm } from './useConfirm'
 import { ConfirmDialog } from '@/components/ui/confirm-dialog'
@@ -352,7 +353,8 @@ export function JiraPanel({ active }: { active: boolean }): React.JSX.Element {
     requestDefaultInActiveTab,
     fireOrDefer,
     closeTab,
-    update
+    update,
+    inCompose
   } = useGenerativePanelTabs({
     target: 'jira',
     panelName: 'Jira',
@@ -510,22 +512,28 @@ export function JiraPanel({ active }: { active: boolean }): React.JSX.Element {
   // its OWN slot (it never touches `activeTab.surface`), so an open dock does not affect this.
   // Gated on `active` so a connected-but-hidden Jira panel does not eager-read.
   useEffect(() => {
+    // A user compose clears the tab's surface so an empty-but-pending tab must NOT be mistaken
+    // for a fresh tab needing the default board, or it fires a default read (loadingDefault) that
+    // shows the SKELETON for the whole run instead of the "Generating…" spinner. The old guard
+    // relied on `activeTab.inFlight`, but `ui-catalog-pull-spinner-signal-v1` no longer sets
+    // `inFlight` at submit (it is gated on the later `ui:generatingBegin` signal), leaving a
+    // window where the tab looks idle. `inCompose` (true the instant a compose awaits its frame)
+    // closes that window — see `shouldAutoLoadDefaultView` (jira-kanban-generation-v1 Symptom 1).
     if (
       active &&
       isConnected &&
       activeTab &&
-      !activeTab.surface &&
-      !activeTab.loadingDefault &&
-      !activeTab.error &&
-      // A user compose clears the tab's surface and sets `inFlight` — that empty-but-in-flight
-      // state must NOT be mistaken for a fresh tab needing the default board, or it would fire a
-      // default read (loadingDefault) that hides the send-spinner and keeps the composer's logo
-      // visible. Only auto-load the default view when the empty tab is genuinely idle.
-      !activeTab.inFlight
+      shouldAutoLoadDefaultView({
+        hasSurface: activeTab.surface != null,
+        loadingDefault: activeTab.loadingDefault === true,
+        hasError: activeTab.error != null,
+        inFlight: activeTab.inFlight === true,
+        inCompose
+      })
     ) {
       requestDefaultInActiveTab(() => window.cosmos.jira.requestDefaultView())
     }
-  }, [active, isConnected, activeTab, requestDefaultInActiveTab])
+  }, [active, isConnected, activeTab, inCompose, requestDefaultInActiveTab])
 
   // jira-ticket-detail-v1 (#86, R-A; FR-001/FR-002/FR-009/FR-012): intercept the
   // renderer-local open-detail nav action a clicked TicketCard emits. Read its `issueKey`,
