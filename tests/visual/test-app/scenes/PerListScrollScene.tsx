@@ -24,7 +24,7 @@ import {
   SLACK_LAYOUT_FILL_CLASS,
   SLACK_LIST_SCROLL_CLASS,
   SLACK_SURFACE_HOST_CLASS,
-} from '@/slackCatalog/logic'
+} from '@/slack/slackCatalog/logic'
 
 /** One tall list of N stub message rows — enough to overflow its container */
 function StubMessageList({ id, count = 40 }: { id: string; count?: number }) {

@@ -376,15 +376,22 @@ describe('AgentRunner — persistent default session id (cosmos-conversation-pan
     expect(args[args.indexOf('--output-format') + 1]).toBe('json')
   })
 
-  it('reuses the SAME --session-id across sequential default runs (continuity within a launch)', () => {
+  it('uses --session-id on run #1 then --resume on run #2 for a freshly-minted id (agent-session-id-reuse-resume-v1)', () => {
+    // NEW CONTRACT: --session-id is CREATE-ONLY for headless claude -p. A freshly-minted
+    // id uses --session-id on the first run (creates the session jsonl) and --resume on
+    // every later run (continues it). makeSerialRunner passes no sessionAlreadyExists so
+    // it defaults to false (freshly minted).
     const s = makeSerialRunner('cosmos-default-id')
     s.runner.run('first')
     s.children[0].emit('close', 0) // first completes
     s.runner.run('second')
     const [, firstArgs] = s.spawn.mock.calls[0]
     const [, secondArgs] = s.spawn.mock.calls[1]
+    // Run #1: creates the session — must use --session-id.
     expect(firstArgs[firstArgs.indexOf('--session-id') + 1]).toBe('cosmos-default-id')
-    expect(secondArgs[secondArgs.indexOf('--session-id') + 1]).toBe('cosmos-default-id')
+    // Run #2: continues the session — must use --resume, NOT --session-id.
+    expect(secondArgs[secondArgs.indexOf('--resume') + 1]).toBe('cosmos-default-id')
+    expect(secondArgs).not.toContain('--session-id')
   })
 
   it('passes the SAME --session-id for a NON-default target (unified-agent-session-v1 FR-001) — integrations now accumulate in the one conversation', () => {
@@ -434,10 +441,12 @@ describe('AgentRunner — submit serialization for the default conversation (ste
     // When the first run closes, the queued run starts — strictly sequential.
     s.children[0].emit('close', 0)
     expect(s.spawn).toHaveBeenCalledTimes(2)
-    // The queued run carried the second utterance and the SAME session id.
+    // The queued run carried the second utterance and the SAME session id via --resume
+    // (agent-session-id-reuse-resume-v1: run #1 created the session, so run #2 continues it).
     const [, secondArgs] = s.spawn.mock.calls[1]
     expect(secondArgs[secondArgs.indexOf('-p') + 1]).toBe('second')
-    expect(secondArgs[secondArgs.indexOf('--session-id') + 1]).toBe('cosmos-default-id')
+    expect(secondArgs[secondArgs.indexOf('--resume') + 1]).toBe('cosmos-default-id')
+    expect(secondArgs).not.toContain('--session-id')
   })
 
   it('drains multiple queued submits in FIFO order, one at a time', () => {
@@ -488,10 +497,12 @@ describe('AgentRunner — submit serialization for the default conversation (ste
     s.children[0].emit('close', 0) // first completes -> queued jira run starts
     expect(s.spawn).toHaveBeenCalledTimes(2)
     const [, jiraArgs] = s.spawn.mock.calls[1]
-    // The drained run kept its own target (jira grants) AND view-context (FR-006)
-    // AND ran on the SAME session id (FR-001).
+    // The drained run kept its own target (jira grants) AND view-context (FR-006).
+    // agent-session-id-reuse-resume-v1: run #1 created the session with --session-id,
+    // so this drained run #2 CONTINUES it with --resume (not --session-id).
     expect(jiraArgs[jiraArgs.indexOf('-p') + 1]).toBe('show issues')
-    expect(jiraArgs[jiraArgs.indexOf('--session-id') + 1]).toBe('cosmos-default-id')
+    expect(jiraArgs[jiraArgs.indexOf('--resume') + 1]).toBe('cosmos-default-id')
+    expect(jiraArgs).not.toContain('--session-id')
     expect(jiraArgs[jiraArgs.indexOf('--allowedTools') + 1]).toContain('render_jira_ui')
     expect(jiraArgs[jiraArgs.indexOf('--append-system-prompt') + 1]).toContain('PROJ-9')
   })
@@ -514,10 +525,14 @@ describe('AgentRunner — submit serialization for the default conversation (ste
     expect(s.spawn).toHaveBeenCalledTimes(3) // c (slack) starts
     expect(s.spawn.mock.calls[2][1][s.spawn.mock.calls[2][1].indexOf('-p') + 1]).toBe('c')
 
-    // Every run used the one shared session id (no collision possible — SC-003).
-    for (const call of s.spawn.mock.calls) {
+    // agent-session-id-reuse-resume-v1: run #1 CREATES the session (--session-id), runs
+    // #2 and #3 CONTINUE it (--resume). Every run still carries the same session value.
+    const firstArgs = s.spawn.mock.calls[0][1] as string[]
+    expect(firstArgs[firstArgs.indexOf('--session-id') + 1]).toBe('cosmos-default-id')
+    for (const call of s.spawn.mock.calls.slice(1)) {
       const args = call[1] as string[]
-      expect(args[args.indexOf('--session-id') + 1]).toBe('cosmos-default-id')
+      expect(args[args.indexOf('--resume') + 1]).toBe('cosmos-default-id')
+      expect(args).not.toContain('--session-id')
     }
   })
 })

@@ -125,7 +125,7 @@ export function FileTabStrip({
       className="flex h-8 shrink-0 select-none items-stretch border-b border-border bg-card/60"
     >
       {/* design §3.4: the whole strip is the scroll region (no pinned `+`/trailing). */}
-      <div ref={listRef} className="flex min-w-0 flex-1 items-stretch overflow-x-auto overflow-y-hidden">
+      <div ref={listRef} className="flex min-w-0 flex-1 items-stretch overflow-x-auto overflow-y-hidden scrollbar-hover-only">
         {tabs.map((t, index) => {
           const isActive = t.relPath === activeRelPath
           const Glyph = TAB_GLYPH[fileGlyphKind(t.name)]

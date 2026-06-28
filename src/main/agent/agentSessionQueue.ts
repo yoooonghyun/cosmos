@@ -10,12 +10,15 @@
  * Why ONE persistent session id for ALL targets: every Open-Prompt submit — from
  * any panel (Jira, Slack, Confluence, Calendar, Generated UI) — runs against the
  * SAME persistent `claude` session, so every conversation accumulates in the one
- * default-session transcript the Cosmos panel reads. Each run passes
- * `--session-id <persistedId>`: the first run CREATES the session, every later run
- * (this launch AND after relaunch) CONTINUES it, and `claude` records the
- * transcript jsonl on disk for the history reader. The render `target` is decoupled
- * — it governs ONLY which panel a generated surface renders into, never which
- * session a run uses (unified-agent-session-v1 FR-001..FR-003).
+ * default-session transcript the Cosmos panel reads. For headless `claude -p`,
+ * `--session-id <id>` is CREATE-ONLY (it hard-rejects "already in use" once the
+ * session jsonl exists) while `--resume <id>` CONTINUES an existing session. So the
+ * session is CREATED exactly once with `--session-id` (its first run) and every later
+ * run — this launch AND after relaunch, since the id is persisted — CONTINUES it with
+ * `--resume` (see {@link sessionFlagForRun}); `claude` records the transcript jsonl on
+ * disk for the history reader. The render `target` is decoupled — it governs ONLY which
+ * panel a generated surface renders into, never which session a run uses
+ * (unified-agent-session-v1 FR-001..FR-003).
  *
  * Why serialize ALL targets: two concurrent `claude -p --session-id <same id>`
  * collide ("Session ID is already in use"). Because every target now shares the one
@@ -45,6 +48,27 @@ export function selectDefaultSessionId(
     return { sessionId: persistedId, minted: false }
   }
   return { sessionId: mintId(), minted: true }
+}
+
+/**
+ * Pick the CLI flag that continues-or-creates the one persistent default session for a
+ * single headless `claude -p` run (agent-session-id-reuse-resume-v1).
+ *
+ * For `claude -p`, `--session-id <id>` is CREATE-ONLY — once the session jsonl exists it
+ * hard-rejects "Session ID is already in use" — whereas `--resume <id>` CONTINUES an
+ * existing session (rejecting only while a LIVE process still holds the id). So:
+ *
+ * - `sessionExists === false` → `--session-id` (the session must be CREATED — its first run).
+ * - `sessionExists === true`  → `--resume`     (the session already exists on disk — continue it).
+ *
+ * The runner flips its tracked `sessionExists` to `true` after the first create, so the
+ * persisted id is created exactly once and every later run resumes — exactly how the PTY
+ * pane-spawn path selects `--resume` vs `--session-id`.
+ *
+ * Pure: no I/O, no mutation.
+ */
+export function sessionFlagForRun(sessionExists: boolean): '--resume' | '--session-id' {
+  return sessionExists ? '--resume' : '--session-id'
 }
 
 /** What the runner should do with a freshly-received submit. */

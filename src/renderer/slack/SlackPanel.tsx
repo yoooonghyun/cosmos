@@ -76,6 +76,7 @@ import { PanelTabStrip, type PanelTab } from '../tabs/PanelTabStrip'
 import { PanelRefreshButton } from '../generative/PanelRefreshButton'
 import { panelRefreshInputsFor } from '../generative/panelRefreshLogic'
 import { PanelFooter } from '../app/PanelFooter'
+import { SURFACE_ICON } from '../app/surfaceIcons'
 import { ActiveTabSurface } from '../generative/ActiveTabSurface'
 import { usePublishComposer } from '../composer/ActiveComposerProvider'
 import { SurfaceSpinner } from '../app/SurfaceSpinner'
@@ -1725,7 +1726,7 @@ export function SlackPanel({ active }: { active: boolean }): React.JSX.Element {
                 is in flight, until its surface lands (composer-send-animation-v1
                 FR-005/FR-006). Replaces the native base for the duration of the run. */}
             {showSpinner && (
-              <div className="min-h-0 flex-1 overflow-auto p-3 text-card-foreground" role="tabpanel">
+              <div className="min-h-0 flex-1 overflow-auto scrollbar-hover-only p-3 text-card-foreground" role="tabpanel">
                 <SurfaceSpinner />
               </div>
             )}
@@ -1746,7 +1747,7 @@ export function SlackPanel({ active }: { active: boolean }): React.JSX.Element {
                     participates (a lone list fills, N lists equal-split + each scroll). Its parent
                     `@container/slackbody … flex min-h-0 flex-1` gives it a resolved height. */}
                 <div
-                  className="flex min-w-0 flex-1 flex-col overflow-auto p-3 text-card-foreground min-h-0"
+                  className="flex min-w-0 flex-1 flex-col overflow-auto scrollbar-hover-only p-3 text-card-foreground min-h-0"
                   role="tabpanel"
                 >
                   {activeTab.error && (
@@ -1803,7 +1804,7 @@ export function SlackPanel({ active }: { active: boolean }): React.JSX.Element {
       {/* Connection bar is the panel footer (Terminal-unified layout). */}
       <PanelFooter
         surfaceName="Slack"
-        icon={MessageSquare}
+        icon={SURFACE_ICON.slack}
         activeTab={activeStripTab}
         right={
           <ConnectionStatus

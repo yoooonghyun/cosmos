@@ -85,6 +85,12 @@ function getSessionId(args: string[]): string | undefined {
   return idx >= 0 ? args[idx + 1] : undefined
 }
 
+/** Retrieve `--resume` value from a spawn call's args array. */
+function getResume(args: string[]): string | undefined {
+  const idx = args.indexOf('--resume')
+  return idx >= 0 ? args[idx + 1] : undefined
+}
+
 /** Retrieve `-p` utterance from a spawn call's args array. */
 function getUtterance(args: string[]): string | undefined {
   const idx = args.indexOf('-p')
@@ -176,7 +182,9 @@ describe('AgentRunner integration — multi-target serialization', () => {
 // ---------------------------------------------------------------------------
 
 describe('AgentRunner integration — persistent session id across targets', () => {
-  it('passes the same --session-id for generated-ui, jira, slack, and confluence runs in sequence', () => {
+  it('uses --session-id on run #1 then --resume for jira, slack, and confluence runs in sequence (agent-session-id-reuse-resume-v1)', () => {
+    // NEW CONTRACT: run #1 creates the session with --session-id; subsequent runs
+    // continue it with --resume (same session value, different flag).
     const h = makeSerialHarness()
     const targets = ['generated-ui', 'jira', 'slack', 'confluence'] as const
 
@@ -189,13 +197,20 @@ describe('AgentRunner integration — persistent session id across targets', () 
     h.runner.run('d', targets[3])
     h.children[3].emit('close', 0)
 
-    for (const call of h.spawn.mock.calls) {
-      const sid = getSessionId(call[1] as string[])
-      expect(sid).toBe(SESSION_ID)
+    // Run #1 (generated-ui) creates the session.
+    expect(getSessionId(h.spawn.mock.calls[0][1] as string[])).toBe(SESSION_ID)
+    expect(getResume(h.spawn.mock.calls[0][1] as string[])).toBeUndefined()
+    // Runs #2–#4 (jira, slack, confluence) continue the session.
+    for (const call of h.spawn.mock.calls.slice(1)) {
+      const args = call[1] as string[]
+      expect(getResume(args)).toBe(SESSION_ID)
+      expect(getSessionId(args)).toBeUndefined()
     }
   })
 
-  it('passes --session-id even for queued submits that drain later', () => {
+  it('uses --session-id on run #1 then --resume on queued submits that drain later (agent-session-id-reuse-resume-v1)', () => {
+    // NEW CONTRACT: --session-id is CREATE-ONLY. Run #1 creates the session; every later
+    // drained run continues it via --resume so `claude` does not hard-reject "already in use".
     const h = makeSerialHarness()
 
     // Queue two more while the first is in flight
@@ -207,8 +222,13 @@ describe('AgentRunner integration — persistent session id across targets', () 
     h.children[1].emit('close', 0)
     h.children[2].emit('close', 0)
 
-    for (const call of h.spawn.mock.calls) {
-      expect(getSessionId(call[1] as string[])).toBe(SESSION_ID)
+    // Run #1 (x) — creates the session with --session-id.
+    expect(getSessionId(h.spawn.mock.calls[0][1] as string[])).toBe(SESSION_ID)
+    // Runs #2 (y) and #3 (z) — continue the session with --resume.
+    for (const call of h.spawn.mock.calls.slice(1)) {
+      const args = call[1] as string[]
+      expect(getResume(args)).toBe(SESSION_ID)
+      expect(getSessionId(args)).toBeUndefined()
     }
   })
 })
@@ -244,7 +264,7 @@ describe('AgentRunner integration — Session ID already in use (the shipped bug
     expect(h.runner.isRunning).toBe(true)
   })
 
-  it('the second run only starts AFTER the first child closes — zero overlap window', () => {
+  it('the second run only starts AFTER the first child closes — zero overlap window; second run uses --resume (agent-session-id-reuse-resume-v1)', () => {
     const h = makeSerialHarness()
 
     h.runner.run('utterance-one')
@@ -257,33 +277,58 @@ describe('AgentRunner integration — Session ID already in use (the shipped bug
     h.children[0].emit('close', 0)
 
     expect(h.spawn).toHaveBeenCalledTimes(2)
-    // The second run got the SAME session id
-    expect(getSessionId(h.spawn.mock.calls[1][1] as string[])).toBe(SESSION_ID)
+    // Run #1 created the session with --session-id; run #2 continues it with --resume.
+    expect(getSessionId(h.spawn.mock.calls[0][1] as string[])).toBe(SESSION_ID)
+    const secondArgs = h.spawn.mock.calls[1][1] as string[]
+    expect(getResume(secondArgs)).toBe(SESSION_ID)
+    expect(getSessionId(secondArgs)).toBeUndefined()
   })
 
-  it('simulates "Session ID is already in use" error from stderr — runner emits error and drains queue without stalling', () => {
-    // Simulate what happens if (despite the serializer) a child exits with the exact
-    // "Session ID is already in use" stderr. The runner should surface an error status
-    // AND drain the queue so the conversation is not stranded.
-    const SESSION_IN_USE_MSG = 'Session ID is already in use'
+  it('after the retry budget exhausts on "Session ID is already in use", surfaces error and drains queue; queued run uses --resume (agent-session-id-reuse-resume-v1)', () => {
+    // The new code detects "already in use" on stderr and calls planResumeRetry, which
+    // schedules a backoff retry even with the NOOP env. Exhaust the budget so the runner
+    // gives up and surfaces the terminal error, then verify the queued run drains with
+    // --resume (sessionExists was flipped to true on first detection).
+    vi.useFakeTimers()
+    // Must match ALREADY_IN_USE_RE (`Session ID <id> is already in use`) — the id between
+    // "Session ID" and "is" is required, exactly as claude prints it.
+    const SESSION_IN_USE_MSG = `Session ID ${SESSION_ID} is already in use`
 
     const h = makeSerialHarness()
     h.runner.run('first-run')
-    h.runner.run('queued-run') // queued — must not be dropped
+    h.runner.run('queued-run') // queued behind the in-flight run
 
-    // Simulate the in-flight child failing with the session-collision error
-    h.children[0].stderr.emit('data', SESSION_IN_USE_MSG)
-    h.children[0].emit('close', 1) // non-zero exit
+    // Exhaust every retry attempt for 'first-run' only (initial attempt + budget retries).
+    // The loop runs RESUME_RETRY_BACKOFF_MS.length + 1 times:
+    //   i=0: initial failure → plan returns retry[0], schedule timeout
+    //   i=1..N-1: each retry fires → next retry scheduled
+    //   i=N: last retry fires → budget exhausted (attempt=N+1 > backoff.length) → give-up
+    const totalFirstRunAttempts = RESUME_RETRY_BACKOFF_MS.length + 1
+    for (let i = 0; i < totalFirstRunAttempts; i++) {
+      const child = h.children[h.children.length - 1]
+      child.stderr.emit('data', SESSION_IN_USE_MSG)
+      child.emit('close', 1)
+      if (i < RESUME_RETRY_BACKOFF_MS.length) {
+        vi.advanceTimersByTime(RESUME_RETRY_BACKOFF_MS[i])
+      }
+    }
 
-    // The runner must have emitted an error for the failed run
+    // Budget exhausted: runner must surface exactly one terminal error for 'first-run'.
     const errorStatuses = h.statuses.filter((s) => s.state === 'error')
     expect(errorStatuses).toHaveLength(1)
     expect(errorStatuses[0].message).toContain(SESSION_IN_USE_MSG)
 
-    // The queued run must have started (queue drained, conversation not stalled)
-    expect(h.spawn).toHaveBeenCalledTimes(2)
-    expect(getSessionId(h.spawn.mock.calls[1][1] as string[])).toBe(SESSION_ID)
-    expect(getUtterance(h.spawn.mock.calls[1][1] as string[])).toBe('queued-run')
+    // Queue must have drained — queued-run starts after the give-up.
+    // Total spawns = 1 initial + RESUME_RETRY_BACKOFF_MS.length retries + 1 queued drain.
+    expect(h.spawn).toHaveBeenCalledTimes(RESUME_RETRY_BACKOFF_MS.length + 2)
+    const queuedArgs = h.spawn.mock.calls[h.spawn.mock.calls.length - 1][1] as string[]
+    expect(getUtterance(queuedArgs)).toBe('queued-run')
+    // agent-session-id-reuse-resume-v1: sessionExists was set to true when the "already in
+    // use" error was first detected, so the drained run uses --resume, not --session-id.
+    expect(getResume(queuedArgs)).toBe(SESSION_ID)
+    expect(getSessionId(queuedArgs)).toBeUndefined()
+
+    vi.useRealTimers()
   })
 
   it('drains all queued submits even after multiple consecutive session-in-use errors', () => {
@@ -395,8 +440,12 @@ describe('AgentRunner integration — registry-release retry on "already in use"
     // It re-ran with the same session id and the same utterance (the queued one drained first,
     // because the first run completed before the in-use child — here the in-use child IS the
     // first run, so its OWN retry re-spawns 'first-run').
-    expect(getSessionId(h.spawn.mock.calls[1][1] as string[])).toBe(SESSION_ID)
-    expect(getUtterance(h.spawn.mock.calls[1][1] as string[])).toBe('first-run')
+    // agent-session-id-reuse-resume-v1: the "already in use" detection set sessionExists=true,
+    // so the retry uses --resume (not --session-id) to continue the now-known-existing session.
+    const retryArgs = h.spawn.mock.calls[1][1] as string[]
+    expect(getResume(retryArgs)).toBe(SESSION_ID)
+    expect(getSessionId(retryArgs)).toBeUndefined()
+    expect(getUtterance(retryArgs)).toBe('first-run')
 
     vi.useRealTimers()
   })
@@ -513,5 +562,90 @@ describe('AgentRunner integration — dispose clears queue', () => {
     h.children[0].emit('close', 0)
 
     expect(h.spawn).toHaveBeenCalledTimes(1) // only the in-flight run was ever spawned
+  })
+})
+
+// ---------------------------------------------------------------------------
+// 5. agent-session-id-reuse-resume-v1 REGRESSION — new cases
+//
+// These tests MUST FAIL against the old always-`--session-id` code and PASS
+// with the fix. They assert the create-once-then-resume contract at the runner
+// level using the injected spawn arg arrays.
+// ---------------------------------------------------------------------------
+
+/** Build a runner with an explicit sessionAlreadyExists value (not the default). */
+function makeHarnessWithSessionExists(sessionAlreadyExists: boolean, sessionId = SESSION_ID) {
+  const children: FakeChild[] = []
+  const spawn = vi.fn(() => {
+    const c = makeFakeChild()
+    children.push(c)
+    return c
+  }) as unknown as ReturnType<typeof vi.fn>
+  const statuses: AgentStatusPayload[] = []
+  const sinks: AgentRunnerSinks = { onStatus: (p) => statuses.push(p) }
+  const runner = new AgentRunner(sinks, {
+    sandboxDir: SANDBOX,
+    spawn: spawn as unknown as SpawnFn,
+    resolveExecutable: vi.fn(() => true),
+    defaultSessionId: sessionId,
+    sessionAlreadyExists
+  })
+  return { runner, statuses, spawn, children, sessionId }
+}
+
+describe('AgentRunner integration — create-once-then-resume contract (agent-session-id-reuse-resume-v1)', () => {
+  it('a runner with sessionAlreadyExists:true spawns the FIRST run with --resume <id>, NOT --session-id', () => {
+    // REGRESSION: old code always passed --session-id, which hard-rejects "already in use"
+    // for a persisted session id (its jsonl was created by a previous launch).
+    const h = makeHarnessWithSessionExists(true)
+    h.runner.run('first utterance after relaunch')
+
+    expect(h.spawn).toHaveBeenCalledTimes(1)
+    const [, firstArgs] = h.spawn.mock.calls[0]
+    // Must use --resume to continue the existing session.
+    expect(getResume(firstArgs)).toBe(SESSION_ID)
+    // Must NOT use --session-id (would hard-reject "already in use").
+    expect(getSessionId(firstArgs)).toBeUndefined()
+  })
+
+  it('a runner with sessionAlreadyExists:false (freshly minted) uses --session-id on run #1 and --resume on run #2', () => {
+    // REGRESSION: old code used --session-id on BOTH runs; run #2 hard-rejects.
+    const h = makeHarnessWithSessionExists(false)
+
+    h.runner.run('first')
+    const [, firstArgs] = h.spawn.mock.calls[0]
+    // Run #1 must CREATE the session with --session-id.
+    expect(getSessionId(firstArgs)).toBe(SESSION_ID)
+    expect(getResume(firstArgs)).toBeUndefined()
+
+    // Run #1 completes; run #2 starts.
+    h.children[0].emit('close', 0)
+    h.runner.run('second')
+    expect(h.spawn).toHaveBeenCalledTimes(2)
+    const [, secondArgs] = h.spawn.mock.calls[1]
+    // Run #2 must CONTINUE the session with --resume (the session now exists).
+    expect(getResume(secondArgs)).toBe(SESSION_ID)
+    expect(getSessionId(secondArgs)).toBeUndefined()
+  })
+
+  it('a queued run drained after a freshly-minted first run also uses --resume (sessionExists flipped after run #1)', () => {
+    // Queue a second submit while run #1 is in-flight: when it drains it must use --resume.
+    const h = makeHarnessWithSessionExists(false)
+
+    h.runner.run('first')
+    h.runner.run('second-queued') // queued behind in-flight run #1
+
+    // Only first run spawned so far.
+    expect(h.spawn).toHaveBeenCalledTimes(1)
+    expect(getSessionId(h.spawn.mock.calls[0][1] as string[])).toBe(SESSION_ID)
+
+    // First run completes → queued run drains.
+    h.children[0].emit('close', 0)
+    expect(h.spawn).toHaveBeenCalledTimes(2)
+
+    const [, drainedArgs] = h.spawn.mock.calls[1]
+    // Drained run must CONTINUE the session via --resume (session was created by run #1).
+    expect(getResume(drainedArgs)).toBe(SESSION_ID)
+    expect(getSessionId(drainedArgs)).toBeUndefined()
   })
 })

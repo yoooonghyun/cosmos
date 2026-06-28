@@ -63,7 +63,7 @@ export function DocxView({
   }, [paneId, relPath, onRenderError])
 
   return (
-    <div className="min-h-0 flex-1 overflow-auto bg-popover p-4" data-testid="docx-view">
+    <div className="min-h-0 flex-1 overflow-auto scrollbar-hover-only bg-popover p-4" data-testid="docx-view">
       {loading ? <div className="h-full min-h-0 w-full" aria-busy="true" /> : null}
       {/* docx-preview injects its DOM here; a white document surface on the dark popover. */}
       <div ref={containerRef} className="mx-auto bg-white text-black [&_*]:max-w-full" />

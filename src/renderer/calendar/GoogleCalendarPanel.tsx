@@ -72,6 +72,7 @@ import { PanelTabStrip, type PanelTab } from '../tabs/PanelTabStrip'
 import { PanelRefreshButton } from '../generative/PanelRefreshButton'
 import { panelRefreshInputsFor } from '../generative/panelRefreshLogic'
 import { PanelFooter } from '../app/PanelFooter'
+import { SURFACE_ICON } from '../app/surfaceIcons'
 import { ActiveTabSurface } from '../generative/ActiveTabSurface'
 import { usePublishComposer } from '../composer/ActiveComposerProvider'
 import { SurfaceSpinner } from '../app/SurfaceSpinner'
@@ -675,7 +676,7 @@ export function GoogleCalendarPanel({ active }: { active: boolean }): React.JSX.
       />
 
       {/* Content region (the active tab's content). */}
-      <div className="flex min-h-0 flex-1 flex-col overflow-auto">
+      <div className="flex min-h-0 flex-1 flex-col overflow-auto scrollbar-hover-only">
         {!isConnected ? (
           // FR-013: not-connected / reconnect_needed -> the native Connect affordance,
           // rendered as the active tab's content (always one tab present).
@@ -730,7 +731,7 @@ export function GoogleCalendarPanel({ active }: { active: boolean }): React.JSX.
                     height independent of the grid (see below). */}
                 {activeTab && (
                   <div
-                    className="relative flex min-h-0 min-w-0 flex-1 overflow-auto"
+                    className="relative flex min-h-0 min-w-0 flex-1 overflow-auto scrollbar-hover-only"
                     {...(activeTab.loadingDefault ? { 'aria-busy': true } : {})}
                   >
                     <A2UIProvider key={activeTab.id} catalog={googleCalendarCatalog}>
@@ -785,7 +786,7 @@ export function GoogleCalendarPanel({ active }: { active: boolean }): React.JSX.
       {/* Connection bar is the panel footer (Terminal-unified layout). */}
       <PanelFooter
         surfaceName="Calendar"
-        icon={CalendarDays}
+        icon={SURFACE_ICON['google-calendar']}
         activeTab={activeStripTab}
         right={
           <GoogleConnectionStatus

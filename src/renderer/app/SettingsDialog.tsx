@@ -355,14 +355,14 @@ export function SettingsDialog({
           <div className="flex-1 overflow-hidden">
             <TabsContent
               value="general"
-              className="h-full overflow-y-auto px-6 py-5 outline-none"
+              className="h-full overflow-y-auto scrollbar-hover-only px-6 py-5 outline-none"
             >
               <GeneralTab enabled={enabled} liveStatus={liveStatus} />
             </TabsContent>
 
             <TabsContent
               value="slack"
-              className="h-full overflow-y-auto px-6 py-5 outline-none"
+              className="h-full overflow-y-auto scrollbar-hover-only px-6 py-5 outline-none"
               aria-busy={loading}
             >
               <IntegrationTab
@@ -407,7 +407,7 @@ export function SettingsDialog({
 
             <TabsContent
               value="jira"
-              className="h-full overflow-y-auto px-6 py-5 outline-none"
+              className="h-full overflow-y-auto scrollbar-hover-only px-6 py-5 outline-none"
               aria-busy={loading}
             >
               <IntegrationTab
@@ -449,7 +449,7 @@ export function SettingsDialog({
 
             <TabsContent
               value="confluence"
-              className="h-full overflow-y-auto px-6 py-5 outline-none"
+              className="h-full overflow-y-auto scrollbar-hover-only px-6 py-5 outline-none"
               aria-busy={loading}
             >
               <IntegrationTab
@@ -491,7 +491,7 @@ export function SettingsDialog({
 
             <TabsContent
               value="google-calendar"
-              className="h-full overflow-y-auto px-6 py-5 outline-none"
+              className="h-full overflow-y-auto scrollbar-hover-only px-6 py-5 outline-none"
               aria-busy={loading}
             >
               <IntegrationTab

@@ -11,8 +11,8 @@ import {
   SLACK_LAYOUT_FILL_CLASS,
   SLACK_LIST_SCROLL_CLASS,
   SLACK_SURFACE_HOST_CLASS,
-} from '@/slackCatalog/logic'
-import { useSlackScrollToLatest } from '@/useSlackScrollToLatest'
+} from '@/slack/slackCatalog/logic'
+import { useSlackScrollToLatest } from '@/slack/useSlackScrollToLatest'
 
 const ITEM_COUNT = 60
 

@@ -65,7 +65,7 @@ import {
   isDrag,
   stepFollow,
   isSettled,
-  clampCardWithinPanel,
+  resolveCardPlacement,
   resolveLiveAnchor,
   resolveOpenAnchor,
   OPEN_PROMPT_BUTTON_SIZE_PX,
@@ -705,26 +705,30 @@ export function PromptComposer({
     const ro = new ResizeObserver(() => measureCard(el))
     ro.observe(el)
     return () => ro.disconnect()
-    // Re-measure when content that changes the card height toggles: the context chip's presence
-    // and the dismiss state both alter the rendered height. (The first attach-time measurement is
-    // done in `setFormRef`/`measureCard`; this effect handles content-driven size changes.)
-  }, [contextChip, contextDismiss, measureCard])
+    // Re-measure when content that changes the card height toggles (the context chip's presence and
+    // the dismiss state alter the rendered height) AND when the PANEL size changes. The latter is
+    // load-bearing for open-prompt-card-never-opens-v1: the card's `w-full` width derives from the
+    // panel-sized layer, so its FIRST attach-time measure (while `panelRect` is still the pre-layout
+    // 0-box) reads `{0,0}`; re-running here once `panelRect` is measured re-measures the now-sized
+    // form to a real box, flipping it to `anchored` WITHOUT relying on the ResizeObserver firing.
+  }, [contextChip, contextDismiss, panelRect.width, panelRect.height, measureCard])
 
-  // open-prompt-open-at-position-v1 (FR-001/FR-002/FR-007): the expanded card's clamped top-left
-  // in the SAME panel-box px frame as the logo. Anchored bottom-LEFT at the live button anchor
-  // (`logoPx`, frozen at open since the logo is `inert` while expanded — OQ-1 FREEZE), grown UP,
-  // then clamped so the full card box stays inside `panelRect`. Falls back to a 0-box until the
-  // card is measured; the render keeps the card invisible until `cardSize` exists so the
-  // pre-measure frame never flashes off-anchor (hide-until-measured, FR-009).
-  const cardPx = clampCardWithinPanel(
+  // open-prompt-open-at-position-v1 / open-prompt-opens-top-left-v1 / open-prompt-card-never-opens-v1
+  // (FR-001/FR-002/FR-007/FR-009): the expanded card's placement from ONE source of truth
+  // (`resolveCardPlacement`) so the visibility gate, the centered fallback, and the precise transform
+  // can NEVER drift apart. TWO thresholds:
+  //  - `cardShow` (panel measured) — the card may be shown at all. RELIABLE: it does NOT depend on the
+  //    card's own (chicken-and-egg / lagging) measurement, so the card can never be trapped invisible
+  //    ("card never opens"). Below it the card is `invisible` (hide-until-measured).
+  //  - `cardAnchored` (card measured to a real non-zero box) — the precise button-anchored `cardPx`
+  //    is usable. While shown-but-not-yet-anchored the card is centered over the panel via CSS
+  //    (`-translate-1/2`, no card dims), so it is CENTERED, never at the raw top-left anchor.
+  const { show: cardShow, anchored: cardAnchored, px: cardPx } = resolveCardPlacement(
     openAnchor ?? logoPx,
     OPEN_PROMPT_BUTTON_SIZE_PX,
-    cardSize ?? { width: 0, height: 0 },
+    cardSize,
     { width: panelRect.width, height: panelRect.height }
   )
-  // Hide the card until both the panel AND the card are measured (mirrors the logo's
-  // `panelRect.width === 0` gate) so it fades in at the correct anchor instead of at top-left.
-  const cardReady = panelRect.width > 0 && cardSize != null
 
   // Keep the run-status subscription (OQ-1): it now drives the collapsed-logo error ring ONLY
   // (`hasError`). open-prompt-spinner-gating ("non-UI submit must not block"): `running` no
@@ -842,7 +846,11 @@ export function PromptComposer({
         return
       }
       // Enter submits; Shift+Enter inserts a newline (FR-005).
-      if (event.key === 'Enter' && !event.shiftKey) {
+      // IME guard (cosmos-composer-ime-enter-duplicate-char-v1): while an IME is composing,
+      // the Enter that COMMITS the syllable fires keydown with `isComposing` true — submitting
+      // then duplicates the just-committed last character. Ignore it; the commit-Enter only
+      // ends composition, the user presses Enter again to actually send.
+      if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing) {
         event.preventDefault()
         submit()
       }
@@ -1115,18 +1123,32 @@ export function PromptComposer({
             on both axes). Opaque (bg-popover) so tickets do not bleed through the card. The
             positioning wrapper carries the `translate3d(cardPx)` + `center` transform-origin so the
             open/close morph + launch grow-fade emanate from the button's center (FR-002/SC-006); the
-            scale/opacity/blur animation classes are UNCHANGED on the form. Kept invisible until both
-            the panel and the card are measured (`cardReady`) so it never flashes off-anchor (FR-009). */}
+            scale/opacity/blur animation classes are UNCHANGED on the form. Hidden until the PANEL is
+            measured (`cardShow`); centered over the panel until the CARD measures (`cardAnchored`),
+            then button-anchored — so it ALWAYS opens and never flashes off-anchor (FR-009). */}
         <div
-          style={{
-            transform: `translate3d(${cardPx.x}px, ${cardPx.y}px, 0)`,
-            transformOrigin: 'center'
-          }}
+          style={
+            cardAnchored
+              ? { transform: `translate3d(${cardPx.x}px, ${cardPx.y}px, 0)`, transformOrigin: 'center' }
+              : { transformOrigin: 'center' }
+          }
           className={[
             // Width is the card width: `max-w-2xl` capped to the panel width so a card wider
             // than a narrow panel shrinks to fit (and the clamp's degenerate pin stays sane).
-            'absolute left-0 top-0 w-full max-w-2xl',
-            cardReady ? '' : 'invisible'
+            'absolute w-full max-w-2xl',
+            // open-prompt-card-never-opens-v1 + open-prompt-opens-top-left-v1 — three placement
+            // states, NEVER trapping the card invisible and NEVER painting it at the top-left anchor:
+            //  - NOT shown (panel unmeasured): `invisible` (hide-until-measured) + centered fallback.
+            //  - shown but NOT anchored (card not yet measured): VISIBLE + centered over the panel via
+            //    dimension-independent CSS (`left-1/2 top-1/2 -translate-1/2`) — the card OPENS even
+            //    if its own measurement never lands, centered rather than top-left.
+            //  - anchored (card measured): button-anchored `left-0 top-0` + the inline `translate3d`
+            //    above (inline transform wins over the centering classes).
+            !cardShow
+              ? 'invisible left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2'
+              : cardAnchored
+                ? 'left-0 top-0'
+                : 'left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2'
           ].join(' ')}
         >
         <form

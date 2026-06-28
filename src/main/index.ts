@@ -123,6 +123,7 @@ import { SessionStore } from './session/sessionStore'
 import { validateSnapshot } from './session/sessionSnapshot'
 import { AgentRunner } from './agent/agentRunner'
 import { AgentSessionStore } from './agent/agentSessionStore'
+import { provisionSandboxClaudeMd } from './agent/sandboxClaudeMd'
 import { TranscriptReader } from './fs/transcriptReader'
 import { selectDefaultSessionId } from './agent/agentSessionQueue'
 import {
@@ -2160,6 +2161,10 @@ function createWindow(): void {
   // socket the MCP server connects to matches the one main listens on.
   const sandboxDir = resolveSandboxDir()
   sandboxDirCached = sandboxDir
+  // cosmos-timeline-prompt-context-v1 (Decision C / FR-026): provision the embedded agent's
+  // CLAUDE.md into its sandbox cwd so the engine knows how to interpret a trailing
+  // `<cosmos:context>` block. Best-effort — a write failure warns, never blocks startup.
+  provisionSandboxClaudeMd(sandboxDir, { mkdirSync, writeFileSync })
   ptyManager = createPtyManager(mainWindow, sandboxDir)
 
   // session-persistence-v1 (D1/FR-001): plain (unencrypted) JSON snapshot under
@@ -2385,14 +2390,20 @@ function createWindow(): void {
       }
     },
     // cosmos-conversation-panel-v1 (step 2): the persistent default-conversation session
-    // id — the runner passes `--session-id <this>` for the default ('generated-ui') target
-    // and SERIALIZES default-target submits behind any in-flight run (no id collision).
+    // id — every run runs against this id (decoupled from target) and SERIALIZES submits
+    // behind any in-flight run (no id collision).
+    // agent-session-id-reuse-resume-v1: for headless `claude -p`, `--session-id` is
+    // CREATE-ONLY, so the runner CREATES the session once (`--session-id`) and CONTINUES it
+    // with `--resume` thereafter. A persisted (reused) id already exists on disk, so its
+    // FIRST run this launch must resume — pass `sessionAlreadyExists: !minted`; a
+    // freshly-minted id is created on run #1.
     // session-id-already-in-use-runtime-v1: thread the SAME registry env the PTY `--resume`
     // path uses so a queued run drained before the prior child released its registry entry
     // retries on a backoff instead of failing "Session ID is already in use".
     {
       sandboxDir,
       defaultSessionId: defaultSession.sessionId,
+      sessionAlreadyExists: !defaultSession.minted,
       sessionLockEnv: claudeSessionLockEnv
     }
   )

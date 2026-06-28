@@ -25,13 +25,14 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import { SerializeAddon } from '@xterm/addon-serialize'
-import { FolderOpen, Loader2, SquareTerminal } from 'lucide-react'
+import { FolderOpen, Loader2 } from 'lucide-react'
 import '@xterm/xterm/css/xterm.css'
 import type { PtyExitPayload } from '../../shared/ipc'
 import { Button } from '@/components/ui/button'
 import { useExplorerPanes, ResizeDivider, type RestoredOpenFiles } from '../fileExplorer'
 import { PanelTabStrip, type PanelTab } from '../tabs/PanelTabStrip'
 import { PanelFooter } from '../app/PanelFooter'
+import { SURFACE_ICON } from '../app/surfaceIcons'
 import { usePanelTabs } from '../tabs/usePanelTabs'
 import { useTabShortcuts } from '../tabs/useTabShortcuts'
 import { resolveCloseTarget, resolveTabNavTarget } from '../tabs/closeTabRouting'
@@ -168,9 +169,13 @@ function TerminalView({
     isMountedRef.current = true
 
     // Track the cosmos surface tokens so the terminal screen matches every other
-    // `bg-card` panel (bug terminal-panel-tone-mismatch-v1). xterm can't consume a CSS
-    // var, so read the computed `--card` / `--card-foreground` values once here. cosmos
-    // forces `.dark` at startup with no runtime theme switch — see `terminalTheme.ts`.
+    // `bg-card` panel (bug terminal-panel-tone-mismatch-v1) AND its overlay scrollbar matches the
+    // panel scrollbars (terminal-broke-scroll-unify-redo-v1, Task 1 — slider tinted from
+    // `--muted-foreground`). xterm can't consume a CSS var, so read the computed `--card` /
+    // `--card-foreground` / `--muted-foreground` values once here and map them in `terminalTheme.ts`.
+    // The `scrollbarSlider*` keys only set the slider COLOUR (an absolute-positioned overlay), never
+    // the scrollbar WIDTH, so unlike the rolled-back `::-webkit-scrollbar { width }` they cannot
+    // mis-fit cols/rows. cosmos forces `.dark` at startup with no runtime theme switch.
     const rootStyle = getComputedStyle(document.documentElement)
     const term = new Terminal({
       cursorBlink: true,
@@ -800,7 +805,7 @@ export function TerminalPanel({ active }: { active: boolean }): React.JSX.Elemen
           />
         ))}
       </div>
-      <PanelFooter surfaceName="Terminal" icon={SquareTerminal} activeTab={activeStripTab} />
+      <PanelFooter surfaceName="Terminal" icon={SURFACE_ICON.terminal} activeTab={activeStripTab} />
     </section>
   )
 }

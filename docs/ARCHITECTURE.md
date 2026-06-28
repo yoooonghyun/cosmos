@@ -136,6 +136,15 @@ so it never edits the host repo, and is launched with `--mcp-config` so MCP tool
 the project-approval gate. The bridge socket path is threaded to each MCP entry script via an
 env var (`COSMOS_BRIDGE_SOCKET` for both render entry scripts, which share the one `UiBridge`).
 
+Main also **provisions a `CLAUDE.md` into that sandbox cwd** at init
+(`provisionSandboxClaudeMd(resolveSandboxDir())`, `src/main/agent/sandboxClaudeMd.ts`) — Claude Code
+auto-loads a project `CLAUDE.md` from its working dir, so this is the embedded engine's
+project-instruction surface. It is idempotently overwritten every launch (best-effort: a write
+failure warns, never blocks startup) and documents how to interpret the `<cosmos:context>` marker
+(see §4.10): a trailing `<cosmos:context>` block is the user's on-screen context (active panel/tab +
+any open dock item) to READ — not echo or leak — and a Generated-UI result should be built to apply
+to it. It carries only the pinned non-secret field shape (no token/secret/path).
+
 ---
 
 ## 4. Components
@@ -729,6 +738,25 @@ status — never tokens or transcript).
   Terminal PTY, and vice versa; both run the same `claude` binary and read the same `~/.claude`
   login but are separate processes with separate sessions. A failed or un-startable run surfaces an
   error status and leaves the input usable — no hang, no crash.
+- **Prompt context: one source, two channels** (`cosmos-timeline-prompt-context-v1`). At every
+  Open-Prompt submit the renderer captures a non-secret `PromptContext` (`src/shared/promptContext/`)
+  — the active `panel` + `tab` + (when a dock/detail is open) a `dock` that REUSES the literal
+  `ViewContext` item fields — ONCE, then feeds it to TWO channels derived from that single object via
+  `buildAgentSubmitWithMarker`: **(a)** the existing `viewContext` IPC field →
+  `viewContextGroundingClause` → `--append-system-prompt`, **UNCHANGED and authoritative** (the sole
+  grounding the model must obey); and **(b)** an ADDITIVE trailing
+  `\n\n<cosmos:context>{json}</cosmos:context>` marker appended to the `utterance` string (NO IPC wire
+  change — the marker rides inside the utterance), so claude records it in its OWN transcript user
+  turn and it persists across quit/relaunch for free (no separate cosmos store, no correlation, no
+  `SESSION_SCHEMA_VERSION` change). The marker codec (`promptContextMarker.ts`) is a pure shared
+  module: `serialize` is defensive (a wrong-shape/oversized ctx → `''`, the prompt is sent plain);
+  `parse` is trailing-anchored + JSON-validated, and ANY failure (bad JSON, partial fields, dangling
+  tag) degrades to NO context AND still strips the raw marker. The two channels CANNOT disagree
+  (same object) and are INDEPENDENT: channel (a) ALWAYS derives `viewContext` from `ctx.dock` even
+  when the marker is dropped, so a marker failure degrades ONLY the timeline display, never grounding.
+  The Cosmos timeline parses the marker per user-prompt turn in `parseTranscript` (main), attaching
+  `UserPromptTurn.context` + stripping the marker, and renders it as the read-only `PromptContextChip`
+  (§4.x render); the embedded engine reads the block per the sandbox `CLAUDE.md` (§3).
 
 ### 4.11 Panel tabs: VS Code-style tabs within each rail panel (renderer)
 

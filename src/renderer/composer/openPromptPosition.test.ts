@@ -6,6 +6,7 @@ import {
   FOLLOW_HALF_LIFE_MS,
   clampFraction,
   clampCardWithinPanel,
+  resolveCardPlacement,
   resolveLiveAnchor,
   resolveOpenAnchor,
   fractionToPx,
@@ -205,6 +206,41 @@ describe('clampCardWithinPanel — card CENTERED on the button (both axes), clam
     // NaN anchor.x → clampNumber lo = 0; card.width NaN → maxLeft = max(0, 1000-NaN)=NaN→…
     expect(px.x).toBe(0)
     expect(px.y).toBe(0) // +Infinity top, clamped to lo 0
+  })
+})
+
+describe('resolveCardPlacement — show vs anchored thresholds (open-prompt-opens-top-left-v1 + open-prompt-card-never-opens-v1)', () => {
+  const CARD = { width: 400, height: 300 }
+  const ANCHOR = { x: 300, y: 500 }
+
+  it('panel UNMEASURED (width 0) → NOT shown (hide-until-measured), regardless of the card', () => {
+    expect(resolveCardPlacement(ANCHOR, BTN, CARD, { width: 0, height: 0 }).show).toBe(false)
+    expect(resolveCardPlacement(ANCHOR, BTN, null, { width: 0, height: 0 }).show).toBe(false)
+  })
+
+  it('open-prompt-card-never-opens-v1: panel MEASURED but card NOT → SHOWN (never trapped invisible), NOT anchored, px {0,0}', () => {
+    // The card's own measurement is unreliable (chicken-and-egg with the panel-sized layer); `show`
+    // must NOT depend on it or the card never opens. Null AND degenerate {0,0} both stay shown.
+    for (const card of [null, { width: 0, height: 0 }]) {
+      const placement = resolveCardPlacement(ANCHOR, BTN, card, BOX)
+      expect(placement.show).toBe(true) // RED on the old `ready`-only gate (it kept this hidden)
+      expect(placement.anchored).toBe(false)
+      // Not anchored ⇒ px is the {0,0} sentinel the caller never paints (it centers via CSS), and is
+      // NOT the raw anchor (the top-left regression).
+      expect(placement.px).toEqual({ x: 0, y: 0 })
+      expect(placement.px).not.toEqual(ANCHOR)
+    }
+  })
+
+  it('panel AND card measured → shown + anchored → px is the CENTERED-on-button clamp, NOT the anchor', () => {
+    const placement = resolveCardPlacement(ANCHOR, BTN, CARD, BOX)
+    expect(placement.show).toBe(true)
+    expect(placement.anchored).toBe(true)
+    // identical to clampCardWithinPanel: card center coincides with button center.
+    expect(placement.px).toEqual(clampCardWithinPanel(ANCHOR, BTN, CARD, BOX))
+    expect(placement.px).not.toEqual(ANCHOR)
+    expect(placement.px.x + CARD.width / 2).toBeCloseTo(ANCHOR.x + BTN / 2)
+    expect(placement.px.y + CARD.height / 2).toBeCloseTo(ANCHOR.y + BTN / 2)
   })
 })
 

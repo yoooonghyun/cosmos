@@ -348,7 +348,7 @@ function CalendarLegend({
   // chrome itself, so when suppressed (above) there is zero orphaned rail/divider.
   return (
     <aside
-      className="shrink-0 w-44 max-h-full overflow-y-auto pr-3 border-r border-border"
+      className="shrink-0 w-44 max-h-full overflow-y-auto scrollbar-hover-only pr-3 border-r border-border"
       role="group"
       aria-label="Calendars"
     >
@@ -479,7 +479,7 @@ export function GridSkeleton({ view }: { view: CalendarViewKind }): React.JSX.El
 function CalendarLegendSkeleton(): React.JSX.Element {
   return (
     <aside
-      className="shrink-0 w-44 max-h-full overflow-y-auto pr-3 border-r border-border"
+      className="shrink-0 w-44 max-h-full overflow-y-auto scrollbar-hover-only pr-3 border-r border-border"
       aria-hidden="true"
     >
       {/* Rail title placeholder (parity with the "Calendars" heading). */}
@@ -1017,7 +1017,7 @@ function ScheduleView({
     <div className="flex h-full min-h-0 min-w-0 flex-col gap-2" style={{ ['--cal-hour-h' as string]: '2.5rem' }}>
       {nav && <CalendarRangeNav nav={nav} />}
       <div
-        className="flex w-full min-h-0 min-w-0 flex-1 overflow-auto rounded-lg border border-border"
+        className="flex w-full min-h-0 min-w-0 flex-1 overflow-auto scrollbar-hover-only rounded-lg border border-border"
         role="grid"
         aria-label={nav?.rangeLabel ?? 'Schedule'}
       >

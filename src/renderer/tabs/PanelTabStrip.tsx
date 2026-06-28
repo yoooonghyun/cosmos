@@ -251,7 +251,7 @@ export function PanelTabStrip({
       {/* design §2.1: the only scrolling region (overflow-x-auto), `+` is outside it. */}
       <div
         ref={listRef}
-        className="flex min-w-0 flex-1 items-stretch overflow-x-auto overflow-y-hidden"
+        className="flex min-w-0 flex-1 items-stretch overflow-x-auto overflow-y-hidden scrollbar-hover-only"
       >
         {tabs.map((t, index) => {
           const isActive = t.id === activeTabId

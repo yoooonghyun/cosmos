@@ -16,27 +16,15 @@
  * (a thread cannot outlive its channel); the thread badge has its own `×` that drops only
  * the thread. The remove control is `disabled` while `running` (mirrors the Send button).
  */
-import { Calendar, FileText, Hash, MessagesSquare, Ticket, X } from 'lucide-react'
+import { MessagesSquare, X } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import type { ContextChipData } from './viewContextCapture'
-
-/** The lucide icon used for each primary chip kind (echoes each panel's own glyph, design §3). */
-const PRIMARY_ICON = {
-  jira: Ticket,
-  'slack-channel': Hash,
-  confluence: FileText,
-  calendar: Calendar
-} as const
-
-/** An accessible-label prefix per primary kind (design §8 ARIA). */
-const PRIMARY_NOUN = {
-  jira: 'Jira issue',
-  'slack-channel': 'Slack channel',
-  confluence: 'Confluence page',
-  calendar: 'Calendar event'
-} as const
+// cosmos-timeline-prompt-context-v1 (design §6): the per-kind item glyph + ARIA noun maps were
+// lifted into the shared `contextChipIcons` module so the timeline `PromptContextChip` reuses the
+// SAME source (no duplication). The composer chip imports them from there now.
+import { PRIMARY_ICON, PRIMARY_NOUN } from './contextChipIcons'
 
 export interface ContextChipProps {
   /** The display descriptor; undefined ⇒ render nothing (design state A). */

@@ -19,7 +19,7 @@ import {
   SLACK_LAYOUT_FILL_CLASS,
   SLACK_LIST_SCROLL_CLASS,
   SLACK_SURFACE_HOST_CLASS,
-} from '@/slackCatalog/logic'
+} from '@/slack/slackCatalog/logic'
 
 export function ChannelNameAboveListScene() {
   return (

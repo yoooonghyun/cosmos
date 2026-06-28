@@ -50,6 +50,7 @@ import { PanelTabStrip, type PanelTab } from '../tabs/PanelTabStrip'
 import { PanelRefreshButton } from '../generative/PanelRefreshButton'
 import { panelRefreshInputsFor } from '../generative/panelRefreshLogic'
 import { PanelFooter } from '../app/PanelFooter'
+import { SURFACE_ICON } from '../app/surfaceIcons'
 import { ActiveTabSurface } from '../generative/ActiveTabSurface'
 import { usePublishComposer } from '../composer/ActiveComposerProvider'
 import { SurfaceSpinner } from '../app/SurfaceSpinner'
@@ -708,7 +709,7 @@ export function ConfluencePanel({ active }: { active: boolean }): React.JSX.Elem
                 is in flight, until its surface lands (composer-send-animation-v1
                 FR-005/FR-006). Replaces the native base for the duration of the run. */}
             {showSpinner && (
-              <div className="min-h-0 flex-1 overflow-auto p-3 text-card-foreground" role="tabpanel">
+              <div className="min-h-0 flex-1 overflow-auto scrollbar-hover-only p-3 text-card-foreground" role="tabpanel">
                 <SurfaceSpinner />
               </div>
             )}
@@ -719,7 +720,7 @@ export function ConfluencePanel({ active }: { active: boolean }): React.JSX.Elem
               surface (FR-003). Display-only / read-only (FR-012/FR-020).
             */}
             {activeTab && (activeTab.surface || activeTab.error) && (
-              <div className="min-h-0 flex-1 overflow-auto p-3 text-card-foreground" role="tabpanel">
+              <div className="min-h-0 flex-1 overflow-auto scrollbar-hover-only p-3 text-card-foreground" role="tabpanel">
                 {activeTab.error && (
                   <p
                     className="rounded-md border border-destructive/40 bg-destructive/15 px-2.5 py-2 text-[13px] text-destructive"
@@ -807,7 +808,7 @@ export function ConfluencePanel({ active }: { active: boolean }): React.JSX.Elem
       {/* Connection bar is the panel footer (Terminal-unified layout). */}
       <PanelFooter
         surfaceName="Confluence"
-        icon={BookText}
+        icon={SURFACE_ICON.confluence}
         activeTab={activeStripTab}
         right={
           <ConnectionStatus

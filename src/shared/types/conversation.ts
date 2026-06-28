@@ -13,6 +13,7 @@
  */
 
 import type { A2uiSurfaceUpdate } from '../ipc/ui'
+import type { PromptContext } from '../promptContext/promptContext'
 
 /**
  * One ordered item in the conversation timeline (FR-101). A discriminated union keyed
@@ -32,8 +33,16 @@ export interface UserPromptTurn {
   id: string
   /** ISO timestamp for ordering. */
   ts: string
-  /** The prompt text (display-safe; user-authored). */
+  /** The prompt text (display-safe; user-authored). The embedded `<cosmos:context>` marker is
+   *  stripped before this is set, so it shows clean prose (cosmos-timeline-prompt-context-v1,
+   *  FR-019/FR-025). */
   text: string
+  /**
+   * The non-secret screen-context snapshot parsed from this turn's embedded `<cosmos:context>`
+   * marker (cosmos-timeline-prompt-context-v1, FR-019). Present ONLY when a well-formed marker
+   * was found; absent/malformed → omitted (the turn renders as a plain bubble — FR-020/FR-021).
+   */
+  context?: PromptContext
 }
 
 /** An assistant text reply (markdown-ish model output — FR-102). */

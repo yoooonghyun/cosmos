@@ -136,7 +136,7 @@ function ImageView({ paneId, relPath }: { paneId: string; relPath: string }): Re
     return <StateBlock glyph={ImageOff} title="Image unavailable" />
   }
   return (
-    <div className="flex min-h-0 flex-1 items-center justify-center overflow-auto bg-popover p-4">
+    <div className="flex min-h-0 flex-1 items-center justify-center overflow-auto scrollbar-hover-only bg-popover p-4">
       <img
         src={buildLocalFileSrc(paneId, relPath)}
         alt={relPath}

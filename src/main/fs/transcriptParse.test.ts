@@ -1,6 +1,9 @@
 import { describe, it, expect } from 'vitest'
 import { parseTranscript, previewArgs, RENDER_UI_TOOL_NAME } from './transcriptParse'
 import { PREVIEW_MAX_LEN } from '../../shared/types/conversation'
+import { serializePromptContextMarker } from '../../shared/promptContext/promptContextMarker'
+import type { PromptContext } from '../../shared/promptContext/promptContext'
+import type { UserPromptTurn } from '../../shared/types/conversation'
 
 /** Build one transcript jsonl line (object → stringified). */
 function line(obj: Record<string, unknown>): string {
@@ -152,6 +155,95 @@ describe('parseTranscript', () => {
       line({ type: 'user', timestamp: 't', message: { content: 'no id' } })
     ])
     expect(turns).toEqual([])
+  })
+})
+
+// cosmos-timeline-prompt-context-v1: the embedded `<cosmos:context>` marker parse/strip
+// (FR-019/FR-020/FR-025).
+const promptCtx: PromptContext = {
+  panel: { id: 'jira', label: 'Jira' },
+  tab: { id: 't1', label: 'Sprint board' },
+  dock: { kind: 'jira-issue', selectedIssueKey: 'PROJ-123' }
+}
+
+function firstUser(turns: ReturnType<typeof parseTranscript>): UserPromptTurn | undefined {
+  return turns.find((t): t is UserPromptTurn => t.kind === 'user-prompt')
+}
+
+describe('parseTranscript — prompt-context marker (FR-019/FR-020/FR-025)', () => {
+  it('string-content branch attaches the parsed context + strips the marker from text', () => {
+    const user = firstUser(
+      parseTranscript([
+        line({
+          type: 'user',
+          uuid: 'm1',
+          timestamp: 't',
+          message: { content: 'summarize this ticket' + serializePromptContextMarker(promptCtx) }
+        })
+      ])
+    )
+    expect(user?.text).toBe('summarize this ticket')
+    expect(user?.context).toEqual(promptCtx)
+  })
+
+  it('text-block branch attaches the parsed context + strips the marker', () => {
+    const user = firstUser(
+      parseTranscript([
+        line({
+          type: 'user',
+          uuid: 'm2',
+          timestamp: 't',
+          message: {
+            content: [{ type: 'text', text: 'do the thing' + serializePromptContextMarker(promptCtx) }]
+          }
+        })
+      ])
+    )
+    expect(user?.text).toBe('do the thing')
+    expect(user?.context).toEqual(promptCtx)
+  })
+
+  it('a malformed marker → no context, raw marker stripped from display (FR-020/FR-025)', () => {
+    const user = firstUser(
+      parseTranscript([
+        line({
+          type: 'user',
+          uuid: 'm3',
+          timestamp: 't',
+          message: { content: 'real prompt\n\n<cosmos:context>{bad json}</cosmos:context>' }
+        })
+      ])
+    )
+    expect(user?.text).toBe('real prompt')
+    expect(user?.context).toBeUndefined()
+  })
+
+  it('a marker echoed in an ASSISTANT turn is stripped, never surfaced (FR-025)', () => {
+    const turns = parseTranscript([
+      line({
+        type: 'assistant',
+        uuid: 'm4',
+        timestamp: 't',
+        message: {
+          content: [{ type: 'text', text: 'Here you go!' + serializePromptContextMarker(promptCtx) }]
+        }
+      })
+    ])
+    const assistant = turns.find((t) => t.kind === 'assistant-text')
+    expect(assistant && 'text' in assistant ? assistant.text : '').toBe('Here you go!')
+    expect(JSON.stringify(turns)).not.toContain('<cosmos:context>')
+  })
+
+  it('a marker-only user turn (no prose) renders no empty bubble', () => {
+    const turns = parseTranscript([
+      line({
+        type: 'user',
+        uuid: 'm5',
+        timestamp: 't',
+        message: { content: serializePromptContextMarker(promptCtx) }
+      })
+    ])
+    expect(firstUser(turns)).toBeUndefined()
   })
 })
 

@@ -15,8 +15,12 @@ import { ScrollToLatestScene } from './scenes/ScrollToLatestScene'
 import { PdfScene } from './scenes/PdfScene'
 import { ChannelNameAboveListScene } from './scenes/ChannelNameAboveListScene'
 import { DisconnectModalScene } from './scenes/DisconnectModalScene'
+import { ScrollPolicyScene } from './scenes/ScrollPolicyScene'
+import { ComposerGapScene } from './scenes/ComposerGapScene'
 
 const scenes: Record<string, React.ComponentType> = {
+  'scroll-policy': ScrollPolicyScene,
+  'composer-gap': ComposerGapScene,
   'per-list-scroll': PerListScrollScene,
   'scroll-to-latest': ScrollToLatestScene,
   pdf: PdfScene,

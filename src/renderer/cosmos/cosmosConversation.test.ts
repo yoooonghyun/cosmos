@@ -63,4 +63,24 @@ describe('reconcileTimeline', () => {
     const out = reconcileTimeline([userTurn], null)
     expect(out.some((e) => e.kind === 'live-generating' || e.kind === 'live-surface')).toBe(false)
   })
+
+  // cosmos-timeline-prompt-context-v1 (FR-024): the captured PromptContext rides the live
+  // 'generating' entry so the chip appears immediately on submit and stays stable on confirm.
+  it('carries promptContext through to the live-generating entry (FR-024)', () => {
+    const live: LiveInFlight = {
+      phase: 'generating',
+      promptText: 'summarize this ticket',
+      promptContext: {
+        panel: { id: 'jira', label: 'Jira' },
+        tab: { id: 't1', label: 'Sprint board' },
+        dock: { kind: 'jira-issue', selectedIssueKey: 'PROJ-123' }
+      }
+    }
+    const out = reconcileTimeline([userTurn], live)
+    expect(out[1]).toEqual({
+      kind: 'live-generating',
+      promptText: 'summarize this ticket',
+      promptContext: live.promptContext
+    })
+  })
 })

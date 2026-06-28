@@ -139,6 +139,22 @@ describe('PromptComposer docked mode — DOM behavior (CMP-MODE-01)', () => {
     expect(screen.getByRole('textbox')).toBeInTheDocument()
   })
 
+  it('Enter while IME-composing does NOT submit — no duplicate last char (cosmos-composer-ime-enter-duplicate-char-v1)', () => {
+    const onSubmit = vi.fn()
+    render(<DockedHarness onSubmit={onSubmit} />)
+    const textarea = screen.getByRole('textbox') as HTMLTextAreaElement
+
+    fireEvent.change(textarea, { target: { value: '안녕' } })
+    // The commit-Enter fires keydown with isComposing=true; it must be ignored.
+    fireEvent.keyDown(textarea, { key: 'Enter', isComposing: true })
+    expect(onSubmit).not.toHaveBeenCalled()
+
+    // A real Enter (composition finished) submits exactly once.
+    fireEvent.keyDown(textarea, { key: 'Enter' })
+    expect(onSubmit).toHaveBeenCalledTimes(1)
+    expect(onSubmit.mock.calls[0][0]).toBe('안녕')
+  })
+
   it('Esc is INERT: it does NOT remove/collapse the docked input (FR-003/FR-007 / §5)', () => {
     render(<DockedHarness />)
     const textarea = screen.getByRole('textbox') as HTMLTextAreaElement

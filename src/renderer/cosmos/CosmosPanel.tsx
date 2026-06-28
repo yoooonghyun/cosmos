@@ -29,6 +29,8 @@ import { CosmosTimelineEntry } from './CosmosTimelineEntry'
 import { reconcileTimeline, type LiveInFlight } from './cosmosConversation'
 import { initialCosmosTabs, setActiveCosmosTab, closeCosmosTab } from './cosmosTabs'
 import type { Conversation } from '../../shared/types/conversation'
+import { buildAgentSubmitWithMarker } from '../../shared/promptContext/buildAgentSubmit'
+import type { PromptContext } from '../../shared/promptContext/promptContext'
 import type {
   ConversationResult,
   UiRenderPayload,
@@ -62,6 +64,14 @@ export function CosmosPanel({ active }: { active: boolean }): React.JSX.Element 
   const [live, setLive] = useState<LiveInFlight>(null)
   // The last submitted prompt text, shown on the in-flight "generating" affordance.
   const lastPromptRef = useRef<string | undefined>(undefined)
+  // cosmos-timeline-prompt-context-v1 (FR-024): the captured PromptContext for the last submit,
+  // carried alongside lastPromptRef so the `agent:status 'started'` path re-seeds the live entry
+  // with the SAME context the onSubmit seed used (no re-parse of its own marker).
+  const lastPromptContextRef = useRef<PromptContext | undefined>(undefined)
+  // A ref mirror of the tab state so onSubmit reads the CURRENT active tab without re-publishing
+  // the composer config on every tab switch.
+  const tabsStateRef = useRef(tabsState)
+  tabsStateRef.current = tabsState
   const scrollRef = useRef<HTMLDivElement>(null)
 
   // FR-106: fetch the full default-session conversation on mount; subscribe to live pushes
@@ -117,7 +127,11 @@ export function CosmosPanel({ active }: { active: boolean }): React.JSX.Element 
     })
     const offStatus = window.cosmos.agent.onStatus((status: AgentStatusPayload) => {
       if (status.state === 'started') {
-        setLive({ phase: 'generating', promptText: lastPromptRef.current })
+        setLive({
+          phase: 'generating',
+          promptText: lastPromptRef.current,
+          promptContext: lastPromptContextRef.current
+        })
       } else {
         // completed / error: clear the in-flight affordance. On completed, the
         // conversation:update re-read also clears it (idempotent).
@@ -140,11 +154,24 @@ export function CosmosPanel({ active }: { active: boolean }): React.JSX.Element 
     useMemo(
       () => ({
         onSubmit: (utterance: string) => {
+          // cosmos-timeline-prompt-context-v1 (FR-001/FR-006): the Cosmos panel + its active tab,
+          // no dock (the Cosmos panel has no dock/selection). Captured ONCE and fed to the builder
+          // (the marker) AND seeded into the live entry so the chip appears immediately on Enter.
+          const ts = tabsStateRef.current
+          const activeTab = ts.tabs.find((t) => t.id === ts.activeTabId)
+          const promptContext: PromptContext = {
+            panel: { id: 'cosmos', label: 'Cosmos' },
+            ...(activeTab ? { tab: { id: activeTab.id, label: activeTab.label } } : {})
+          }
+          // Keep the RAW (marker-free) utterance for the live bubble text (FR-024).
           lastPromptRef.current = utterance
+          lastPromptContextRef.current = promptContext
           // FR-113: a new in-flight turn appears immediately (the run's 'started' status will
           // also set this, but seeding here makes the prompt bubble appear on Enter).
-          setLive({ phase: 'generating', promptText: utterance })
-          window.cosmos.agent.submit({ utterance, target: 'generated-ui' })
+          setLive({ phase: 'generating', promptText: utterance, promptContext })
+          window.cosmos.agent.submit(
+            buildAgentSubmitWithMarker(utterance, 'generated-ui', promptContext)
+          )
         },
         placeholder: 'Describe the UI you want…',
         ariaLabel: 'Compose generated UI',

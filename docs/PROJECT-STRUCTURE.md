@@ -36,7 +36,9 @@ Grouped into per-domain folders; cross-cutting files stay at the root.
 - `pty/` — `ptyManager.ts` (PTY lifecycle), `paneSpawn.ts`, `processGroupKill.ts`,
   `orphanReaper.ts`, `sessionLockRecovery.ts`
 - `agent/` — `agentRunner.ts` (headless `claude` for utterance→generative-UI runs),
-  `agentSessionStore.ts`, `agentSessionQueue.ts` (+ `agentRunner.integration.test.ts`)
+  `agentSessionStore.ts`, `agentSessionQueue.ts`, `sandboxClaudeMd.ts` (provisions the embedded
+  agent's sandbox-cwd `CLAUDE.md` documenting the `<cosmos:context>` marker) (+
+  `agentRunner.integration.test.ts`, `sandboxClaudeMd.test.ts`)
 - `session/` — `sessionStore.ts`, `sessionSnapshot.ts`
 - `fs/` — the per-tab file-explorer filesystem sandbox (`fsExplorer.ts` list/read/watch,
   `pathConfine.ts` real-path confinement, `fileKind.ts` text/binary/image classification,
@@ -64,7 +66,8 @@ Entry/shell files stay at the root; everything else is grouped by domain/feature
   mounted), `main.tsx`, `index.html`, `index.css`, `App.css`, `vite-env.d.ts`
 - `app/` — app-shell pieces: `railVisibility.ts`, `CosmosMark.tsx`, `CosmosSpinner.tsx`,
   `SurfaceSpinner.tsx`, `PanelFooter.tsx`, `SettingsDialog.tsx`, `settingsStatusDot.ts`,
-  `ContextChip.tsx`, `viewContextCapture.ts`
+  `ContextChip.tsx`, `viewContextCapture.ts`, `contextChipIcons.ts` (the shared per-kind item
+  glyph/noun maps reused by `ContextChip` + the timeline `PromptContextChip`), `surfaceIcons.tsx`
 - `session/` — `SessionProvider.tsx`, `sessionRegistry.ts`, `sessionSnapshot.ts`
 - `tabs/` — VS Code-style tab/nav plumbing: `panelTabs.ts` (pure open/close/label logic),
   `usePanelTabs.ts` (generic controller), `PanelTabStrip.tsx` (reusable strip),
@@ -87,7 +90,8 @@ Entry/shell files stay at the root; everything else is grouped by domain/feature
 - `confluence/` — `ConfluencePanel.tsx` + nested `confluenceCatalog/`
 - `atlassian/` — `atlassianPanelBits.tsx` (shared Jira + Confluence panel bits)
 - `calendar/` — `GoogleCalendarPanel.tsx`, `calendarNavLogic.ts` + nested `googleCalendarCatalog/`
-- `cosmos/` — `CosmosPanel.tsx`, `cosmosConversation.ts`, `cosmosTabs.ts`, `CosmosTimelineEntry.tsx`
+- `cosmos/` — `CosmosPanel.tsx`, `cosmosConversation.ts`, `cosmosTabs.ts`, `CosmosTimelineEntry.tsx`,
+  `PromptContextChip.tsx` (the read-only timeline prompt-context breadcrumb chip)
 - `confirm/` — `confirmLogic.ts`, `useConfirm.ts`
 - `fileExplorer/` — the per-tab 3-column terminal/viewer/tree layout (the `useExplorerPanes` hook +
   `FileTree`/`FileViewer`/`FileTabStrip`/`ResizeDivider` components, the `useFileExplorer` hook, the
@@ -117,5 +121,12 @@ stay stable (rollup input keys + `mcpConfig.ts` runtime `join(__dirname, 'mcp/<n
   (`common`/`pty`/`ui`/`agent`/`shortcut`/`slack`/`jira`/`confluence`/`googleCalendar`/`session`/
   `settings`/`conversation`, each with a sibling `*.validate.ts`) — UNCHANGED grouping
 - `types/` — per-integration + generative-contract types: `jira.ts`, `slack.ts`, `confluence.ts`,
-  `googleCalendar.ts`, `googleCalendarColor.ts`, `adapter.ts`, `conversation.ts`,
-  `dataBearingSpec.ts`
+  `googleCalendar.ts`, `googleCalendarColor.ts`, `adapter.ts`, `conversation.ts`
+  (`UserPromptTurn.context` carries the parsed prompt-context), `dataBearingSpec.ts`
+- `promptContext/` — the pure, shared prompt-context contract + codec
+  (`cosmos-timeline-prompt-context-v1`): `promptContext.ts` (the `PromptContext` type — `panel`/
+  `tab`/`dock`, extends `ViewContext`), `promptContextMarker.ts` (serialize/parse+strip the trailing
+  `<cosmos:context>` marker, `MARKER_RE`, `DOCK_KIND_BY_PANEL`), `buildAgentSubmit.ts`
+  (`buildAgentSubmitWithMarker` — the one-source-two-channels submit chokepoint) (+
+  `promptContextMarker.test.ts`, `buildAgentSubmit.test.ts`). No renderer/Electron/`Buffer` deps —
+  imported by main, preload, and renderer.

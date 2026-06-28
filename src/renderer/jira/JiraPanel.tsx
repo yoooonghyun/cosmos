@@ -48,6 +48,7 @@ import { PanelTabStrip, type PanelTab } from '../tabs/PanelTabStrip'
 import { PanelRefreshButton } from '../generative/PanelRefreshButton'
 import { panelRefreshInputsFor } from '../generative/panelRefreshLogic'
 import { PanelFooter } from '../app/PanelFooter'
+import { SURFACE_ICON } from '../app/surfaceIcons'
 import { ActiveTabSurface } from '../generative/ActiveTabSurface'
 import { usePublishComposer } from '../composer/ActiveComposerProvider'
 import { SurfaceSpinner } from '../app/SurfaceSpinner'
@@ -657,7 +658,7 @@ export function JiraPanel({ active }: { active: boolean }): React.JSX.Element {
       )}
 
       {/* Content region (the active tab's content). */}
-      <div className="flex min-h-0 flex-1 flex-col overflow-auto">
+      <div className="flex min-h-0 flex-1 flex-col overflow-auto scrollbar-hover-only">
         {!isConnected ? (
           // FR-016: not-connected / reconnect_needed -> the native Connect affordance,
           // rendered as the active tab's content (always one tab present).
@@ -684,7 +685,7 @@ export function JiraPanel({ active }: { active: boolean }): React.JSX.Element {
           // only when `detailIssueKey != null` — overlay drawer below `32rem`, side-by-side at
           // `@[32rem]/jirabody` (container query gated on THIS panel's width, not the viewport).
           <div className="@container/jirabody relative flex min-h-0 flex-1">
-            <div className="min-w-0 flex-1 overflow-auto p-3 text-card-foreground" role="tabpanel">
+            <div className="min-w-0 flex-1 overflow-auto scrollbar-hover-only p-3 text-card-foreground" role="tabpanel">
               {/* Per-tab loading skeleton over the DATA REGION only (the panel chrome — tab
                   strip, JQL/search row, composer, footer — renders outside this content div, so
                   it stays visible). Shown for the initial default-view read, an in-place JQL
@@ -771,7 +772,7 @@ export function JiraPanel({ active }: { active: boolean }): React.JSX.Element {
       {/* Connection bar is the panel footer (Terminal-unified layout). */}
       <PanelFooter
         surfaceName="Jira"
-        icon={SquareKanban}
+        icon={SURFACE_ICON.jira}
         activeTab={activeStripTab}
         right={
           <ConnectionStatus

@@ -364,6 +364,18 @@ detail.
   (`usePublishComposer('cosmos', …)`) but submits + filters `ui:render` on the WIRE target
   `'generated-ui'`. Renaming the wire target or the persisted snapshot key breaks render routing
   + session restore.
+- **Headless `claude -p --session-id <id>` is CREATE-ONLY, NOT create-or-continue.** Once the
+  session jsonl exists, re-passing `--session-id <same id>` HARD-rejects `Session ID <id> is already
+  in use` (this is the `claude -p` behaviour; do NOT trust the older PTY comments that call
+  `--session-id` "create-or-continue"). The persistent default-conversation id is created ONCE and
+  CONTINUED with `--resume` thereafter. `AgentRunner` picks the flag via
+  `sessionFlagForRun(sessionExists)` (`agentSessionQueue.ts`): seeded from `sessionAlreadyExists:
+  !defaultSession.minted` (a persisted id ⇒ session already on disk ⇒ resume from run #1) and flipped
+  `true` after the first spawn (create once, resume after). The `planResumeRetry` backoff only frees
+  a stale LIVE-pid registry holder — it CANNOT fix an already-existing-on-disk session, so a wrong
+  `--session-id` reuse loops forever. Gotcha: `isAlreadyInUseError`'s regex requires the id token
+  (`/Session ID\s+\S+\s+is already in use/i`) — a stub stderr missing the id silently skips the retry
+  path. Bug `agent-session-id-reuse-resume-v1`.
 - **All `~/.claude` access is MAIN-only and CONFINED to one path.** `transcriptReader.ts` resolves
   exactly `~/.claude/projects/<dir-key>/<defaultSessionId>.jsonl` — `<dir-key>` DERIVED from the
   stable sandbox cwd (`resolveSandboxDir()`) by replacing `/`+`.`→`-` (`encodeProjectDirKey`),
@@ -504,6 +516,12 @@ single new `window.cosmos.session` namespace in `src/shared/ipc.ts` (`session:lo
   spinner never cleared (terminal-picker-spinner-hang-v1). Fix: `isMountedRef.current = true` as the
   first line of the effect body; keep the `false` in cleanup. Same dev-only-symptom / real-defect
   caveat as above.
+- **Any keydown-Enter-to-submit on a text input MUST guard `!event.nativeEvent.isComposing`.**
+  With an IME (Korean/Japanese/…), the Enter that COMMITS the composing syllable fires a `keydown`
+  with `isComposing === true` (keyCode 229); submitting on it duplicates the just-committed last
+  character. `PromptComposer.tsx`'s `handleKeyDown` Enter branch hit this
+  (cosmos-composer-ime-enter-duplicate-char-v1) — ASCII-only typing never reproduces it. Ignore the
+  composing-Enter; the user presses Enter again (composition ended) to actually send.
 
 ## Styling (Tailwind v4 + shadcn)
 
@@ -578,6 +596,18 @@ single new `window.cosmos.session` namespace in `src/shared/ipc.ts` (`session:lo
   reader. Never hardcode the screen hex (it silently desyncs from the token + can't follow a theme).
   cosmos forces `.dark` once at startup (`main.tsx`) with no runtime toggle, so a one-shot read is
   correct; a future toggle would re-read + re-set `term.options.theme`.
+- **Theme the xterm scrollbar via `theme.scrollbarSlider*`, NEVER `::-webkit-scrollbar { width }`**
+  (terminal-broke-scroll-unify-redo-v1). xterm 6 draws a VS-Code-style OVERLAY scrollbar
+  (`.xterm-scrollable-element > .scrollbar > .slider`), styled purely by the `Terminal` theme keys
+  `scrollbarSliderBackground` / `scrollbarSliderHoverBackground` / `scrollbarSliderActiveBackground`.
+  `terminalTheme.ts` maps `--muted-foreground` into these at the panel scrollbar opacities (45%
+  rest / 70% hover via `withAlpha`, node-tested) so the terminal bar matches every panel surface.
+  These are COLOUR-only — the slider is `position:absolute`, so they never change the scrollbar
+  WIDTH. Critical: do NOT add `.xterm-viewport::-webkit-scrollbar { width: … }` — that switches the
+  viewport to a CLASSIC (layout-consuming) bar, shrinking the usable width; xterm's FitAddon also
+  reserves a CONSTANT gutter (`overviewRuler?.width || 14`, not the measured bar), so the two
+  disagree and cols/rows mis-fit ⇒ the terminal screen renders broken ("화면 깨짐"). The earlier
+  width-based attempt was rolled back for exactly this reason — keep scrollbar theming to colour.
 - **Rich Confluence HTML renders via `prose-cosmos` + a single sanitized `dangerouslySetInnerHTML`.**
   Confluence page detail carries server-rendered `body-format=view` HTML; the shared `PageDetailBody`
   (`confluenceCatalog/components.tsx`, reused by the native `ConfluencePanel` detail AND the gen-UI

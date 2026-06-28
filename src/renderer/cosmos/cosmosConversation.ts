@@ -18,6 +18,7 @@
  */
 
 import type { ConversationTurn } from '../../shared/types/conversation'
+import type { PromptContext } from '../../shared/promptContext/promptContext'
 
 /**
  * The current LIVE in-flight turn, derived by the panel from the `ui:render` /
@@ -29,8 +30,14 @@ import type { ConversationTurn } from '../../shared/types/conversation'
  *  - `null` — no run in flight (the timeline is purely the transcript).
  */
 export type LiveInFlight =
-  | { phase: 'generating'; promptText?: string }
-  | { phase: 'surface'; requestId: string; spec: import('../../shared/ipc/ui').A2uiSurfaceUpdate; promptText?: string }
+  | { phase: 'generating'; promptText?: string; promptContext?: PromptContext }
+  | {
+      phase: 'surface'
+      requestId: string
+      spec: import('../../shared/ipc/ui').A2uiSurfaceUpdate
+      promptText?: string
+      promptContext?: PromptContext
+    }
   | null
 
 /**
@@ -42,7 +49,7 @@ export type LiveInFlight =
  */
 export type TimelineEntry =
   | { kind: 'turn'; turn: ConversationTurn }
-  | { kind: 'live-generating'; promptText?: string }
+  | { kind: 'live-generating'; promptText?: string; promptContext?: PromptContext }
   | { kind: 'live-surface'; requestId: string; spec: import('../../shared/ipc/ui').A2uiSurfaceUpdate }
 
 /**
@@ -66,7 +73,11 @@ export function reconcileTimeline(
     return entries
   }
   if (live.phase === 'generating') {
-    entries.push({ kind: 'live-generating', promptText: live.promptText })
+    entries.push({
+      kind: 'live-generating',
+      promptText: live.promptText,
+      promptContext: live.promptContext
+    })
     return entries
   }
   // live.phase === 'surface': suppress if the transcript already carries this exact surface

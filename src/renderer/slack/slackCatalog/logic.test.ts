@@ -967,7 +967,12 @@ describe('SLACK_SURFACE_HOST_CLASS (v2 tabpanel host = definite-height flex colu
     const panelSrc = readFileSync(new URL('../SlackPanel.tsx', import.meta.url), 'utf8')
     const hostLine = panelSrc
       .split('\n')
-      .find((l) => l.includes('overflow-auto p-3 text-card-foreground') && l.includes('flex-col'))
+      .find(
+        (l) =>
+          l.includes('text-card-foreground') &&
+          l.includes('overflow-auto') &&
+          l.includes('flex-col')
+      )
     expect(hostLine, 'a tabpanel host div should carry flex + flex-col + min-h-0').toBeDefined()
     expect(hostLine).toContain('flex')
     expect(hostLine).toContain('flex-col')

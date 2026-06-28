@@ -28,8 +28,23 @@
 /** Wrap-enabling override applied to the Radix viewport's inner content div. */
 export const SCROLL_AREA_VIEWPORT_CONTENT_FIX = '[&>div]:!block [&>div]:!min-w-full'
 
-/** Full className for the `ScrollArea.Viewport` (base styling + the wrap fix). */
+/**
+ * scrollbar-policy-unify-renderer-v1: reserve the SAME right-side inset the CSS
+ * `scrollbar-hover-only` regions reserve via `scrollbar-gutter: stable` (the platform
+ * classic-scrollbar width — 10px on the macOS/Chromium target), so a Radix ScrollArea and a
+ * plain `overflow-auto scrollbar-hover-only` div inset their content IDENTICALLY (uniform
+ * CONTENT WIDTH, not just a uniform bar). Radix hides the native bar and draws an overlay, so
+ * it reserves nothing by default; `pr-2.5` (10px) supplies the matching inset and the overlay
+ * thumb floats within it on hover. (`scrollbar-gutter` can't be used here — the native bar is
+ * suppressed by Radix.) `pr-2` (8px) matches the CSS region's measured content-edge inset
+ * (verified equal in the scroll-policy harness scene); this is a macOS Electron app.
+ */
+export const SCROLL_AREA_VIEWPORT_GUTTER = 'pr-2'
+
+/** Full className for the `ScrollArea.Viewport` (base styling + the wrap fix + uniform gutter). */
 export const SCROLL_AREA_VIEWPORT_CLASS =
   'size-full rounded-[inherit] transition-[color,box-shadow] outline-none ' +
   'focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-1 ' +
+  SCROLL_AREA_VIEWPORT_GUTTER +
+  ' ' +
   SCROLL_AREA_VIEWPORT_CONTENT_FIX

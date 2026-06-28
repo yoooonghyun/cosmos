@@ -16,7 +16,11 @@
  * Concurrency (unified-agent-session-v1): all targets share ONE persistent session
  * id, so runs are mutually exclusive and SERIALIZE app-wide. A `run()` received while
  * a run is in flight is ENQUEUED (FIFO) and drained when the in-flight run completes —
- * never dropped, never overlapping on `--session-id`.
+ * never dropped, never overlapping on the shared session id.
+ *
+ * Session continuation (agent-session-id-reuse-resume-v1): for headless `claude -p`,
+ * `--session-id` is CREATE-ONLY, so the session is CREATED once (`--session-id`) and
+ * CONTINUED by every later run with `--resume` — mirroring the PTY pane-spawn reuse.
  *
  * Spec trace: .sdd/specs/generative-ui-foundation-v1.md
  *   FR-005 spawn the `claude` binary headless (`claude -p`), inherit `~/.claude`
@@ -32,7 +36,7 @@ import { spawn as nodeSpawn, type ChildProcess } from 'node:child_process'
 import { isExecutableResolvable } from '../pty/ptyManager'
 import { allowedToolForTarget, groundingPromptForTarget, renderMcpConfigJsonForTarget } from '../mcpConfig'
 import { viewContextGroundingClause } from '../generative/viewContextGrounding'
-import { decideSubmit } from './agentSessionQueue'
+import { decideSubmit, sessionFlagForRun } from './agentSessionQueue'
 import {
   isAlreadyInUseError,
   planResumeRetry,
@@ -72,16 +76,31 @@ export interface AgentRunnerOptions {
   resolveExecutable?: (command: string) => boolean
   /**
    * unified-agent-session-v1 (extends cosmos-conversation-panel-v1 step 2): the
-   * PERSISTENT, create-or-continue session id for the ONE unified conversation. When
-   * set, EVERY run — regardless of render target — passes `--session-id <this>` so
-   * all panels' Open-Prompt conversations accumulate in ONE continuous `claude`
-   * session (each submit builds on the prior context) and `claude` RECORDS the
-   * transcript jsonl on disk that the Cosmos panel reads; the caller persists this id
-   * so it survives relaunch. The session id is DECOUPLED from the render `target`
+   * PERSISTENT session id for the ONE unified conversation. When set, EVERY run —
+   * regardless of render target — runs against this id so all panels' Open-Prompt
+   * conversations accumulate in ONE continuous `claude` session (each submit builds on
+   * the prior context) and `claude` RECORDS the transcript jsonl on disk that the
+   * Cosmos panel reads; the caller persists this id so it survives relaunch.
+   *
+   * agent-session-id-reuse-resume-v1: for headless `claude -p`, `--session-id` is
+   * CREATE-ONLY, so the session is CREATED exactly once (the first run, `--session-id`)
+   * and CONTINUED by every later run with `--resume` (see {@link sessionFlagForRun} and
+   * {@link sessionAlreadyExists}). The session id is DECOUPLED from the render `target`
    * (the target governs only which panel a surface renders into — FR-001..FR-003).
-   * Omit (undefined) to keep the pre-feature ephemeral behaviour (no `--session-id`).
+   * Omit (undefined) to keep the pre-feature ephemeral behaviour (no session flag).
    */
   defaultSessionId?: string
+  /**
+   * agent-session-id-reuse-resume-v1: whether {@link defaultSessionId}'s session ALREADY
+   * exists on disk when this runner is constructed. The caller passes `true` for a
+   * persisted (relaunch-reused) id — its jsonl was created by an earlier launch, so the
+   * FIRST run must CONTINUE it with `--resume`, not re-create it with the create-only
+   * `--session-id` (which would hard-reject "already in use"). Passes `false` for a
+   * freshly-minted id (the runner creates it with `--session-id` on run #1, then resumes).
+   * Tracked mutably: it flips to `true` after the first run, so creation happens exactly
+   * once. Defaults to `false`. Ignored when `defaultSessionId` is undefined.
+   */
+  sessionAlreadyExists?: boolean
   /**
    * session-id-already-in-use-runtime-v1: injected registry env so the runner can survive the
    * registry-release window. When a queued run is drained the instant the previous `claude` child
@@ -132,6 +151,13 @@ export class AgentRunner {
   private readonly resolveExecutable: (command: string) => boolean
   /** Persistent default-conversation session id, or undefined (ephemeral). */
   private readonly defaultSessionId?: string
+  /**
+   * agent-session-id-reuse-resume-v1: whether {@link defaultSessionId}'s session exists on
+   * disk. MUTABLE — selects `--session-id` (create) vs `--resume` (continue) per run and
+   * flips to `true` after the first create, so the id is created exactly once and every
+   * later run resumes (mirrors the PTY `--resume` reuse).
+   */
+  private sessionExists: boolean
   /** Injected registry env for the registry-release retry (defaults to a no-op empty registry). */
   private readonly sessionLockEnv: SessionLockEnv
 
@@ -156,6 +182,7 @@ export class AgentRunner {
     this.spawn = options.spawn ?? nodeSpawn
     this.resolveExecutable = options.resolveExecutable ?? isExecutableResolvable
     this.defaultSessionId = options.defaultSessionId
+    this.sessionExists = options.sessionAlreadyExists ?? false
     this.sessionLockEnv = options.sessionLockEnv ?? NOOP_SESSION_LOCK_ENV
   }
 
@@ -247,15 +274,19 @@ export class AgentRunner {
       'json'
     ]
 
-    // unified-agent-session-v1: EVERY run (regardless of target) passes the PERSISTENT
-    // `--session-id` so the FIRST run creates the session and every later run (this
-    // launch AND after relaunch) CONTINUES it — one continuous conversation across all
-    // panels + a recorded transcript jsonl the Cosmos panel reads. `--session-id <id>`
-    // is create-or-continue, the same flag the terminal pane-spawn reuse uses. The
-    // session id is DECOUPLED from `target`; only its absence (no defaultSessionId)
-    // keeps the pre-feature ephemeral behaviour.
+    // unified-agent-session-v1: EVERY run (regardless of target) runs against the one
+    // PERSISTENT session id so all panels' conversations accumulate in one continuous
+    // `claude` session + a recorded transcript jsonl the Cosmos panel reads.
+    // agent-session-id-reuse-resume-v1: for headless `claude -p`, `--session-id` is
+    // CREATE-ONLY (hard-rejects "already in use" once the jsonl exists), so the session is
+    // CREATED exactly once (`--session-id`, when it does not yet exist) and CONTINUED by
+    // every later run (`--resume`) — exactly how the terminal pane-spawn path reuses a
+    // session. We flip `sessionExists` to `true` after the first run so creation happens
+    // once. The session id is DECOUPLED from `target`; only its absence (no
+    // defaultSessionId) keeps the pre-feature ephemeral behaviour (no session flag).
     if (this.defaultSessionId !== undefined) {
-      args.push('--session-id', this.defaultSessionId)
+      args.push(sessionFlagForRun(this.sessionExists), this.defaultSessionId)
+      this.sessionExists = true
     }
 
     // Per-target grounding (jira): force the run to render only REAL fetched tickets and
@@ -341,6 +372,12 @@ export class AgentRunner {
         this.defaultSessionId !== undefined &&
         isAlreadyInUseError(`${stderr}\n${stdout}`)
       ) {
+        // agent-session-id-reuse-resume-v1 safety net: an "already in use" rejection PROVES the
+        // session exists on disk. If this run was mis-classified as a create (`--session-id` on an
+        // already-existing session), force every retry — and every later run — to CONTINUE with
+        // `--resume`. `--resume` only rejects while a LIVE process holds the id, so the existing
+        // live-holder backoff below remains the safety net for that (genuinely transient) case.
+        this.sessionExists = true
         const nextAttempt = (submit.inUseAttempts ?? 0) + 1
         const plan = planResumeRetry(this.defaultSessionId, nextAttempt, this.sessionLockEnv)
         if (plan.action === 'retry') {

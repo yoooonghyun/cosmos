@@ -168,6 +168,59 @@ export function clampCardWithinPanel(
 }
 
 /**
+ * open-prompt-opens-top-left-v1 / open-prompt-card-never-opens-v1 — the floating composer card's
+ * placement decision, the SINGLE source of truth for the .tsx so the visibility gate, the centered
+ * fallback, and the precise transform can never drift apart. It encodes TWO independent thresholds
+ * (conflating them caused the two paired regressions):
+ *
+ *  - `show` (panel-measured) — whether the card may be SHOWN at all. Gated ONLY on the panel
+ *    content box being measured (`width > 0`), which is RELIABLE (the panel measure effect + its
+ *    ResizeObserver). The "card never opens" regression came from ALSO gating show on the CARD
+ *    measurement: the card's `w-full` width derives from the panel-sized layer, so it measures
+ *    `{0,0}` until the panel is sized and may never re-measure to non-zero — trapping `show` false
+ *    forever. Show must NOT depend on the card measuring.
+ *  - `anchored` (card-measured) — whether the PRECISE button-anchored `px` is usable, which needs
+ *    the card's real box. Until the card measures (null / degenerate `{0,0}`), the caller centers
+ *    the card over the panel via dimension-independent CSS, so a shown-but-not-yet-anchored card is
+ *    CENTERED, never at the raw top-left anchor (the top-left regression).
+ *
+ * So: hidden until the panel is measured; once shown, centered-over-panel until the card measures,
+ * then button-anchored. The card therefore ALWAYS opens (panel measure is reliable) and NEVER
+ * flashes at top-left. `px` is meaningful ONLY when `anchored`. Pure.
+ */
+export interface CardPlacement {
+  /** The card may be shown — the PANEL content box is measured. Below this: hidden-until-measured. */
+  show: boolean
+  /** The precise button-anchored `px` is usable — the CARD measured a real non-zero box. When
+   *  `show && !anchored` the caller centers the card over the panel via CSS instead. */
+  anchored: boolean
+  /** Button-anchored, clamped top-left px — VALID ONLY when `anchored` (else `{0,0}`, do not paint). */
+  px: PixelPoint
+}
+
+export function resolveCardPlacement(
+  anchor: PixelPoint,
+  buttonSize: number,
+  cardSize: CardSize | null,
+  panel: PanelBox
+): CardPlacement {
+  // Mirror the logo's `panelRect.width === 0` gate: a hidden / not-yet-laid-out panel measures a
+  // 0-box. The card SHOWS as soon as the panel is measured — INDEPENDENT of the card's own (often
+  // lagging / chicken-and-egg) measurement, so it can never be trapped permanently invisible.
+  const show = panel.width > 0
+  // The precise button-anchored px needs a REAL non-zero card box — a null OR degenerate `{0,0}`
+  // `cardSize` is exactly what made the old default skip the `-cardW/2` centering offset and
+  // collapse the clamped top-left onto the raw anchor. Until then the caller uses the CSS centered
+  // fallback (which needs no card dims), so a shown card is centered, never top-left.
+  const anchored = show && cardSize != null && cardSize.width > 0 && cardSize.height > 0
+  return {
+    show,
+    anchored,
+    px: anchored ? clampCardWithinPanel(anchor, buttonSize, cardSize, panel) : { x: 0, y: 0 }
+  }
+}
+
+/**
  * open-prompt-open-at-position-v1 (mid-settle open fix) — resolve the button's LIVE pixel
  * anchor at an interaction (a re-grab OR a click-to-open), choosing between the animated
  * follow position and the resting position derived from the committed fraction.

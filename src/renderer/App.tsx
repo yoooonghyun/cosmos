@@ -1,7 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
 import { Settings } from 'lucide-react'
-import { SiConfluence, SiGooglecalendar, SiJira, SiSlack } from 'react-icons/si'
-import { siClaudecode } from 'simple-icons'
 import { Button } from '@/components/ui/button'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip'
@@ -14,15 +12,12 @@ import { ConfluencePanel } from './confluence/ConfluencePanel'
 import { GoogleCalendarPanel } from './calendar/GoogleCalendarPanel'
 import { SettingsDialog } from './app/SettingsDialog'
 import { CosmosSpinner } from './app/CosmosSpinner'
+import { SharedComposer } from './app/SharedComposer'
 import { SessionProvider, useEnabledIntegrations, useLoadSession } from './session/SessionProvider'
 import { OpenPromptPositionProvider } from './composer/OpenPromptPositionProvider'
-import {
-  ActiveComposerProvider,
-  useActiveComposerConfig
-} from './composer/ActiveComposerProvider'
-import { PromptComposer } from './composer/PromptComposer'
-import { composerModeForSurface } from './composer/activeComposer'
+import { ActiveComposerProvider } from './composer/ActiveComposerProvider'
 import { resolveFallbackSurface, visibleSurfaceIds, type SurfaceId } from './app/railVisibility'
+import { SURFACE_ICON, type RailIcon } from './app/surfaceIcons'
 import './App.css'
 
 /**
@@ -38,43 +33,27 @@ import './App.css'
  * regardless, so a re-enable is instant). `SurfaceId` is the shared rail type.
  */
 
-// Icons mix the inline CosmosMark (Cosmos brand sparkle), react-icons/si brand logos
-// (Jira/Confluence/Slack/Google Calendar), and the Claude Code logo from simple-icons (its own
-// mark, distinct from the Claude sunburst). All render an SVG that accepts
-// `className` and inherits `currentColor`, so the rail's active/idle color cascade
-// is identical; type the slot as a className-accepting component.
-type RailIcon = React.ComponentType<{ className?: string }>
-
-// simple-icons ships raw SVG path data (no React component), so wrap the Claude
-// Code mark in a currentColor SVG matching the react-icons/lucide contract.
-const ClaudeCodeIcon: RailIcon = ({ className }) => (
-  <svg role="img" viewBox="0 0 24 24" className={className} fill="currentColor" aria-hidden>
-    <path d={siClaudecode.path} />
-  </svg>
-)
-
-// Cosmos rail glyph: the `cosmos-small-white.svg` four-point sparkle, MONOCHROME — the colored
-// background rect + radial gradient are dropped and the mark is `fill="currentColor"` so it tracks
-// the rail's active/idle color cascade exactly like the other rail icons (not the pastel brand mark).
-const CosmosGlyphIcon: RailIcon = ({ className }) => (
-  <svg role="img" viewBox="80 80 352 352" className={className} fill="currentColor" aria-hidden>
-    <g transform="translate(256,256) scale(2.78)">
-      <path d="M 0.00 -60.00 Q 9.55 -47.99 9.18 -22.17 Q 27.18 -40.68 42.43 -42.43 Q 40.68 -27.18 22.17 -9.18 Q 47.99 -9.55 60.00 0.00 Q 47.99 9.55 22.17 9.18 Q 40.68 27.18 42.43 42.43 Q 27.18 40.68 9.18 22.17 Q 9.55 47.99 0.00 60.00 Q -9.55 47.99 -9.18 22.17 Q -27.18 40.68 -42.43 42.43 Q -40.68 27.18 -22.17 9.18 Q -47.99 9.55 -60.00 0.00 Q -47.99 -9.55 -22.17 -9.18 Q -40.68 -27.18 -42.43 -42.43 Q -27.18 -40.68 -9.18 -22.17 Q -9.55 -47.99 0.00 -60.00 Z" />
-    </g>
-  </svg>
-)
-
-/** The rail item presentation for every surface, keyed by id (order = ALL_SURFACE_IDS). */
-const RAIL_ITEM: Record<SurfaceId, { label: string; Icon: RailIcon }> = {
-  terminal: { label: 'Terminal', Icon: ClaudeCodeIcon },
+// The rail surface labels. The ICON for every surface is the shared `SURFACE_ICON` map
+// (`app/surfaceIcons.tsx`) — the single source of truth consumed by BOTH this rail and every
+// panel's `PanelFooter`, so the footer icon can never drift from the rail (DESIGN.md D-10).
+const RAIL_LABEL: Record<SurfaceId, string> = {
+  terminal: 'Terminal',
   // cosmos-conversation-panel-v1: the rail id is 'cosmos' (renamed from 'generated-ui'); the WIRE
   // render target stays 'generated-ui' (see CosmosPanel + railVisibility). Brand mark = CosmosMark.
-  cosmos: { label: 'Cosmos', Icon: CosmosGlyphIcon },
-  slack: { label: 'Slack', Icon: SiSlack },
-  jira: { label: 'Jira', Icon: SiJira },
-  confluence: { label: 'Confluence', Icon: SiConfluence },
-  'google-calendar': { label: 'Google Calendar', Icon: SiGooglecalendar }
+  cosmos: 'Cosmos',
+  slack: 'Slack',
+  jira: 'Jira',
+  confluence: 'Confluence',
+  'google-calendar': 'Google Calendar'
 }
+
+/** The rail item presentation for every surface, keyed by id (order = ALL_SURFACE_IDS). */
+const RAIL_ITEM: Record<SurfaceId, { label: string; Icon: RailIcon }> = Object.fromEntries(
+  (Object.keys(RAIL_LABEL) as SurfaceId[]).map((id) => [
+    id,
+    { label: RAIL_LABEL[id], Icon: SURFACE_ICON[id] }
+  ])
+) as Record<SurfaceId, { label: string; Icon: RailIcon }>
 
 /**
  * Outer App: gate the rail behind the one-time session restore (D3). While the
@@ -368,74 +347,5 @@ function AppShell(): React.JSX.Element {
   )
 }
 
-/**
- * open-prompt-hoist-v1: the ONE hoisted Open-Prompt composer. It reads the ACTIVE
- * surface's published composer wiring from the registry (`useActiveComposerConfig`) and
- * renders a SINGLE `PromptComposer` over the surface region — so there is exactly one
- * floating button + one shared draft + one shared drag/position, mounted once at the App
- * level. The submit routes to whichever panel is active (its published `onSubmit`); a
- * surface with no published composer (Terminal, or a disconnected integration) renders
- * nothing. It overlays the surface region (`absolute inset-0`, pointer-events-none) so
- * the panel content behind stays clickable; the composer re-enables pointer events only
- * on its own button/card. `surfaceRef` is the stable box it measures + positions within.
- */
-function SharedComposer({
-  surface,
-  surfaceRef
-}: {
-  surface: SurfaceId
-  surfaceRef: React.RefObject<HTMLDivElement | null>
-}): React.JSX.Element | null {
-  const config = useActiveComposerConfig(surface)
-  // cosmos-open-prompt-pinned-v1 (OQ-1 Option A): the per-surface render mode is a pure
-  // function of the ACTIVE surface — Cosmos ⇒ docked, everything else ⇒ floating. The mode is
-  // computed BEFORE the early return so the hook order is identical to the old version; the
-  // single `PromptComposer` instance stays mounted (no `key={surface}`) so its draft never
-  // resets on a panel switch.
-  const mode = composerModeForSurface(surface)
-  if (!config) {
-    return null
-  }
-  const composer = (
-    <PromptComposer
-      // NO `key={surface}`: the single instance MUST stay mounted across panel switches
-      // so it never re-measures (the whole point of the hoist — no flicker). The draft +
-      // collapsed/expanded + drag state are therefore genuinely shared across surfaces;
-      // the submit routes to the active surface via the published `onSubmit` (open-prompt-hoist-v1).
-      panelRef={surfaceRef}
-      mode={mode}
-      // OQ-2: auto-focus the docked Cosmos input on activation (only relevant when docked).
-      autoFocusActive={mode === 'docked' && surface === 'cosmos'}
-      onSubmit={config.onSubmit}
-      placeholder={config.placeholder}
-      ariaLabel={config.ariaLabel}
-      {...(config.contextChip ? { contextChip: config.contextChip } : {})}
-      busy={config.busy ?? false}
-    />
-  )
-  // cosmos-open-prompt-pinned-v1 (design §1.2, INSET refinement): branch ONLY the WRAPPER on mode.
-  //  - docked (Cosmos): an in-flow, `shrink-0` bottom slot — the LAST flex child of the
-  //    `surfaceRef` column, sitting below the active panel content. The composer body inside is an
-  //    INSET, rounded card CONSTRAINED to the SAME width as the floating composer (`max-w-2xl`) and
-  //    CENTERED, so the docked input reads identically sized to the composer on the other panels —
-  //    just pinned at the bottom with a comfortable bottom margin. The wrapper centers
-  //    (`flex justify-center` + side/bottom padding); the width cap (`max-w-2xl`) lives on the body.
-  //    COLOR-SEAM FIX: this band is a SIBLING below the Cosmos `<section>` (which is `bg-card border-l`),
-  //    so without a surface of its own it would expose the app `bg-background` underneath — a visible
-  //    seam where the panel's bottom area differs from its top. Carry the SAME `bg-card` + `border-l
-  //    border-border` so the panel surface reads as ONE continuous color from tab strip to the bottom
-  //    edge. `pt-3` gives breathing room above the card; `pb-6` is the bottom margin the user wants
-  //    (a clearly larger gap below the card and the panel's bottom edge).
-  //  - floating (every other surface): today's `pointer-events-none absolute inset-0` overlay,
-  //    left byte-for-byte unchanged so the other four panels' composer is untouched (FR-011).
-  if (mode === 'docked') {
-    return (
-      <div className="flex shrink-0 justify-center border-l border-border bg-card px-3 pb-6 pt-3">
-        {composer}
-      </div>
-    )
-  }
-  return (
-    <div className="pointer-events-none absolute inset-0 flex flex-col justify-end">{composer}</div>
-  )
-}
+// `SharedComposer` (the ONE hoisted Open-Prompt composer) lives in `./app/SharedComposer` so it
+// can be rendered in a jsdom test without pulling App's heavy panel imports (Monaco etc.).

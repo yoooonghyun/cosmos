@@ -63,7 +63,7 @@ export function SheetView({
         <div
           role="tablist"
           aria-label="Sheets"
-          className="flex shrink-0 items-center gap-1 overflow-x-auto border-b border-border bg-muted/40 px-2 py-1"
+          className="flex shrink-0 items-center gap-1 overflow-x-auto scrollbar-hover-only border-b border-border bg-muted/40 px-2 py-1"
         >
           {sheets.map((s, i) => (
             <button
@@ -82,7 +82,7 @@ export function SheetView({
           ))}
         </div>
       ) : null}
-      <div className="min-h-0 flex-1 overflow-auto bg-white p-2 text-black [&_table]:border-collapse [&_td]:border [&_td]:border-neutral-300 [&_td]:px-2 [&_td]:py-1 [&_th]:border [&_th]:border-neutral-300 [&_th]:px-2 [&_th]:py-1">
+      <div className="min-h-0 flex-1 overflow-auto scrollbar-hover-only bg-white p-2 text-black [&_table]:border-collapse [&_td]:border [&_td]:border-neutral-300 [&_td]:px-2 [&_td]:py-1 [&_th]:border [&_th]:border-neutral-300 [&_th]:px-2 [&_th]:py-1">
         {/* Pre-sanitized in `sheetHtml` (DOMPurify) + `script-src 'self'` blocks inline script. */}
         <div dangerouslySetInnerHTML={{ __html: current ? current.html : '' }} />
       </div>

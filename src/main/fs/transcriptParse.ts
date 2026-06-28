@@ -32,6 +32,10 @@
 import type { ConversationTurn, ToolCallTurn } from '../../shared/types/conversation'
 import { PREVIEW_MAX_LEN } from '../../shared/types/conversation'
 import type { A2uiSurfaceUpdate } from '../../shared/ipc/ui'
+import {
+  parsePromptContextMarker,
+  stripPromptContextMarker
+} from '../../shared/promptContext/promptContextMarker'
 
 /** The transcript tool name the render_ui MCP server records (FR-102, pinned from a real transcript). */
 export const RENDER_UI_TOOL_NAME = 'mcp__cosmos-render-ui__render_ui'
@@ -153,8 +157,20 @@ export function parseTranscript(lines: string[]): ConversationTurn[] {
       if (message && typeof message === 'object') {
         const content = (message as Record<string, unknown>).content
         if (typeof content === 'string') {
-          if (content.trim().length > 0) {
-            turns.push({ kind: 'user-prompt', id, ts, text: content })
+          // cosmos-timeline-prompt-context-v1 (FR-019/FR-020/FR-025): parse + strip the trailing
+          // `<cosmos:context>` marker. A well-formed marker attaches its context + leaves clean
+          // prose; an absent/malformed one yields no context with the (possibly tag-stripped)
+          // text. Guard on the STRIPPED text so a marker-only turn never renders an empty bubble
+          // (and the raw marker never shows).
+          const parsed = parsePromptContextMarker(content)
+          if (parsed.text.trim().length > 0) {
+            turns.push({
+              kind: 'user-prompt',
+              id,
+              ts,
+              text: parsed.text,
+              ...(parsed.context ? { context: parsed.context } : {})
+            })
           }
           continue
         }
@@ -175,10 +191,18 @@ export function parseTranscript(lines: string[]): ConversationTurn[] {
           }
         }
       }
-      // A text block in a user line is still a prompt (FR-102).
+      // A text block in a user line is still a prompt (FR-102). Same marker parse/strip as the
+      // string-content branch (cosmos-timeline-prompt-context-v1, FR-019/FR-020/FR-025).
       const text = textFromBlocks(blocks)
-      if (text.trim().length > 0) {
-        turns.push({ kind: 'user-prompt', id, ts, text })
+      const parsed = parsePromptContextMarker(text)
+      if (parsed.text.trim().length > 0) {
+        turns.push({
+          kind: 'user-prompt',
+          id,
+          ts,
+          text: parsed.text,
+          ...(parsed.context ? { context: parsed.context } : {})
+        })
       }
       continue
     }
@@ -194,7 +218,13 @@ export function parseTranscript(lines: string[]): ConversationTurn[] {
         }
         const b = block as Record<string, unknown>
         if (b.type === 'text' && typeof b.text === 'string' && b.text.trim().length > 0) {
-          turns.push({ kind: 'assistant-text', id, ts, text: b.text })
+          // cosmos-timeline-prompt-context-v1 (FR-025): if the model ECHOED a `<cosmos:context>`
+          // block, strip it defensively so the raw marker is never surfaced in any turn. No
+          // context is attached to a non-user turn.
+          const text = stripPromptContextMarker(b.text)
+          if (text.trim().length > 0) {
+            turns.push({ kind: 'assistant-text', id, ts, text })
+          }
         } else if (b.type === 'tool_use' && typeof b.name === 'string') {
           // A tool_use block carries its OWN id (`toolu_…`); use it for result correlation,
           // and the line `uuid` (+ block name) for the turn id so sibling tool_uses on one

@@ -29,6 +29,9 @@ import type {
   ViewContext
 } from '../../shared/ipc'
 import { usePanelTabs, type PanelTabsController } from './usePanelTabs'
+import { buildAgentSubmitWithMarker } from '../../shared/promptContext/buildAgentSubmit'
+import { DOCK_KIND_BY_PANEL } from '../../shared/promptContext/promptContextMarker'
+import type { PromptContext, PromptPanelId } from '../../shared/promptContext/promptContext'
 import {
   defaultRequestDecision,
   labelFromUtterance,
@@ -573,9 +576,23 @@ export function useGenerativePanelTabs(
         const { threadTs: _dropped, ...rest } = viewContext
         viewContext = rest
       }
-      window.cosmos.agent.submit({ utterance, target, ...(viewContext ? { viewContext } : {}) })
+      // cosmos-timeline-prompt-context-v1 (FR-001..FR-007): capture the PromptContext ONCE from
+      // data the hook already holds — panel (target === SurfaceId for these 4 panels) + active tab
+      // + the (dismiss-applied) dock viewContext tagged with its kind. The builder feeds it to BOTH
+      // channels (the marker AND the unchanged `viewContext` grounding) from this one object.
+      const panelId = target as PromptPanelId
+      const activeTab = tabs.find((t) => t.id === activeTabId)
+      const promptContext: PromptContext = {
+        panel: { id: panelId, label: panelName },
+        ...(activeTab ? { tab: { id: activeTab.id, label: activeTab.label } } : {})
+      }
+      const dockKind = DOCK_KIND_BY_PANEL[panelId]
+      if (viewContext && dockKind) {
+        promptContext.dock = { kind: dockKind, ...viewContext }
+      }
+      window.cosmos.agent.submit(buildAgentSubmitWithMarker(utterance, target, promptContext))
     },
-    [activeTabId, open, update, target]
+    [activeTabId, open, update, target, tabs, panelName]
   )
 
   const newTab = useCallback(() => {

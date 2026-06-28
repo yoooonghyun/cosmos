@@ -22,7 +22,8 @@ import { useState } from 'react'
 import { A2UIProvider } from '@a2ui-sdk/react/0.9'
 import { ChevronRight, Wrench } from 'lucide-react'
 import { ActiveTabSurface } from '../generative/ActiveTabSurface'
-import { SurfaceSpinner } from '../app/SurfaceSpinner'
+import { TypingIndicator } from './TypingIndicator'
+import { PromptContextChip } from './PromptContextChip'
 import type { TimelineEntry } from './cosmosConversation'
 import type { A2uiSurfaceUpdate } from '../../shared/ipc'
 
@@ -90,10 +91,14 @@ function ToolCallRow({
 
 export function CosmosTimelineEntry({ entry }: { entry: TimelineEntry }): React.JSX.Element | null {
   if (entry.kind === 'live-generating') {
+    // cosmos-timeline-prompt-context-v1 (design §1): bubble → chip → typing dots. The chip
+    // belongs to the user prompt; the dots are the assistant. Live + historical use the same
+    // component, so the chip is stable across the confirm (FR-024).
     return (
       <div className="flex flex-col gap-1">
         {entry.promptText && <UserBubble text={entry.promptText} />}
-        <SurfaceSpinner />
+        <PromptContextChip context={entry.promptContext} />
+        <TypingIndicator />
       </div>
     )
   }
@@ -104,7 +109,15 @@ export function CosmosTimelineEntry({ entry }: { entry: TimelineEntry }): React.
   const { turn } = entry
   switch (turn.kind) {
     case 'user-prompt':
-      return <UserBubble text={turn.text} />
+      // cosmos-timeline-prompt-context-v1 (design §1): stack the bubble + the read-only context
+      // chip in a flex column; with no context the chip returns null and this renders exactly
+      // today's bare bubble (FR-021).
+      return (
+        <div className="flex flex-col gap-1">
+          <UserBubble text={turn.text} />
+          <PromptContextChip context={turn.context} />
+        </div>
+      )
     case 'assistant-text':
       return (
         <p className="whitespace-pre-wrap break-words text-[13px] leading-relaxed text-card-foreground">

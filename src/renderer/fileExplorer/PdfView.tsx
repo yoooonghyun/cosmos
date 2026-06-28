@@ -92,7 +92,7 @@ export function PdfView({
   return (
     <div
       ref={containerRef}
-      className="min-h-0 flex-1 overflow-auto bg-popover p-4"
+      className="min-h-0 flex-1 overflow-auto scrollbar-hover-only bg-popover p-4"
       data-testid="pdf-view"
     >
       {pdfFile ? (
