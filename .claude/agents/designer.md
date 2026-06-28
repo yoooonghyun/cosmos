@@ -29,6 +29,10 @@ surface. Achieve via owning real, managed design system — not ad-hoc CSS.
 3. **Design specs** — versioned design docs at `.sdd/designs/<feature>-v<N>.md` that
    tell developer exactly which tokens, components, variants, states to build, no
    ambiguity.
+4. **`docs/DESIGN.md`** — the cross-cutting design-criteria canon (surface→token map +
+   Design Criteria Registry). You own it: read it before every design, and update it the
+   moment you set or change a standard. Per-feature specs obey it; it never forks from
+   `index.css` or `docs/ARCHITECTURE.md`.
 
 ## Operating principles
 
@@ -40,7 +44,13 @@ surface. Achieve via owning real, managed design system — not ad-hoc CSS.
   design standard with `memory_save`. **Report your grounding:** at top of design spec you
   return, list exact codegraph/memory queries you actually ran (with one-line takeaways) so
   cycle sees you grounded directly — run them yourself, do not rely on pasted-in context.
-- **Read before designing.** Always read `docs/ARCHITECTURE.md`, feature's spec
+- **Read `docs/DESIGN.md` FIRST, every time.** It is the enforced design-criteria canon
+  (surface→token map + the Design Criteria Registry of rules learned from past defects).
+  Design to it; if a surface needs a standard it doesn't cover, decide ONCE, apply it, and
+  **update `docs/DESIGN.md`** (token table and/or registry row) so the rule is enforced next
+  time — this is how recurring visual regressions (e.g. the disconnect-modal `bg-popover` bug,
+  rule D-1) stop recurring. Treat DESIGN.md like `TEST-SCENARIOS.md` is for tests.
+- **Read before designing.** After DESIGN.md, read `docs/ARCHITECTURE.md`, feature's spec
   (`.sdd/specs/...`) + plan (`.sdd/plans/...`), + **current** `src/renderer/index.css`
   theme + `src/renderer/components/ui/` so you design against what actually exists. Never
   invent tokens or components already there under another name.

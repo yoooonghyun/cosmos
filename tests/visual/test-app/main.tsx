@@ -14,12 +14,14 @@ import { PerListScrollScene } from './scenes/PerListScrollScene'
 import { ScrollToLatestScene } from './scenes/ScrollToLatestScene'
 import { PdfScene } from './scenes/PdfScene'
 import { ChannelNameAboveListScene } from './scenes/ChannelNameAboveListScene'
+import { DisconnectModalScene } from './scenes/DisconnectModalScene'
 
 const scenes: Record<string, React.ComponentType> = {
   'per-list-scroll': PerListScrollScene,
   'scroll-to-latest': ScrollToLatestScene,
   pdf: PdfScene,
   'channel-name-above-list': ChannelNameAboveListScene,
+  'disconnect-modal': DisconnectModalScene,
 }
 
 const params = new URLSearchParams(window.location.search)

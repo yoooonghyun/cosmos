@@ -21,7 +21,7 @@ specify (architect) → plan (architect) → **design (this skill)** → interfa
 
 ## Step 1 — Ground in the current system
 
-Read, in order: feature spec (`.sdd/specs/<feature>-v<N>.md`), plan (`.sdd/plans/<feature>-v<N>.md`), `docs/ARCHITECTURE.md`, and **live design system** — `src/renderer/index.css` (theme tokens / palette) and `src/renderer/components/ui/` (existing shadcn primitives). Know exactly which tokens + components already exist before designing, so you reuse not reinvent.
+Read **`docs/DESIGN.md` FIRST** — the enforced design-criteria canon (surface→token map + the Design Criteria Registry of rules learned from past defects, e.g. rule D-1 "every `DialogContent` sets `bg-popover`"). Every surface you design must obey it. Then read, in order: feature spec (`.sdd/specs/<feature>-v<N>.md`), plan (`.sdd/plans/<feature>-v<N>.md`), `docs/ARCHITECTURE.md`, and **live design system** — `src/renderer/index.css` (theme tokens / palette) and `src/renderer/components/ui/` (existing shadcn primitives). Know exactly which tokens + components already exist before designing, so you reuse not reinvent.
 
 ## Step 2 — Establish or extend the design system
 
@@ -49,4 +49,4 @@ Design spec = contract for sdd Steps 3–5. Developer implements interface, test
 
 ## Step 6 — Design review
 
-After implementation, designer reviews built surface against design spec + system: does it use specified tokens/components (no stray hex or one-off CSS)? All states present? Visually consistent with rest of cosmos + accessible? File any drift as fixes. Carry design-system changes (new tokens/components, new standards) into wrap-up so `docs/ARCHITECTURE.md` and design system stay authoritative.
+After implementation, designer reviews built surface against design spec + system: does it use specified tokens/components (no stray hex or one-off CSS)? Does it obey **every rule in `docs/DESIGN.md`** (surface→token map + registry)? All states present? Visually consistent with rest of cosmos + accessible? File any drift as fixes. **If this cycle established or repaired a standard, UPDATE `docs/DESIGN.md`** (add/edit the surface→token row and/or a Design Criteria Registry row with the rationale) so the rule is enforced next time. Carry design-system changes (new tokens/components, new standards) into wrap-up so `docs/DESIGN.md`, `docs/ARCHITECTURE.md`, and the design system stay authoritative.
