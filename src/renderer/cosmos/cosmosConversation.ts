@@ -17,7 +17,7 @@
  * transcript turns + the current live state and renders the returned timeline.
  */
 
-import type { ConversationTurn } from '../shared/types/conversation'
+import type { ConversationTurn } from '../../shared/types/conversation'
 
 /**
  * The current LIVE in-flight turn, derived by the panel from the `ui:render` /
@@ -30,7 +30,7 @@ import type { ConversationTurn } from '../shared/types/conversation'
  */
 export type LiveInFlight =
   | { phase: 'generating'; promptText?: string }
-  | { phase: 'surface'; requestId: string; spec: import('../shared/ipc/ui').A2uiSurfaceUpdate; promptText?: string }
+  | { phase: 'surface'; requestId: string; spec: import('../../shared/ipc/ui').A2uiSurfaceUpdate; promptText?: string }
   | null
 
 /**
@@ -43,7 +43,7 @@ export type LiveInFlight =
 export type TimelineEntry =
   | { kind: 'turn'; turn: ConversationTurn }
   | { kind: 'live-generating'; promptText?: string }
-  | { kind: 'live-surface'; requestId: string; spec: import('../shared/ipc/ui').A2uiSurfaceUpdate }
+  | { kind: 'live-surface'; requestId: string; spec: import('../../shared/ipc/ui').A2uiSurfaceUpdate }
 
 /**
  * Reconcile the transcript turns with the live in-flight state into the rendered timeline

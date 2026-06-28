@@ -196,3 +196,8 @@ the user commits current work first, so the restructure lands on an otherwise-em
   the catalog nests one level deeper. Re-pathed the traversal by one `../` per nesting
   (`../../../` → `../../../../`) as part of the move. Pure path re-target, no logic change.
   (Also why every catalog-nesting group runs `npm test`, not just typecheck.)
+- **2026-06-28 — inline `import('...')` type imports (Phase 3, cosmos).** `cosmosConversation.ts`
+  uses inline dynamic-type imports `import('../shared/ipc/ui').A2uiSurfaceUpdate` (not
+  `from '...'` statements). The bulk `from '../shared/'` sed misses these, so they needed a
+  separate `import('../shared/...')` → `import('../../shared/...')` re-path. Typecheck catches
+  these (TS2307), so they are not silent — but worth re-pathing both forms when moving a file.

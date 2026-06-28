@@ -23,17 +23,17 @@
  */
 
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { PanelTabStrip, type PanelTab } from './PanelTabStrip'
-import { usePublishComposer } from './ActiveComposerProvider'
+import { PanelTabStrip, type PanelTab } from '../PanelTabStrip'
+import { usePublishComposer } from '../ActiveComposerProvider'
 import { CosmosTimelineEntry } from './CosmosTimelineEntry'
 import { reconcileTimeline, type LiveInFlight } from './cosmosConversation'
 import { initialCosmosTabs, setActiveCosmosTab, closeCosmosTab } from './cosmosTabs'
-import type { Conversation } from '../shared/types/conversation'
+import type { Conversation } from '../../shared/types/conversation'
 import type {
   ConversationResult,
   UiRenderPayload,
   AgentStatusPayload
-} from '../shared/ipc'
+} from '../../shared/ipc'
 
 /** The four read states the panel presents (FR-112). */
 type ReadState =
