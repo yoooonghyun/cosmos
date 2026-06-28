@@ -58,20 +58,20 @@ import {
   type UiRenderTarget
 } from '../shared/ipc'
 import { matchShortcut } from './shortcutMatch'
-import { resolvePaneSpawn, type ResolvedPaneSpawn } from './paneSpawn'
+import { resolvePaneSpawn, type ResolvedPaneSpawn } from './pty/paneSpawn'
 import {
   planResumeRetry,
   recoverSessionLock,
   RESUME_RETRY_BACKOFF_MS,
   IN_USE_RETRY_CLEAR_SEQUENCE,
   type SessionLockEnv
-} from './sessionLockRecovery'
-import { canGroupKill } from './processGroupKill'
+} from './pty/sessionLockRecovery'
+import { canGroupKill } from './pty/processGroupKill'
 import {
   selectOrphanMcpServers,
   type CosmosMcpSignature,
   type ProcSnapshotRow
-} from './orphanReaper'
+} from './pty/orphanReaper'
 import type { SlackConnectionStatus } from '../shared/types/slack'
 import type { JiraConnectionStatus } from '../shared/types/jira'
 import { JiraAdapterSource } from '../shared/types/jira'
@@ -118,7 +118,7 @@ import {
   validateUiGeneratingBeginPayload,
   validateConversationResult
 } from '../shared/validate'
-import { PtyManager } from './ptyManager'
+import { PtyManager } from './pty/ptyManager'
 import { SessionStore } from './sessionStore'
 import { validateSnapshot } from './sessionSnapshot'
 import { AgentRunner } from './agentRunner'

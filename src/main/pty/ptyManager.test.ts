@@ -88,7 +88,7 @@ vi.mock('node-pty', () => ({
 import * as pty from 'node-pty'
 import { PtyManager } from './ptyManager'
 import type { ProcessGroupKiller } from './processGroupKill'
-import type { PtyDataPayload, PtyExitPayload } from '../shared/ipc'
+import type { PtyDataPayload, PtyExitPayload } from '../../shared/ipc'
 
 /** Capture the args/cwd each spawn was called with (session-persistence-v1 D2). */
 function lastSpawnCall(): { command: string; args: string[]; cwd?: string } {

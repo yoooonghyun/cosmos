@@ -35,7 +35,7 @@ import type {
   PtyDataPayload,
   PtyExitPayload,
   PtyResizePayload
-} from '../shared/ipc'
+} from '../../shared/ipc'
 import { isAlreadyInUseError } from './sessionLockRecovery'
 import {
   GROUP_KILL_GRACE_MS,

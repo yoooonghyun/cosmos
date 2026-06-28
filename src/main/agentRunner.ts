@@ -29,7 +29,7 @@
  */
 
 import { spawn as nodeSpawn, type ChildProcess } from 'node:child_process'
-import { isExecutableResolvable } from './ptyManager'
+import { isExecutableResolvable } from './pty/ptyManager'
 import { allowedToolForTarget, groundingPromptForTarget, renderMcpConfigJsonForTarget } from './mcpConfig'
 import { viewContextGroundingClause } from './viewContextGrounding'
 import { decideSubmit } from './agentSessionQueue'
@@ -37,7 +37,7 @@ import {
   isAlreadyInUseError,
   planResumeRetry,
   type SessionLockEnv
-} from './sessionLockRecovery'
+} from './pty/sessionLockRecovery'
 import {
   DEFAULT_UI_RENDER_TARGET,
   type AgentStatusPayload,
