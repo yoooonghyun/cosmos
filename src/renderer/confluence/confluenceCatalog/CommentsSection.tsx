@@ -27,7 +27,7 @@ import { Textarea } from '@/components/ui/textarea'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Skeleton } from '@/components/ui/skeleton'
 import type { ConfluenceComment, ConfluenceError } from '../../../shared/types/confluence'
-import { ErrorState, ReconnectState, formatTs, initials } from '../../atlassianPanelBits'
+import { ErrorState, ReconnectState, formatTs, initials } from '../../atlassian/atlassianPanelBits'
 import { PageDetailBody } from './components'
 
 /** Author display name with the design's fallback chain (design §3). */

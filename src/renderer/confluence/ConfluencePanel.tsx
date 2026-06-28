@@ -34,7 +34,7 @@ import {
   EmptyLine,
   ErrorState,
   ReconnectState
-} from '../atlassianPanelBits'
+} from '../atlassian/atlassianPanelBits'
 import { confluenceCatalog, CONFLUENCE_CATALOG_ID } from './confluenceCatalog'
 import { CONFLUENCE_OPEN_DETAIL_ACTION } from './confluenceCatalog/logic'
 // Shared page-detail body + title — native panel + gen-UI overlay render IDENTICALLY (SC-002/SC-005).

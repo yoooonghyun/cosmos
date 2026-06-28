@@ -37,7 +37,7 @@ import { Input } from '@/components/ui/input'
 import { Skeleton } from '@/components/ui/skeleton'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import type { FormEvent } from 'react'
-import { ConnectionStatus, ConnectForm } from '../atlassianPanelBits'
+import { ConnectionStatus, ConnectForm } from '../atlassian/atlassianPanelBits'
 import {
   jiraCatalog,
   JIRA_CATALOG_ID,

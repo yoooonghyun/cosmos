@@ -62,7 +62,7 @@ import type {
   JiraUpdateFields,
   JiraUserRef
 } from '../../../shared/types/jira'
-import { formatTs, initials } from '../../atlassianPanelBits'
+import { formatTs, initials } from '../../atlassian/atlassianPanelBits'
 import {
   diffUpdateFields,
   isCommentSubmittable,
