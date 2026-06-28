@@ -21,11 +21,22 @@
 import type { ViewContext } from '../ipc/agent'
 
 /**
- * The rail panels that own an Open-Prompt composer (terminal is excluded — it has no composer).
- * Mirrors the renderer `SurfaceId` subset; declared HERE so shared stays free of a renderer
- * import (the renderer's `SurfaceId` non-terminal members are assignable to this).
+ * The rail panels a {@link PromptContext} can name. Mirrors the renderer `SurfaceId` set exactly
+ * (declared HERE so shared stays free of a renderer import — the renderer's `SurfaceId` members are
+ * assignable to this).
+ *
+ * cosmos-panel-tab-list-v1 (T1): `'terminal'` is now INCLUDED. The Cosmos panel-tab tree lists the
+ * Terminal panel's open tabs and a tree-click selects panel + tab as the next prompt's context;
+ * a terminal selection therefore needs a serializable panel id. Terminal has no dock
+ * (`DOCK_KIND_BY_PANEL.terminal = null`), fully consistent with v1's panel+tab-only tree model.
  */
-export type PromptPanelId = 'cosmos' | 'slack' | 'jira' | 'confluence' | 'google-calendar'
+export type PromptPanelId =
+  | 'cosmos'
+  | 'slack'
+  | 'jira'
+  | 'confluence'
+  | 'google-calendar'
+  | 'terminal'
 
 /** The discriminator for an open dock/detail overlay, derived from the panel id. */
 export type DockKind = 'jira-issue' | 'slack-channel' | 'confluence-page' | 'calendar-event'

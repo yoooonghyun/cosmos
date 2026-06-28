@@ -20,7 +20,7 @@
  * originating tab discards the frame).
  */
 
-import { useCallback, useEffect, useRef } from 'react'
+import { useCallback, useEffect, useMemo, useRef } from 'react'
 import type {
   AgentStatusPayload,
   GenerativePanelSnapshot,
@@ -42,6 +42,9 @@ import {
 } from './panelTabs'
 import { buildGenerativePanel, hydrateGenerativeTabs } from '../session/sessionSnapshot'
 import { inFlightOnSubmit, shouldReleaseInFlightOnCompleted } from '../composer/promptComposerLogic'
+import { useRecordSubmitContext } from '../composer/ActiveComposerProvider'
+import { usePublishPanelTabs } from '../panelTabs'
+import type { CrossPanelId, LivePanelTabs } from '../panelTabs'
 import { useReportPanel } from '../session/SessionProvider'
 import type { GenerativePanelKey } from '../../shared/ipc'
 import type { AdapterBinding, AdapterDescriptor } from '../../shared/types/adapter'
@@ -306,6 +309,26 @@ export function useGenerativePanelTabs(
       buildGenerativePanel({ tabs, activeTabId }, everOpenedRef.current)
     )
   }, [tabs, activeTabId, target, report])
+
+  // cosmos-panel-tab-list-v1 (FR-008/FR-009): publish this panel's FULL live tab list into the
+  // App-root PanelTabsProvider so the Cosmos tree can survey it. This is NOT the lossy persistence
+  // `buildGenerativePanel` path — it carries EVERY open tab's non-secret { id, label } + the active
+  // id (FR-011). The four generative panels' `target` IS the cross-panel id; the generic Cosmos
+  // wire target `'generated-ui'` publishes nothing (the Cosmos panel is excluded from its own tree).
+  const panelTabsPanelId: CrossPanelId | null = target === 'generated-ui' ? null : target
+  const livePanelTabs = useMemo<LivePanelTabs | null>(
+    () =>
+      panelTabsPanelId === null
+        ? null
+        : { tabs: tabs.map((t) => ({ id: t.id, label: t.label })), activeTabId },
+    [panelTabsPanelId, tabs, activeTabId]
+  )
+  usePublishPanelTabs(panelTabsPanelId, livePanelTabs)
+
+  // cosmos-context-chip-crosspanel-and-historical-v1 (#2): record the captured PromptContext for
+  // each submit into the App-root shared ref so the Cosmos timeline's live seed reflects THIS panel
+  // (Jira/Slack/Confluence/Calendar), not a stale cosmos-only default. Stable setter (writes a ref).
+  const recordSubmitContext = useRecordSubmitContext()
 
   const mintLabel = useCallback(
     () => panelTabLabel(panelName, (everOpenedRef.current += 1)),
@@ -590,9 +613,13 @@ export function useGenerativePanelTabs(
       if (viewContext && dockKind) {
         promptContext.dock = { kind: dockKind, ...viewContext }
       }
+      // cosmos-context-chip-crosspanel-and-historical-v1 (#2): publish this submit's context so the
+      // Cosmos timeline's `agent:status 'started'` live seed reads it and the in-flight chip names
+      // THIS panel. Written synchronously BEFORE submit, so the later 'started' reads the right value.
+      recordSubmitContext(promptContext)
       window.cosmos.agent.submit(buildAgentSubmitWithMarker(utterance, target, promptContext))
     },
-    [activeTabId, open, update, target, tabs, panelName]
+    [activeTabId, open, update, target, tabs, panelName, recordSubmitContext]
   )
 
   const newTab = useCallback(() => {

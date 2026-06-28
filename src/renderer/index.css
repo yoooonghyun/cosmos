@@ -197,6 +197,16 @@
   --z-dock: 20;
   --z-overlay: 50;
   --z-composer: 50;
+
+  /* --- Chat-bubble geometry (DESIGN.md §15 / D-14) ------------------------
+   * The SINGLE source of truth for the Cosmos timeline's user-bubble width so
+   * the user bubble AND its context chip never drift (they previously both
+   * carried a duplicated raw `max-w-[85%]`). Custom namespace → Tailwind v4
+   * does NOT auto-emit a `max-w-*` utility for it, so it is bridged explicitly
+   * to the `max-w-chat-bubble` utility below (mirrors the `--space-*`/`--z-*`
+   * manual bridges). Caps BOTH the user bubble AND the assistant reply at 2/3 of
+   * the timeline width so a long turn never overwhelms the panel (user request). */
+  --chat-bubble-max-w: 66.6667%;
 }
 
 /*
@@ -454,6 +464,13 @@
   height: var(--space-cal-hour);
 }
 
+/* Chat-bubble geometry (DESIGN.md §15 / D-14) — `max-w-chat-bubble`. The ONE
+ * width shared by the Cosmos user bubble + its context chip (references the
+ * `--chat-bubble-max-w` @theme var; value unchanged). */
+@utility max-w-chat-bubble {
+  max-width: var(--chat-bubble-max-w);
+}
+
 :root {
   --radius: 0.5rem;
 
@@ -560,8 +577,16 @@
   --muted-foreground: #888888;
   --accent: #2d2d30;
   --accent-foreground: #e0e0e0;
-  --destructive: #f3b0b0;
-  --destructive-foreground: #1e1e1e;
+  /* Destructive = a real RED danger convention (was the pastel-rose #f3b0b0, which
+     read as a one-off because it sat close to the brand pink #e9aee9 and appeared
+     nowhere else as a solid fill — the disconnect modal "looked like a different
+     modal"). #d23f3f is a desaturated crimson (pure-red hue, ~70% sat — clearly
+     danger, not a jarring neon) that mirrors the light scope's #dc2626 intent on
+     the dark palette. As a SOLID destructive Button fill it carries WHITE text
+     (white-on-#d23f3f ≈ 4.6:1, AA for the 14px button label) — the conventional
+     white-on-red destructive read, distinct from the brand pink. (D-12 / §7) */
+  --destructive: #d23f3f;
+  --destructive-foreground: #ffffff;
   --border: #333333;
   --input: #4a4a4c;
   /* settings-visual-v1: focus ring follows the brand accent (was neutral #4a4a4c,

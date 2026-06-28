@@ -51,7 +51,7 @@ The JSON carries only **non-secret display labels/ids** (never a token, secret, 
 path):
 
 - \`panel\` — the active rail panel: \`{ id, label }\` (always present). \`id\` is one of \`cosmos\`,
-  \`slack\`, \`jira\`, \`confluence\`, \`google-calendar\`.
+  \`slack\`, \`jira\`, \`confluence\`, \`google-calendar\`, \`terminal\`.
 - \`tab\` — the active tab within that panel: \`{ id, label }\` (omitted when there is none).
 - \`dock\` — the open detail/overlay the user has focused (omitted when nothing is open):
   \`{ kind, …item id/label fields }\`, where \`kind\` is one of \`jira-issue\`, \`slack-channel\`,

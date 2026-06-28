@@ -273,6 +273,24 @@ export function FileViewer({
     onViewerFocusChange?.(false)
   }
 
+  // viewer-keyboard-shortcut-nonmonaco-focus-v1: the dedicated viewers (image/PDF/docx/sheet/state
+  // blocks) have NO focusable child, so clicking them never moves DOM focus into the viewer subtree
+  // and the focus-aware `Ctrl/Cmd+W` / `Cmd+Opt+Arrow` routing (which keys off focus-within) never
+  // engages. Monaco (`text`) owns its OWN focus via the body-mounted <textarea> + its
+  // onDidFocusEditorText path, so we must NOT steal focus from it. For every NON-editor kind we make
+  // the body wrapper itself the focus target (`tabIndex={-1}`) and focus it when that file becomes
+  // active, establishing focus-within so the shortcuts route — exactly as Monaco's textarea does.
+  const bodyRef = useRef<HTMLDivElement | null>(null)
+  const isEditorViewer = viewer?.kind === 'text'
+  const activeRelKey = viewer?.relPath ?? null
+  useEffect(() => {
+    if (isEditorViewer) {
+      // Monaco focuses its own textarea; focusing the wrapper here would yank focus away from it.
+      return
+    }
+    bodyRef.current?.focus()
+  }, [isEditorViewer, activeRelKey])
+
   if (openFiles.length === 0 || viewer === null) {
     // §5.1 empty state: a calm, low-emphasis placeholder, FULL column height (no strip). The tree
     // dock (RIGHT) is already visible, so this is purely "you haven't picked a file yet".
@@ -290,10 +308,26 @@ export function FileViewer({
   }
   // ≥1 file open: the FileTabStrip REPLACES the #84 single-file header (design §4 — the header folds
   // into the active tab; one `h-8` band). The body renders the ACTIVE file's ViewerState unchanged.
+  // A click on a dedicated viewer (image/PDF/docx/sheet/state block — none have a focusable child)
+  // after focus left the subtree re-establishes focus-within so the shortcuts keep routing. Monaco
+  // (`text`) owns its own textarea focus, so we never grab focus for the editor.
+  const handleBodyMouseDown = (): void => {
+    if (isEditorViewer) {
+      return
+    }
+    const root = bodyRef.current
+    if (root && !root.contains(document.activeElement)) {
+      root.focus()
+    }
+  }
+
   return (
     <div
+      ref={bodyRef}
+      tabIndex={-1}
       onFocus={handleFocus}
       onBlur={handleBlur}
+      onMouseDown={handleBodyMouseDown}
       className="flex min-h-0 min-w-0 flex-1 flex-col bg-card outline-none"
     >
       <FileTabStrip

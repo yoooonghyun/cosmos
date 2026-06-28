@@ -15,6 +15,7 @@ import type { Conversation, ConversationTurn, SurfaceTurn } from '../types/conve
 import { PREVIEW_MAX_LEN } from '../types/conversation'
 import type { ConversationResult } from './conversation'
 import { defaultWarn, isObject, type WarnFn } from './common.validate'
+import { validatePromptContext } from '../promptContext/promptContextMarker'
 
 /** The known turn kinds (mirrors {@link ConversationTurn}). */
 const TURN_KINDS = ['user-prompt', 'assistant-text', 'tool-call', 'surface'] as const
@@ -44,7 +45,19 @@ export function validateConversationTurn(
     return null
   }
   switch (kind) {
-    case 'user-prompt':
+    case 'user-prompt': {
+      if (!isString(raw.text)) {
+        return null
+      }
+      // Carry through the non-secret PromptContext snapshot when present + well-formed, so the
+      // historical (transcript-sourced) user-prompt chip survives this boundary
+      // (cosmos-context-chip-historical-not-showing-v2). A malformed/absent `context` is dropped
+      // to no-context — the turn stays valid, never crashes (FR-118). The SAME shared schema the
+      // marker parser uses, so the boundary and the parser can never diverge; no field beyond the
+      // PromptContext whitelist (panel/tab/dock view labels) crosses.
+      const ctx = raw.context === undefined ? null : validatePromptContext(raw.context)
+      return { kind, id, ts, text: raw.text, ...(ctx ? { context: ctx } : {}) }
+    }
     case 'assistant-text': {
       if (!isString(raw.text)) {
         return null

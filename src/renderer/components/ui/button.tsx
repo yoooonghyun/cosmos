@@ -12,8 +12,14 @@ const buttonVariants = cva(
         default: "bg-primary text-primary-foreground hover:bg-primary/90",
         cosmos:
           "bg-gradient-to-br from-brand-pink to-brand-purple text-brand-foreground hover:brightness-95 shadow-sm",
+        // Foundation destructive affordance (D-12): the cosmos `--destructive`
+        // pastel (#f3b0b0) as a SOLID fill with its paired `--destructive-foreground`
+        // (#1e1e1e) text, so a destructive action reads legibly on the dark popover
+        // surface. NOT shadcn's `text-white` + `dark:bg-destructive/60`, which on
+        // cosmos's always-`.dark` palette rendered a washed-out, low-contrast
+        // translucent-pink button that did not read as destructive.
         destructive:
-          "bg-destructive text-white hover:bg-destructive/90 focus-visible:ring-destructive/20 dark:bg-destructive/60 dark:focus-visible:ring-destructive/40",
+          "bg-destructive text-destructive-foreground hover:bg-destructive/85 focus-visible:ring-destructive/40",
         outline:
           "border bg-background shadow-xs hover:bg-accent hover:text-accent-foreground dark:border-input dark:bg-input/30 dark:hover:bg-input/50",
         secondary:

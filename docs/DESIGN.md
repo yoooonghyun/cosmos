@@ -27,7 +27,7 @@ NOT in one big-bang. New surfaces MUST use the named tokens from the start.
 
 - §1 Foundations · §2 Surface→token map · §3 Brand & active-affordance · §4 Component canon (rules)
 - **§7 Color system · §8 Typography ramp · §9 Spacing rhythm · §10 Radius scale · §11 Elevation ramp
-  · §12 Motion · §13 Z-index ladder · §14 Primitive component canon** (the formal scales)
+  · §12 Motion · §13 Z-index ladder · §14 Primitive component canon · §15 Chat-surface canon** (the formal scales)
 - §5 Design Criteria Registry · §6 How the designer maintains this file
 
 ---
@@ -56,9 +56,13 @@ single most common source of "this one screen looks off-system" bugs.
 | Muted fill (skeleton, inert chip) | `bg-muted` | `#252526` | |
 | Hover/active accent fill | `bg-accent` | `#2d2d30` | |
 | Inset input field | `bg-input` border / `bg-popover` card | `#4a4a4c` border | Composer card body = `bg-popover`. |
+| **Cosmos timeline — user prompt bubble** | **`bg-primary`** (`text-primary-foreground`) | **`#e9aee9`** | **Right-aligned filled bubble = the deliberate brand "my message" accent (the universal sent-message convention). The ONE intentional `--primary` surface in chat. Chat-surface canon §15 / D-14.** |
+| **Cosmos timeline — prompt context chip** | **`bg-secondary`** (`Badge variant="secondary"`) | **`#3a3a3c`** | **Sits above the user bubble as a quieter `secondary` breadcrumb (accent message vs quiet context — no longer the same family as the bubble, and that's intentional); shares the `max-w-chat-bubble` token with the bubble (D-11/D-14).** |
+| **Cosmos timeline — assistant reply** | **none — bare on panel `bg-card`** | `#1b1b1c` | **No bubble; `text-card-foreground`. user-filled-right / assistant-plain-left (D-14).** |
+| **Cosmos timeline — tool-call / typing row** | **`bg-muted/40`** | `#252526` @40% | **Quiet inert rows (D-8/D-14).** |
 
 Foreground/semantic tokens: `text-foreground #e0e0e0`, `text-muted-foreground #888888`,
-`border-border #333333`, `--ring #d8b4fe`, `destructive #f3b0b0` (on `destructive-foreground #1e1e1e`).
+`border-border #333333`, `--ring #d8b4fe`, `destructive #d23f3f` (on `destructive-foreground #ffffff`).
 
 ## 3. Brand & active-affordance
 
@@ -71,13 +75,34 @@ Foreground/semantic tokens: `text-foreground #e0e0e0`, `text-muted-foreground #8
 
 ## 4. Component canon
 
-- **Dialogs**: shadcn `Dialog` with canonical `DialogHeader` > `DialogTitle` (foreground, default
-  title size) + `DialogDescription` (muted-foreground, default body size). NOT an `Alert` card, NOT
-  bespoke text styling.
+- **Dialogs**: shadcn `Dialog` with canonical `DialogHeader` > `DialogTitle` (foreground,
+  `text-title`) + `DialogDescription` (muted-foreground, `text-body`). NOT an `Alert` card, NOT
+  bespoke text styling. There are exactly **two dialog classes** (D-13) — pin every dimension to the
+  class, never per-component judgment:
+
+  **Dialog classes (D-13) — the EXACT, enforced spec per class**
+
+  | Dimension | **CONFIRM / ALERT** class (small, decision-forcing) | **UTILITY** class (large, multi-section task) |
+  |---|---|---|
+  | Examples | `ConfirmDialog` (disconnect/delete) | `SettingsDialog` |
+  | Surface | `bg-popover` (#252526) — the primitive default (D-1) | `bg-popover` (#252526) |
+  | Width | `sm:max-w-sm` (the ONLY class override) | content-sized large width, e.g. `max-w-[860px]` (always wider than the primitive's `sm:max-w-lg`) |
+  | Padding | primitive default `p-6` + `gap-4` | `p-0` with internal sections: header `px-6 pt-6 pb-4 border-b`, footer `px-6 py-3 border-t` |
+  | `DialogTitle` | `text-title` (18px) semibold foreground | same |
+  | `DialogDescription` | `text-body` (14px) muted-foreground | same |
+  | `×` close button | `showCloseButton={false}` (Cancel IS the dismiss) | default (`true`) |
+  | Footer container | `DialogFooter` default (`gap-2`, `sm:justify-end`, `flex-col-reverse` on mobile) | `DialogFooter` + section border-t; same `gap-2` / `justify-end` |
+  | Footer buttons | `ghost` Cancel (autofocus) + `destructive`/`default`/`cosmos` action — **exactly two** | `ghost` dismiss + primary/`destructive` action |
+  | **Footer button SIZE** | **`default` (h-9)** — never `size="sm"` | **`default` (h-9)** |
+
+  **The single button-size rule that ends the divergence:** a dialog **FOOTER action is `default`
+  size (h-9) in BOTH classes.** `size="sm"` (h-8) is reserved for **in-body inline row controls**
+  (e.g. SettingsDialog's connect/disconnect rows, field reset) — those are NOT footer actions, so
+  their smaller size is correct and does NOT make the dialog off-system. Footer = default; in-body
+  inline control = sm. No third size.
 - **Destructive confirm** (disconnect, delete): `ghost` Cancel (autofocused so a stray Enter can't
-  fire the destructive action) + `destructive` confirm Button, both at the app's **default Button
-  size** (no off-system `size="sm"`). The destructive semantic lives ONLY on the confirm Button —
-  not the surrounding text/background.
+  fire the destructive action) + `destructive` confirm Button at **default** size (D-2/D-13); the
+  destructive semantic lives ONLY on the confirm Button — not the surrounding text/background.
 - **Buttons**: use shadcn variants (`default`/`secondary`/`ghost`/`outline`/`destructive`/`cosmos`).
   `cosmos` = the brand-gradient Send/primary action. Don't invent per-surface button styles.
 - **Every state**: a surface is undesigned until loading / empty / populated / error / disabled are
@@ -87,7 +112,7 @@ Foreground/semantic tokens: `text-foreground #e0e0e0`, `text-muted-foreground #8
 
 ---
 
-# Foundation scales (§7–§14)
+# Foundation scales (§7–§15)
 
 The named scale system. Each scale is **reconciled from the values already shipped** (it preserves
 the current dark look, it does not redesign it) and is realized as a token in `src/renderer/index.css`.
@@ -113,7 +138,7 @@ fallback only). Each has a `-foreground` pair for on-surface text:
 | `--secondary` / `-foreground` | `#3a3a3c` / `#dddddd` | secondary buttons |
 | `--muted` / `-foreground` | `#252526` / `#888888` | inert fills / skeletons / meta text |
 | `--accent` / `-foreground` | `#2d2d30` / `#e0e0e0` | hover/active fills |
-| `--destructive` / `-foreground` | `#f3b0b0` / `#1e1e1e` | destructive action only (§4) |
+| `--destructive` / `-foreground` | `#d23f3f` / `#ffffff` | destructive action only (§4); a desaturated crimson danger red (NOT the brand pink) — white text for the solid Button fill (D-12) |
 | `--border` | `#333333` | hairlines / dividers |
 | `--input` | `#4a4a4c` | input field border |
 | `--ring` | `#d8b4fe` | focus ring (thin, §3 / D-5) |
@@ -276,11 +301,11 @@ size surface + its usage rule.
 
 | Primitive | Variants / sizes | Usage rule |
 |---|---|---|
-| **Button** | variants `default · cosmos · destructive · outline · secondary · ghost · link`; sizes `default · xs · sm · lg · icon · icon-xs · icon-sm · icon-lg` | The canonical action. `cosmos` = brand-gradient Send/primary. Destructive-confirm uses `ghost` Cancel + `destructive` confirm at **default size** (§4 / D-2). Never a bespoke button. |
+| **Button** | variants `default · cosmos · destructive · outline · secondary · ghost · link`; sizes `default · xs · sm · lg · icon · icon-xs · icon-sm · icon-lg` | The canonical action. `cosmos` = brand-gradient Send/primary. `destructive` = SOLID `--destructive` crimson (`#d23f3f`) fill + WHITE `--destructive-foreground` text (D-12), never stock `dark:bg-destructive/60`. Destructive-confirm uses `ghost` Cancel + `destructive` confirm at **default size** (§4 / D-2). Never a bespoke button. |
 | **Badge** | variants `default · secondary · destructive · outline` (+ feature `--status-*` tints) | Status/meta chips; status color is reinforcement, the label carries meaning. |
 | **Card** | (single) header/content/footer slots | shadcn `Card` (radius xl, `--shadow-raised`). Panels are NOT Cards — they are `bg-card` sections (§2). |
-| **Dialog** | `DialogContent` + Header/Title/Description/Footer | EVERY `DialogContent` MUST set `bg-popover` (D-1). Title = `text-title` foreground; Description = `text-body` muted. overlay z-layer. |
-| **ConfirmDialog** | (composed Dialog) | Destructive-confirm canon (D-2): `ghost` autofocus Cancel + `destructive` confirm, default size, `bg-popover`. |
+| **Dialog** | `DialogContent` + Header/Title/Description/Footer | Belongs to one of the two **dialog classes** (§4 / D-13). `DialogContent` DEFAULTS to `bg-popover` + `shadow-overlay` + `z-overlay` (D-1 root fix, §11/§13); never override the surface back to `bg-background`. Title = `text-title` foreground; Description = `text-body` muted (§8). Footer actions = `default`-size buttons in BOTH classes (D-13). Enter/exit at `duration-fast`. |
+| **ConfirmDialog** | (composed Dialog) | The canonical **CONFIRM/ALERT** class (§4 / D-13): `sm:max-w-sm`, `showCloseButton={false}`, `ghost` autofocus Cancel + `destructive` confirm (solid crimson fill, white text, D-12) at **default** size, on the primitive's default `bg-popover` (D-1/D-2). |
 | **Tabs** | list/trigger/content | active trigger uses `--brand-accent` (D-4), never blue. |
 | **Select** | trigger/content/item/label | overlay z-layer; `bg-popover` content; item text `text-body`/label `text-caption`. |
 | **Tooltip** | content/arrow | overlay z-layer; inverted (`bg-foreground text-background`) chip; `--duration-fast` enter. |
@@ -299,6 +324,48 @@ already uses `ring-[1.5px]`). Adopt the thin ring as canon; the `ring-[3px]` →
 Button/Badge (and the `focus-visible:ring-[3px]` on `FileTabStrip`/`PanelTabStrip`/`ResizeDivider`) is
 a **migration-backlog** item, deliberately not flipped here.
 
+## 15. Chat-surface canon (the Cosmos timeline)
+
+The Cosmos panel is a **chat conversation**, not a surface-composition body. Its timeline
+(`CosmosTimelineEntry`) has a fixed **role → token** mapping so every turn is on-system and the
+conversation reads `user-filled-right / assistant-plain-left`. The cardinal rule: **`--primary` is
+NEVER used as a GENERIC chat surface tint** — the assistant reply stays BARE on `bg-card`, and the
+tool-call / typing rows stay `bg-muted/40`. `--primary` (#e9aee9, the logo pink) is the **action /
+brand-accent** color; it is not splashed across arbitrary chat surfaces. The **ONE intentional
+exception** is the **user's OWN message bubble**, which IS the brand "my message" accent
+(`bg-primary` + `text-primary-foreground`) — a deliberate product choice and the universal
+sent-message convention (the user's turn is the one surface allowed to carry the brand accent). The
+ORIGINAL defect was not "primary on the bubble" but a FADED `bg-primary/15` 15% tint (an off-system,
+washed-out wrong color, "원래 쓰는 색이 아니야"); the fix is the SOLID `bg-primary` paired with its
+`text-primary-foreground`, not a watered-down tint (D-14).
+
+| Timeline role | Surface | Text | Radius | Align | Width | Type |
+|---|---|---|---|---|---|---|
+| **User prompt bubble** | `bg-primary` (#e9aee9) — the brand "my message" accent | `text-primary-foreground` | `rounded-2xl rounded-br-sm` | right (`justify-end`) | `max-w-chat-bubble` | `text-body-sm` |
+| **Prompt context chip** | `Badge variant="secondary"` (= `bg-secondary`) | `text-secondary-foreground` | Badge default | right (above bubble) | `max-w-chat-bubble` | Badge default |
+| **Assistant reply** | none — **bare on panel `bg-card`** | `text-card-foreground` | — | left (inside `AssistantRow`) | `max-w-chat-bubble` | `text-body-sm` |
+| **Tool-call row** | `bg-muted/40` + `border-border/60` | `text-muted-foreground` (name = `text-foreground`) | `rounded-md` | left / full-width | — | `text-caption` |
+| **Typing indicator** | `bg-muted/40` | dots (D-8) | `rounded-2xl rounded-bl-sm` | left | `w-fit` | — |
+| **Assistant avatar** | `Avatar size="sm"` (24px) `bg-muted` circle holding `CosmosGlyphIcon` (= `SURFACE_ICON.cosmos`, the rail-tab glyph; `size-4`, `text-muted-foreground`) | mono logo glyph (`aria-hidden`) | `rounded-full` | left, leading the reply (`flex items-start gap-2`) | — | — |
+
+**Assistant avatar (D-17):** every assistant turn — assistant text AND the in-progress `TypingIndicator` — renders inside an `AssistantRow`: a small MONOCHROME Cosmos logo avatar on the LEFT, then the reply. The avatar is `Avatar size="sm"` (a 24px `bg-muted` circle) holding `CosmosGlyphIcon` — the SAME four-point-sparkle glyph the left rail's Cosmos tab uses (`SURFACE_ICON.cosmos`, the one rail-logo source, D-10), already `currentColor`-monochrome — in `text-muted-foreground`, one quiet neutral glyph in the same `muted` family as the tool-call/typing rows, NEVER the brand gradient or `--primary`. This makes the timeline read `user-accent-right / assistant-logo-left`: the user's own turn carries the brand-pink bubble (D-14); the agent's turns carry its logo.
+
+**Why `primary` for the user bubble (and `secondary` for its chip):** the user's bubble carries the
+brand **`--primary`** accent because it is the user's OWN sent message — the conventional "my message
+= brand accent" bubble, the one surface in the timeline allowed to use the action/brand color. The
+context chip above it stays a quieter **`secondary`** breadcrumb: it is a leading "I was looking at …"
+caption, NOT part of the message, so it deliberately does NOT share the bubble's accent family —
+**accent message vs quiet context** keeps the prompt the loud element and the context a calm
+sub-line. The assistant reply stays bare on `bg-card`, so the conversation still reads
+`user-accent-right / assistant-plain-left`. **Shared width token:** the user bubble, its context chip,
+AND the assistant reply (`AssistantRow`) all consume **`max-w-chat-bubble`**
+(`--chat-bubble-max-w` = **2/3** ≈ `66.6667%` in `index.css` `@theme` + the manual `@utility` bridge) —
+ONE source of truth so they never drift, and so NEITHER a long user turn NOR a long agent turn ever
+exceeds 2/3 of the timeline width (user request: a long cosmos message felt overwhelming). A new chat
+role extends this table; only the user's own bubble may
+carry `--primary` — every OTHER chat surface uses a real card/secondary/muted token, never `--primary`
+and never a raw arbitrary width.
+
 ## 5. Design Criteria Registry (enforced rules + why)
 
 Each rule was learned from a real defect or decision. Add a row whenever you establish/repair a
@@ -306,30 +373,36 @@ standard. Format: `ID — rule — why — where`.
 
 | ID | Rule | Why (rationale / incident) | Where |
 |----|------|----------------------------|-------|
-| **D-1** | **Every `DialogContent` (and modal/popover surface) MUST explicitly set `bg-popover`.** shadcn's `DialogContent` default is `bg-background`, which is the WRONG (editor `#1e1e1e`) surface. | The Disconnect confirm modal regressed 5+ times: its code looked canonical, but it inherited the implicit `bg-background` default while every sibling dialog passes `bg-popover (#252526)` — so it rendered on a darker, off-system surface and the title/description contrast read wrong. Invisible to code review because the wrong surface comes from an *omitted* class. | `components/ui/confirm-dialog.tsx`, all `DialogContent` sites |
+| **D-1** | **The `Dialog` primitive DEFAULTS its `DialogContent` to `bg-popover` (root fix, disconnect-modal-design-foundation-v1); NEVER override a dialog/modal/popover surface back to `bg-background`.** The overlay surface also carries `shadow-overlay` (§11) + `z-overlay` (§13) at the primitive. | The Disconnect confirm modal regressed 5+ times: shadcn's `DialogContent` shipped the WRONG `bg-background` (editor `#1e1e1e`) default, so a dialog that merely OMITTED `bg-popover` rendered on a darker, off-system surface with wrong title/description contrast — invisible to code review because the bug came from an *omitted* class. Making `bg-popover` the primitive DEFAULT removes the omission failure mode entirely (consumers may still pass it as defense-in-depth). | `components/ui/dialog.tsx` (default), `confirm-dialog.tsx`, all `DialogContent` sites |
 | **D-2** | Destructive-confirm modals use `ghost` Cancel (autofocus) + `destructive` confirm at default size; destructive semantic on the action only. | Keeps every disconnect/delete prompt uniform; prevents a stray Enter from dropping a connection. | `confirm-dialog.tsx`, `SettingsDialog.tsx` |
 | **D-3** | Panels are `bg-card`; any in-flow band docked to a panel (e.g. the Cosmos docked composer) MUST carry the SAME `bg-card` so the panel reads as one continuous color top-to-bottom — never expose `bg-background` underneath. | The docked Open-Prompt composer band was a sibling below the panel `<section>` with no surface of its own, exposing `bg-background` → a visible top/bottom color seam. | `App.tsx` SharedComposer docked branch |
 | **D-4** | Active/selected/connected chrome uses `--brand-accent`, never blue. | Brand consistency; the old blue accent kept leaking back in. | rail, tabs, switches, dots |
 | **D-5** | `--primary` is `#e9aee9` (logo-matched); focus ring `--ring` thin (~1.5px). | Primary controls must match the logo color; the focus border was too thick. | `index.css`, inputs |
-| **D-6** | **New surfaces compose from the named foundation scales (§7–§14), never raw arbitrary values** — typography from §8 (`text-nano…text-title`, no `text-[Npx]`/`leading-[…]`), spacing from §9 (4px grid + `--space-*`, no `px-2.5`/`gap-[…]`), radius §10, elevation §11 (`--shadow-*`/`glass-dock`), motion §12 (`--duration-*`/`--ease-*`, no `duration-[…]`/`ease-[…]`), z-index §13 (named rung, no fresh `z-50`). | The renderer grew components-first: every non-color dimension was assigned ad-hoc per feature (~85 raw arbitrary values across ~26 files), so the same need resolved to different values on different surfaces. Named scales make a new surface on-system by construction. | `index.css` foundation block, all new surfaces; existing drift tracked in the migration backlog |
+| **D-6** | **New surfaces compose from the named foundation scales (§7–§15), never raw arbitrary values** — typography from §8 (`text-nano…text-title`, no `text-[Npx]`/`leading-[…]`), spacing from §9 (4px grid + `--space-*`, no `px-2.5`/`gap-[…]`), radius §10, elevation §11 (`--shadow-*`/`glass-dock`), motion §12 (`--duration-*`/`--ease-*`, no `duration-[…]`/`ease-[…]`), z-index §13 (named rung, no fresh `z-50`). | The renderer grew components-first: every non-color dimension was assigned ad-hoc per feature (~85 raw arbitrary values across ~26 files), so the same need resolved to different values on different surfaces. Named scales make a new surface on-system by construction. | `index.css` foundation block, all new surfaces; existing drift tracked in the migration backlog |
 | **D-7** | **Canonical focus ring is thin ~1.5px** (`ring-[1.5px]`, == Textarea/Input); the `ring-[3px]` on Button/Badge (and `FileTabStrip`/`PanelTabStrip`/`ResizeDivider`) is a migration item, NOT flipped in the foundation cycle. | Reconciles the D-5 thin-ring canon against the components that still ship the thick 3px ring — recorded as backlog so the divergence is tracked, not silently flipped under the appearance-unchanged foundation. | §14, migration backlog |
 | **D-8** | **Busy affordance is surface-kind-specific.** A generative panel composing a SURFACE into its tabpanel body uses the full-height, centered `SurfaceSpinner` ("Generating…" + sparkle). A CHAT timeline turn-in-progress (Cosmos panel) uses the inline, LEFT-aligned `TypingIndicator` (three pulsing dots on `bg-muted/40`) that reads as "assistant is composing a reply" — never the centered surface spinner. | The Cosmos panel is a chat conversation, not a surface-composition body; the full-height "Generating…" sparkle read wrong there (vertically-centered, surface-build semantics) for a left-side assistant reply. Two distinct busy semantics → two distinct affordances; don't reuse the surface spinner in chat flow. Both gate motion behind `prefers-reduced-motion: no-preference` with a static legible fallback + `role="status"`/`aria-busy` text carrying the busy meaning (§12). | `app/SurfaceSpinner.tsx` (surface), `cosmos/TypingIndicator.tsx` + `cosmos-typing-dot` keyframes in `index.css` (chat); consumed by `CosmosTimelineEntry` `live-generating` branch |
 | **D-9** | **Every scroll region uses a canonical scrollbar treatment — the Radix `ScrollArea` primitive OR a plain `overflow-*` div carrying the `scrollbar-hover-only` @utility — NEVER a bare `overflow-*` div (raw OS scrollbar).** Both render a hidden-at-rest, themed-on-hover thumb; `scrollbar-hover-only` reserves track via `scrollbar-gutter: stable` so revealing the bar never shifts content, and works on both axes. | The `scrollbar-hover-only` @utility shipped only in `slackCatalog`'s per-list scroll, so ~15 other scroll regions (panels, dialogs, file viewers, tab strips, the Select menu) rendered the raw OS/Chromium scrollbar — a visible cross-surface inconsistency that drifted because §ScrollArea *named* the utility but no enforced rule required it. Now a class-string presence is node-testable, so the rule is checkable, not just aspirational. **Carve-out:** a 3rd-party widget that owns its OWN internal scrollbar (Monaco editor in `FileViewer`) keeps its widget scrollbar — the utility applies only to real DOM overflow divs. **Slack guard:** this is VISUAL ONLY — it MUST NOT alter the Slack per-list scroll STRUCTURE (`SLACK_LIST_SCROLL_CLASS` / `slackCatalog/layout.tsx` flex-row per-list split, `feedback-slack-per-list-scroll`); `slackCatalog` already carries the class. | `index.css` `scrollbar-hover-only` @utility, `components/ui/scroll-area.tsx`, all panel/dialog/file-viewer/tab-strip/Select scroll divs (bug `scrollbar-design-inconsistency-v1`) |
-| **D-11** | **A read-only "captured context" affordance REUSES the composer `ContextChip` badge idiom — `Badge variant="secondary"` pill, leading muted `↳` on the in-view item, per-kind glyph, truncating label + `Tooltip`, `role="note"` + `aria-label="Prompt context: …"` — but DROPS every interactive control (no `×`/remove) and collapses its dimensions into ONE single-line breadcrumb pill (segments joined by a muted `ChevronRight`), NOT a cluster of separate pills.** Quietness comes from the single small pill + `secondary` fill + muted DECORATION only — text labels stay `text-secondary-foreground` (never dimmed below contrast); panel glyph = `SURFACE_ICON` (D-10, which app), dock-item glyph = the composer's lucide `PRIMARY_ICON` (which kind, SC-009). | The Cosmos timeline must show each user-prompt turn's submit-time context (panel/tab/dock) and read as the SAME product as the composer's "↳ item" chip (spec SC-009), without re-inventing an idiom. The composer splits dimensions into separate removable badges because each is editable; a historical/live record has nothing to remove, so a single cohesive breadcrumb pill is quieter and competes less with the prompt text while staying visually of-a-piece. Records the divergence (read-only, single pill) so the two chips never fork and any future captured-context display follows the same rule. | composer `app/ContextChip.tsx`, timeline `cosmos/PromptContextChip.tsx` + `cosmos/CosmosTimelineEntry.tsx`; design `.sdd/designs/cosmos-timeline-prompt-context-v1.md` |
+| **D-11** | **A read-only "captured context" affordance REUSES the composer `ContextChip` badge idiom — `Badge variant="secondary"` pill, leading muted `↳` on the in-view item, per-kind glyph, truncating label + `Tooltip`, `role="note"` + `aria-label="Prompt context: …"` — but DROPS every interactive control (no `×`/remove) and collapses its dimensions into ONE single-line breadcrumb pill (segments joined by a muted `ChevronRight`), NOT a cluster of separate pills. It sits directly ABOVE the user bubble (right-aligned to it) as a leading "I was looking at …" caption — context is read BEFORE the prompt it scoped (cosmos-context-chip-position-and-historical-v1 #2) — and it renders on BOTH the live (generating) AND the historical/confirmed turn.** Quietness comes from the single small pill + `secondary` fill + muted DECORATION only — text labels stay `text-secondary-foreground` (never dimmed below contrast); panel glyph = `SURFACE_ICON` (D-10, which app), dock-item glyph = the composer's lucide `PRIMARY_ICON` (which kind, SC-009). | The Cosmos timeline must show each user-prompt turn's submit-time context (panel/tab/dock) and read as the SAME product as the composer's "↳ item" chip (spec SC-009), without re-inventing an idiom. The composer splits dimensions into separate removable badges because each is editable; a historical/live record has nothing to remove, so a single cohesive breadcrumb pill is quieter and competes less with the prompt text while staying visually of-a-piece. Records the divergence (read-only, single pill) so the two chips never fork and any future captured-context display follows the same rule. | composer `app/ContextChip.tsx`, timeline `cosmos/PromptContextChip.tsx` + `cosmos/CosmosTimelineEntry.tsx`; design `.sdd/designs/cosmos-timeline-prompt-context-v1.md` |
+| **D-12** | **The `destructive` Button renders `--destructive` crimson (`#d23f3f`) as a SOLID fill with WHITE `--destructive-foreground` (`#ffffff`)** (`bg-destructive text-destructive-foreground hover:bg-destructive/85`) — the conventional white-on-red destructive read; NOT shadcn's stock `dark:bg-destructive/60` translucency. | `--destructive` was a pale rose (`#f3b0b0`) sitting close to the brand pink (`--primary #e9aee9`) and appearing nowhere else as a solid fill, so the disconnect/confirm button "looked like a different modal" (user defect). It is now a real danger red mirroring the light scope's `#dc2626` intent, clearly distinct from the brand, and is the SHARED danger/error role token used across 100+ sites (`text-destructive` / `bg-destructive/15` / `border-destructive/40` error Alerts in every panel). White-on-`#d23f3f` ≈ 4.6:1 (AA for the 14px button label); the foreground flipped near-black→white because the fill is now dark. The destructive semantic stays on the action Button only (D-2). **SHARED-TOKEN tradeoff:** the faded `Alert variant="destructive"` error TEXT consumes the same token as `text-destructive` on dark, where `#d23f3f` ≈ 3.7:1 (AA-large, below 4.5 body) — accepted (no single value satisfies both white-on-fill and red-text-on-dark AA); a future split onto a lighter `--destructive-text` token is BACKLOGGED. | `components/ui/button.tsx` destructive variant; `confirm-dialog.tsx`, `SettingsDialog.tsx` "Save & sign out"; `index.css` `.dark --destructive` |
+| **D-13** | **Dialogs belong to exactly ONE of two classes — CONFIRM/ALERT (small) or UTILITY (large) — and EVERY dimension is pinned to the class (§4 table), not chosen per-component. The decisive rule: a dialog FOOTER action Button is `default` size (h-9) in BOTH classes; `size="sm"` (h-8) is ONLY for in-body inline row controls (never a footer action).** CONFIRM/ALERT = `bg-popover` + `sm:max-w-sm` + `p-6 gap-4` + `text-title`/`text-body` header + `ghost` Cancel(autofocus)+`destructive`/`default` action at default size + `showCloseButton={false}`. UTILITY = `bg-popover` + large content width + `p-0` sectioned (header/footer border) + same header steps + `ghost`+action footer at default size. | The disconnect `ConfirmDialog` read "off only here": its color/font/button-size were judged per-component against SettingsDialog with NO single codified spec, so divergence was inevitable (the orchestrator found ConfirmDialog=default, SettingsDialog footer=default, but the connect/disconnect ROWS=sm, with no rule saying which a "dialog button" is). Pinning the two classes — and separating footer actions (default) from in-body inline controls (sm) — makes a dialog on-system BY RULE. The actual confirm/alert surface was already token-aligned post-D-1/D-12; this rule LOCKS it so it can't re-drift. | §4 "Dialog classes", §14 (Dialog/ConfirmDialog), `components/ui/dialog.tsx`, `components/ui/confirm-dialog.tsx`, `app/SettingsDialog.tsx` |
+| **D-14** | **The user's OWN message bubble IS the brand `--primary` accent (`bg-primary`/`text-primary-foreground`) — the deliberate "my message" convention; every OTHER Cosmos chat surface NEVER misuses `--primary` as a generic surface tint: assistant reply = BARE on panel `bg-card`/`text-card-foreground` (no bubble), tool-call/typing rows = `bg-muted/40`. The context chip above the bubble stays a quieter `Badge variant="secondary"`. The user bubble + context chip share the ONE `max-w-chat-bubble` token (`--chat-bubble-max-w` = 85%).** *(SUPERSEDES the earlier "user bubble = `bg-secondary`" decision, which the user reverted by product call: "사용자 메세지 bubble 색은 primary color로 가줘.")* | The bubble's ORIGINAL defect was `bg-primary/15` — a FADED 15% logo-pink tint, an off-system washed-out wrong color ("원래 쓰는 색이 아니야"), NOT "primary on the bubble" per se. The product wants the conventional brand "my message = accent" bubble, so the fix is the SOLID `bg-primary` paired with `text-primary-foreground`, not a watered-down tint and not a retreat to `secondary`. The narrowed principle stands: `--primary` is the action/brand-accent color and is NOT splashed across arbitrary chat surfaces — the assistant/tool/typing surfaces use real card/muted tokens; only the user's own turn (the universal sent-message convention) carries the accent. The context chip stays `secondary` so context reads as a calm sub-line, not part of the accented message (accent message vs quiet context). The shared width token kills the duplicated raw `max-w-[85%]` on bubble + chip. | §2 (chat rows), §15 chat-surface canon, `cosmos/CosmosTimelineEntry.tsx` (`UserBubble`), `cosmos/PromptContextChip.tsx`, `index.css` `--chat-bubble-max-w` + `max-w-chat-bubble` @utility |
+| **D-15** | **A renderer tree that surveys ANOTHER surface's items (the Cosmos panel-tab list) REUSES `FileTree`'s `role="tree"` roving-tabindex pattern + visual language — never a divergent keymap or a bespoke tree.** `ScrollArea` region (D-9); `h-7` `rounded-sm` rows; `text-body-sm` (§8); the VERBATIM FileTree keymap (↑/↓ + Home/End move focus, →/← expand·descend / collapse·ascend, Enter/Space activate); group header = `SURFACE_ICON[panelId]` glyph (D-10) + `RAIL_LABEL`; leaf row = ONE consistent lucide glyph (`AppWindow` for a tab) + label + Tooltip. The row states stay VISUALLY DISTINCT: hover `bg-accent`; roving focus = thin inset `--ring` (D-7); persistent **selection** = leading `--brand-accent` inset left bar + `bg-accent` + `font-medium` + `aria-selected` (D-4); a "live-but-inactive" marker (the source panel's ACTIVE tab) = a leading `--brand-accent` dot. Empty group = quiet `text-caption` "No open tabs" line (FileTree "Empty" idiom); no groups = one calm centered block; a malformed entry is skipped (warn+skip), never crashes. Reads synchronously (no fetch) ⇒ no loading skeleton. | The cross-panel tab tree needs THREE separable row states (hover ≠ keyboard-focus ≠ the tab chosen as context), one more than FileTree's two; codifying the pattern keeps every future "survey another surface" tree on the SAME keymap + visual language instead of re-inventing one, and pins the brand-accent active/selection affordance (D-4) so a selected/active row never reverts to a stray fill or blue. | `cosmos/PanelTabTree.tsx`, `fileExplorer/FileTree.tsx` (idiom source), design `.sdd/designs/cosmos-panel-tab-list-v1.md` |
+| **D-16** | **The context-chip data is a DISCRIMINATED UNION — `ContextChipData = { kind:'item'; primary; secondary? } \| { kind:'panel-tab'; panel; tab }` — and a panel+tab selection renders the D-11 breadcrumb, NOT a 5th item kind.** The `panel-tab` chip renders the SAME `[SURFACE_ICON panel] Panel › [AppWindow] Tab` breadcrumb as the read-only timeline `PromptContextChip` (D-11): `Badge variant="secondary"`, muted `ChevronRight` separator, panel glyph from `SURFACE_ICON` (D-10, the ONE source — NOT `PRIMARY_ICON`), tab glyph lucide `AppWindow`, NO `↳` (the `↳` decorates a dock ITEM only, which a panel+tab has none of). The COMPOSER variant keeps the removable `×` (`ghost` `icon-xs` → `contextDismiss:'all'` clears the selection); the TIMELINE variant is read-only. NON-SECRET labels only (`panel.id/label`, `tab.id/label`) — FR-011. The two chips never fork. | The composer/timeline chip was item-oriented (`primary.kind: jira\|slack-channel\|confluence\|calendar` → `PRIMARY_ICON`/`PRIMARY_NOUN`) and could NOT express a plain panel+tab tree selection — its glyph is PER-PANEL (`SURFACE_ICON`), not a fixed icon, and it heads no `↳` dock item. A union keeps the item chip byte-identical while making the panel+tab chip reuse the breadcrumb idiom the timeline already ships, so the two render identically (one with `×`, one read-only). When OQ-3 (cross-panel dock) lands, a dock segment is added by reusing `PromptContextChip.DockSegment`, no new kind. | `app/viewContextCapture.ts` (`ContextChipData`), `app/ContextChip.tsx` (`panel-tab` branch), `cosmos/cosmosSelectedContext.ts`, `cosmos/PromptContextChip.tsx` (D-11 idiom), design `.sdd/designs/cosmos-panel-tab-list-v1.md` |
 | **D-10** | **A rail surface's icon has ONE source of truth — `SURFACE_ICON` (`app/surfaceIcons.tsx`), keyed by `SurfaceId`.** BOTH the left rail (`RAIL_ITEM` in `App.tsx`) and that surface's `PanelFooter` consume it; a `PanelFooter` NEVER passes a hand-picked lucide icon. The Cosmos panel keeps the shared `PanelFooter` name+status strip at the BOTTOM of its `<section>` (after the `flex-1` timeline, above the App-level docked composer band) for parity with the other rail panels. | The footer icon was chosen independently of the rail icon, so the two drifted on every panel (Slack footer showed lucide `MessageSquare` while the rail showed the `SiSlack` brand mark; Jira `SquareKanban` vs `SiJira`; Confluence `BookText` vs `SiConfluence`; Calendar `CalendarDays` vs `SiGooglecalendar`; Terminal `SquareTerminal` vs `ClaudeCodeIcon`), and the Cosmos panel had dropped its footer entirely when the docked composer became its bottom chrome. A single keyed map makes footer == rail BY CONSTRUCTION with no second place to drift. Icons are `currentColor` SVGs taking only `className`, so they inherit the footer's `text-muted-foreground` and render fine at the footer's `size-3`. | `app/surfaceIcons.tsx` (`SURFACE_ICON`), `App.tsx` `RAIL_ITEM`, every `PanelFooter` call site (`TerminalPanel`/`JiraPanel`/`SlackPanel`/`ConfluencePanel`/`GoogleCalendarPanel`/`CosmosPanel`), bug `cosmos-footer-and-icon-unify-v1` |
+| **D-17** | **Every Cosmos timeline ASSISTANT turn (assistant text AND the in-progress `TypingIndicator`) renders inside an `AssistantRow`: a small MONOCHROME Cosmos logo avatar on the LEFT, then the reply — `flex items-start gap-2`. The avatar is `Avatar size="sm"` (a 24px `bg-muted` circle) holding `CosmosGlyphIcon` (`size-4`) in `text-muted-foreground` — one quiet neutral glyph in the `muted` family, NEVER the brand pink→purple gradient or `--primary`. The mark is `aria-hidden` (the timeline conveys the speaker). The user's own turn stays the right-aligned `bg-primary` bubble (D-14) → `user-accent-right / assistant-logo-left`.** | The assistant reply rendered BARE with no speaker affordance, so a long agent turn read as ownerless prose; the user asked for the Cosmos logo as the agent's avatar, and specifically the SAME logo the side rail tab uses ("side tab에 사용한 logo … 그걸로 흑백 아바타"). Reusing `CosmosGlyphIcon` (`SURFACE_ICON.cosmos`, D-10 — the four-point sparkle, already `currentColor`-monochrome) keeps the avatar IDENTICAL to the rail's Cosmos mark — not the pastel-gradient `CosmosMark`, not a hand-rolled SVG — so the agent's avatar and its rail tab are one glyph; `text-muted-foreground` keeps it quiet so it never competes with the user's brand-pink bubble; the `Avatar` primitive + foundation `gap-2`/`muted` tokens keep it on-system. Both the assistant-text and `live-generating` branches share `AssistantRow` so the agent reads as the SAME speaker in-progress and settled. | `app/surfaceIcons.tsx` (`CosmosGlyphIcon`/`SURFACE_ICON.cosmos`), `cosmos/CosmosTimelineEntry.tsx` (`AssistantRow`, assistant-text + live-generating branches), `components/ui/avatar.tsx` (`size="sm"`) |
 
 ## 6. How the designer maintains this file
 
 1. **Before** designing any surface: read §2 (surface→token map), §5 (registry), and the relevant
-   foundation scale (§7–§14), and design to them. Express every text size / space / radius / shadow /
+   foundation scale (§7–§15), and design to them. Express every text size / space / radius / shadow /
    transition / stacking decision as a **named token** (D-6) — no raw arbitrary values on new surfaces.
 2. When a surface needs something the canon doesn't cover, decide the standard ONCE, apply it, and
-   **add/update the row here** (token table, a scale section §7–§14, and/or the registry) so it's
+   **add/update the row here** (token table, a scale section §7–§15, and/or the registry) so it's
    enforced next time. A genuinely new scale step extends the relevant section + adds the matching
    token to `index.css` — never an inline value.
 3. After implementation (design review, design skill Step 6): audit the built surface against §2,
-   §5, and §7–§14. Any deviation is a fix, and if it reveals a missing rule, record it here.
-4. **Keep the doc and the stylesheet in sync.** Every scale token named in §7–§14 MUST exist in
-   `src/renderer/index.css` and vice-versa; keep §2/§5/§7–§14 coherent with `index.css` and
+   §5, and §7–§15. Any deviation is a fix, and if it reveals a missing rule, record it here.
+4. **Keep the doc and the stylesheet in sync.** Every scale token named in §7–§15 MUST exist in
+   `src/renderer/index.css` and vice-versa; keep §2/§5/§7–§15 coherent with `index.css` and
    `docs/ARCHITECTURE.md`. The migration backlog (existing surfaces still on raw values) lives in
    `.sdd/plans/design-foundation-v1.md` + `TODO.md`, not here.

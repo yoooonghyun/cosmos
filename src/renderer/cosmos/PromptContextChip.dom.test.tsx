@@ -11,12 +11,27 @@ import { describe, it, expect } from 'vitest'
 import { render, screen } from '@testing-library/react'
 import { TooltipProvider } from '@/components/ui/tooltip'
 import { PromptContextChip } from './PromptContextChip'
+import { CosmosTimelineEntry } from './CosmosTimelineEntry'
+import type { TimelineEntry } from './cosmosConversation'
 import type { PromptContext } from '../../shared/promptContext/promptContext'
+import {
+  serializePromptContextMarker,
+  parsePromptContextMarker
+} from '../../shared/promptContext/promptContextMarker'
+import type { ConversationTurn } from '../../shared/types/conversation'
 
 function renderChip(context?: PromptContext) {
   return render(
     <TooltipProvider>
       <PromptContextChip context={context} />
+    </TooltipProvider>
+  )
+}
+
+function renderEntry(entry: TimelineEntry) {
+  return render(
+    <TooltipProvider>
+      <CosmosTimelineEntry entry={entry} />
     </TooltipProvider>
   )
 }
@@ -103,5 +118,150 @@ describe('PromptContextChip', () => {
     })
     expect(container.innerHTML).not.toContain('<cosmos:context>')
     expect(container.textContent).not.toContain('cosmos:context')
+  })
+})
+
+/**
+ * The HISTORICAL user-prompt turn rendered through `CosmosTimelineEntry`
+ * (cosmos-context-chip-position-and-historical-v1).
+ *
+ * #1 regression guard: a COMPLETED turn whose transcript carried a `<cosmos:context>` marker is
+ * parsed (by `transcriptParse`, covered node-side) into `turn.context`, so the chip MUST render on
+ * the historical turn — not only on the live (generating) turn. Locks the live-only regression
+ * (the marker was once silently wiped from `CosmosPanel`, so completed turns lost their chip).
+ *
+ * #2 ordering: the chip sits ABOVE the bubble (chip → bubble) in the historical branch too.
+ */
+describe('CosmosTimelineEntry — historical user-prompt turn', () => {
+  const historicalContext: PromptContext = {
+    panel: { id: 'jira', label: 'Jira' },
+    tab: { id: 't1', label: 'Sprint board' },
+    dock: { kind: 'jira-issue', selectedIssueKey: 'PROJ-123' }
+  }
+
+  it('renders the chip on a HISTORICAL turn carrying a parsed context (#1, not live-only)', () => {
+    renderEntry({
+      kind: 'turn',
+      turn: {
+        kind: 'user-prompt',
+        id: 'u1',
+        ts: '2026-01-01T00:00:00Z',
+        text: 'summarize this ticket',
+        context: historicalContext
+      }
+    })
+    // The chip (role="note") IS present on the completed turn…
+    const chip = screen.getByRole('note')
+    expect(chip).toBeInTheDocument()
+    expect(screen.getByText('PROJ-123')).toBeInTheDocument()
+    // …and it sits ABOVE the bubble (chip → bubble in DOM order — #2).
+    const bubble = screen.getByText('summarize this ticket')
+    expect(chip.compareDocumentPosition(bubble) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+  })
+
+  it('renders a bare bubble (no chip) on a historical turn with no context (FR-021)', () => {
+    renderEntry({
+      kind: 'turn',
+      turn: { kind: 'user-prompt', id: 'u2', ts: '2026-01-01T00:00:00Z', text: 'hello there' }
+    })
+    expect(screen.getByText('hello there')).toBeInTheDocument()
+    expect(screen.queryByRole('note')).not.toBeInTheDocument()
+  })
+})
+
+/**
+ * #1 FAITHFUL round-trip guard (cosmos-context-chip-crosspanel-and-historical-v1).
+ *
+ * The prior historical guard above INJECTS `turn.context` directly, so it proves the chip RENDERS
+ * but NOT the marker→parse→chip round-trip — it cannot catch a real codec/parse break. This guard
+ * drives the WHOLE chain with the REAL codec, never a hand-built `turn.context`:
+ *
+ *   serializePromptContextMarker(jiraCtx)  → append to the utterance (the submit-side string)
+ *     → parsePromptContextMarker(text)  (the EXACT read-side codec `parseTranscript` delegates to —
+ *        cf. transcriptParse.ts: a string-content user line is fed straight through it)
+ *       → build the `user-prompt` turn from the parser's `{context, text}` output (NOT injected),
+ *         mirroring parseTranscript's mapping
+ *         → render through CosmosTimelineEntry
+ *           → the chip MUST show THAT panel (Jira) + the stripped CLEAN prose
+ *
+ * The jsonl line extraction around the codec is covered node-side (`transcriptParse.test.ts`); the
+ * `.ts`/`.test.ts` project split keeps a renderer dom test from importing the main-side parser, so
+ * we drive the shared codec it delegates to. Locks the round-trip for a NON-cosmos panel (the
+ * user's doubt was a Jira/Slack submit chip) and asserts the raw marker never reaches the surface.
+ */
+describe('historical chip — REAL marker round-trip (non-cosmos panel)', () => {
+  /**
+   * Run a captured PromptContext through the REAL submit→read codec, building the `user-prompt`
+   * turn exactly as `parseTranscript` does (from the parser's `{context, text}` output — never a
+   * hand-built context). Returns the turn the timeline would carry for that historical prompt.
+   */
+  function roundTripTurn(utterance: string, ctx: PromptContext): ConversationTurn {
+    // Submit side (channel b): the trailing <cosmos:context> block appended to the prose.
+    const marker = serializePromptContextMarker(ctx)
+    expect(marker).not.toBe('') // the codec produced a real marker for this context
+    // Read side: the same codec parseTranscript feeds a string-content user line through.
+    const parsed = parsePromptContextMarker(utterance + marker)
+    return {
+      kind: 'user-prompt',
+      id: 'rt-1',
+      ts: '2026-06-28T00:00:00Z',
+      text: parsed.text,
+      ...(parsed.context ? { context: parsed.context } : {})
+    }
+  }
+
+  it('a JIRA-context marker round-trips through the REAL codec into a Jira chip', () => {
+    const jiraContext: PromptContext = {
+      panel: { id: 'jira', label: 'Jira' },
+      tab: { id: 't1', label: 'Sprint board' },
+      dock: { kind: 'jira-issue', selectedIssueKey: 'PROJ-123' }
+    }
+    const utterance = 'summarize this ticket'
+    const turn = roundTripTurn(utterance, jiraContext)
+    if (turn.kind !== 'user-prompt') {
+      throw new Error('expected a user-prompt turn')
+    }
+    // The parser recovered the Jira context from the marker (the round-trip, not an injection)…
+    expect(turn.context?.panel.id).toBe('jira')
+    // …and stripped the marker so the bubble text is the clean prose.
+    expect(turn.text).toBe(utterance)
+
+    // Render the PARSED turn — the chip shows the Jira panel + the open issue, clean prose, no marker.
+    renderEntry({ kind: 'turn', turn })
+    const chip = screen.getByRole('note')
+    expect(chip).toBeInTheDocument()
+    expect(screen.getByText('Jira')).toBeInTheDocument()
+    expect(screen.getByText('Sprint board')).toBeInTheDocument()
+    expect(screen.getByText('PROJ-123')).toBeInTheDocument()
+    expect(screen.getByText(utterance)).toBeInTheDocument()
+    // The panel is Jira, never the cosmos default.
+    expect(screen.queryByText('Cosmos')).not.toBeInTheDocument()
+    // The raw marker is never surfaced (FR-025).
+    expect(document.body.textContent ?? '').not.toContain('cosmos:context')
+    expect(document.body.innerHTML).not.toContain('<cosmos:context>')
+  })
+
+  it('a Slack-channel marker round-trips into a Slack #channel chip', () => {
+    const slackContext: PromptContext = {
+      panel: { id: 'slack', label: 'Slack' },
+      tab: { id: 't2', label: 'Channels' },
+      dock: {
+        kind: 'slack-channel',
+        selectedChannelId: 'C0123',
+        selectedChannelName: 'general'
+      }
+    }
+    const utterance = 'recap this channel'
+    const turn = roundTripTurn(utterance, slackContext)
+    if (turn.kind !== 'user-prompt') {
+      throw new Error('expected a user-prompt turn')
+    }
+    expect(turn.context?.panel.id).toBe('slack')
+    expect(turn.text).toBe(utterance)
+
+    renderEntry({ kind: 'turn', turn })
+    expect(screen.getByText('Slack')).toBeInTheDocument()
+    expect(screen.getByText('#general')).toBeInTheDocument()
+    expect(screen.queryByText('Cosmos')).not.toBeInTheDocument()
   })
 })

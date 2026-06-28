@@ -4,7 +4,9 @@
  *
  * The bug: after submitting from the Cosmos composer, the TypingIndicator ("…") spins but the
  * user's OWN prompt bubble is not visible, so the user can't tell their utterance registered.
- * Expected: the user bubble shows FIRST, then the "…" below it.
+ * Expected: the captured-context chip sits ABOVE the bubble, the bubble shows, then the "…" below
+ * it — DOM order chip → bubble → dots (cosmos-context-chip-position-and-historical-v1 #2; the
+ * Cosmos submit always captures a panel/tab context, so the live chip is present).
  *
  * The render is trivially correct in isolation (a `live-generating` entry with `promptText`
  * renders a `UserBubble` then a `TypingIndicator`), so a node test can't catch a regression
@@ -30,6 +32,8 @@ import {
   ActiveComposerProvider,
   useActiveComposerConfig
 } from '../composer/ActiveComposerProvider'
+import { PanelTabsProvider } from '../panelTabs'
+import { SessionProvider } from '../session/SessionProvider'
 import type { ComposerConfig } from '../composer/activeComposer'
 import type { AgentStatusPayload, AgentSubmitPayload } from '../../shared/ipc'
 
@@ -74,7 +78,9 @@ beforeEach(() => {
       ui: {
         // No live surface in this test — just record/return a no-op unsubscribe.
         onRender: () => () => {}
-      }
+      },
+      // CosmosPanel now reads enabled integrations (cross-panel tree) → SessionProvider needs a save.
+      session: { save: () => {} }
     }
   })
 })
@@ -96,10 +102,14 @@ function renderPanel(): { getConfig: () => ComposerConfig | null } {
   let latest: ComposerConfig | null = null
   render(
     <TooltipProvider>
-      <ActiveComposerProvider>
-        <CosmosPanel active />
-        <CaptureComposer onConfig={(c) => (latest = c)} />
-      </ActiveComposerProvider>
+      <SessionProvider snapshot={null}>
+        <ActiveComposerProvider>
+          <PanelTabsProvider>
+            <CosmosPanel active />
+            <CaptureComposer onConfig={(c) => (latest = c)} />
+          </PanelTabsProvider>
+        </ActiveComposerProvider>
+      </SessionProvider>
     </TooltipProvider>
   )
   return { getConfig: () => latest }
@@ -124,10 +134,14 @@ describe('Cosmos live bubble while generating (cosmos-live-bubble-missing-while-
     // The submitted text bubble is present…
     const bubble = screen.getByText('make me a chart')
     expect(bubble).toBeInTheDocument()
+    // …the captured-context chip (Cosmos panel + active tab) renders ABOVE the bubble…
+    const chip = screen.getByRole('note')
+    expect(chip).toBeInTheDocument()
+    expect(chip.compareDocumentPosition(bubble) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
     // …and the typing indicator (assistant working affordance) is present…
     const typing = screen.getByRole('status')
     expect(typing).toBeInTheDocument()
-    // …and the bubble comes BEFORE the indicator in DOM order (bubble → dots).
+    // …and the bubble comes BEFORE the indicator in DOM order (chip → bubble → dots).
     const rel = bubble.compareDocumentPosition(typing)
     expect(rel & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
     expect(rel & Node.DOCUMENT_POSITION_PRECEDING).toBeFalsy()
@@ -148,6 +162,9 @@ describe('Cosmos live bubble while generating (cosmos-live-bubble-missing-while-
 
     const bubble = screen.getByText('build a form')
     expect(bubble).toBeInTheDocument()
+    // The chip survives the re-seed too and stays ABOVE the bubble (chip → bubble → dots).
+    const chip = screen.getByRole('note')
+    expect(chip.compareDocumentPosition(bubble) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
     const typing = screen.getByRole('status')
     const rel = bubble.compareDocumentPosition(typing)
     expect(rel & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()

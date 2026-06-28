@@ -811,6 +811,10 @@ export function PromptComposer({
     // submit — no launch grow-to-fill, no collapse, no "Sent" hint (the timeline's new prompt
     // bubble + generating affordance is the feedback). Just clear + keep focus, chat-style.
     if (docked) {
+      // Chip dismiss is per-compose (design §5): the docked composer never collapses (which is
+      // what resets it for the floating panels), so reset here so a NEXT panel+tab selection's
+      // chip is not suppressed by a prior submit's 'all' dismiss (cosmos-panel-tab-list-v1).
+      setContextDismiss('none')
       textareaRef.current?.focus()
       return
     }
@@ -935,6 +939,22 @@ export function PromptComposer({
             // internally; same bounds as the floating card so both composers feel identical.
             className="max-h-[9rem] min-h-[2.5rem] resize-none"
           />
+          {/* cosmos-panel-tab-list-v1: the in-view / panel+tab context chip. The DOCKED Cosmos
+              composer previously omitted it (cosmos had no view context), so a tree-click selection
+              had no visible affordance — this renders the SAME chip the floating composer shows,
+              hidden once dismissed 'all'. */}
+          {contextDismiss !== 'all' && (
+            <ContextChip
+              data={
+                contextChip && contextChip.kind === 'item' && contextDismiss === 'thread'
+                  ? { kind: 'item', primary: contextChip.primary }
+                  : contextChip
+              }
+              running={composerLocked}
+              onRemoveAll={() => setContextDismiss('all')}
+              onRemoveThread={() => setContextDismiss('thread')}
+            />
+          )}
           <div className="flex items-center justify-between gap-2">
             <span className="min-w-0 truncate text-[11px] text-muted-foreground">{HINT_COPY}</span>
             <Button
@@ -1210,8 +1230,11 @@ export function PromptComposer({
           {contextDismiss !== 'all' && (
             <ContextChip
               data={
-                contextChip && contextDismiss === 'thread'
-                  ? { primary: contextChip.primary }
+                // The 'thread' dismiss drops only the Slack thread sub-badge — it applies ONLY to
+                // an item chip with a secondary; a panel+tab chip (cosmos-panel-tab-list-v1) has no
+                // thread, so it passes through unchanged.
+                contextChip && contextChip.kind === 'item' && contextDismiss === 'thread'
+                  ? { kind: 'item', primary: contextChip.primary }
                   : contextChip
               }
               // Mirror the Send button (design §3): the remove `×` follows `composerLocked`,

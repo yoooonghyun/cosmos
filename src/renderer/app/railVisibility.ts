@@ -20,6 +20,24 @@ import type { EnabledIntegrations, GateableIntegration } from '../../shared/ipc'
  */
 export type SurfaceId = 'terminal' | 'cosmos' | GateableIntegration
 
+/**
+ * The display label for every rail surface, keyed by `SurfaceId`. The SINGLE source consumed by
+ * the rail (App.tsx `RAIL_ITEM`), every `PanelFooter`, AND the Cosmos panel-tab tree's group
+ * headers (cosmos-panel-tab-list-v1) — so a surface's label can never drift between them. Pure
+ * (no React/DOM), so node-testable + importable by the renderer tree + App alike.
+ *
+ * cosmos-conversation-panel-v1: the rail id is `'cosmos'` (the WIRE render target stays
+ * `'generated-ui'`); the Cosmos brand mark is `CosmosGlyphIcon` (see `surfaceIcons.tsx`).
+ */
+export const RAIL_LABEL: Record<SurfaceId, string> = {
+  terminal: 'Terminal',
+  cosmos: 'Cosmos',
+  slack: 'Slack',
+  jira: 'Jira',
+  confluence: 'Confluence',
+  'google-calendar': 'Google Calendar'
+}
+
 /** The always-present surfaces — never gated, never have an Enable toggle (FR-005). Cosmos sits
  *  ABOVE Terminal in the rail (order = rail order); Terminal remains the default/fallback surface. */
 export const ALWAYS_PRESENT: SurfaceId[] = ['cosmos', 'terminal']

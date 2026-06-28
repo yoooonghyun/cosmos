@@ -108,9 +108,12 @@ a `Tooltip` whose `data-state` clobbers the tab's; see DEVELOPMENT.md "Nested Ra
 **Within each panel, VS Code-style tabs (§4.11).** Each rail panel hosts its OWN independent,
 session-only ordered set of tabs (a side-by-side variable-width strip — click-to-switch,
 per-tab close `X`, trailing `+` new-tab, horizontal overflow scroll). The rail switcher itself
-is UNCHANGED and there is **no global cross-panel tab bar** — every tab strip lives inside its
-panel. When a panel has zero tabs it shows its native base (Slack/Jira/Confluence native
-browser) or idle placeholder (Generated UI); the Terminal panel always keeps ≥1 tab.
+is UNCHANGED and there is **no global cross-panel NAVIGATION tab bar** — every tab strip lives
+inside its panel. (The Cosmos panel does host a **read-only cross-panel tab LIST** — a survey /
+context-picker, not a navigation bar; clicking a row attaches that panel+tab as the next prompt's
+context, it never switches surfaces — see §4.14.) When a panel has zero tabs it shows its native
+base (Slack/Jira/Confluence native browser) or idle placeholder (Generated UI); the Terminal panel
+always keeps ≥1 tab.
 
 Two independent channels reach the same Claude Code process:
 
@@ -944,6 +947,31 @@ is a **collection layer over the per-file `viewerState.ts`**, mirroring the `pan
   it is independent across terminal tabs and is **NOT persisted** to the session snapshot — it
   resets to empty on go-live / app restart, matching the existing ephemeral split-ratio + viewer
   state from #84.
+
+### 4.14 Cosmos panel-tab list — read-only cross-panel tab survey + context-picker (renderer)
+
+The Cosmos panel body is a horizontal **split** (mirroring §4.13's Terminal split): the conversation
+timeline LEFT, a read-only **panel-tab tree** RIGHT, separated by the same bespoke `ResizeDivider`;
+the docked Open-Prompt composer band stays below, unchanged. The tree surveys the LIVE open tabs of
+the four generative panels (Slack/Jira/Confluence/Google Calendar) + the Terminal panel, grouped and
+labeled by panel, using `FileTree`'s roving-tabindex ARIA-tree keymap. Split width is renderer-local
+/ session-only (NOT persisted — matches the Terminal split). Activating a row is **not navigation**:
+it selects that panel+tab as the **one-shot context for the next Cosmos prompt**, shown in the
+composer `ContextChip` and embedded in the `<cosmos:context>` marker via the unchanged
+`buildAgentSubmitWithMarker` path (panel+tab only — no dock cross-panel in v1; same-panel direct
+submits still capture dock).
+
+- **Cross-panel read seam — `PanelTabsProvider` (renderer, `src/renderer/panelTabs/`).** A NEW
+  App-root publish/subscribe context, modeled on `ActiveComposerProvider` (ref-backed registry +
+  `version` counter). Each panel PUBLISHES its full live tab list (panel id + each tab's `{id,label}`
+  + active id — all non-secret display fields) via `usePublishPanelTabs`; the Cosmos tree subscribes
+  via `useAllPanelTabs`. This is DISTINCT from the two existing renderer-root seams and must not be
+  conflated with them: `SessionRegistry` (§4.11 persistence — **write-only, debounced, and LOSSY**:
+  `buildGenerativePanel` keeps only composed surfaces, so it is NOT a faithful live tab list) and
+  `ActiveComposerProvider` (composer routing). The tab list is the immediate, full, lossless live
+  read; persistence stays its own concern.
+- **No reach-in.** The Cosmos panel never reads another panel's internal hook/component state — every
+  panel pushes its own tab list; the tree only consumes the shared registry.
 
 ---
 

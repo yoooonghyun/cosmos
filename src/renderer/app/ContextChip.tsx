@@ -16,7 +16,7 @@
  * (a thread cannot outlive its channel); the thread badge has its own `×` that drops only
  * the thread. The remove control is `disabled` while `running` (mirrors the Send button).
  */
-import { MessagesSquare, X } from 'lucide-react'
+import { AppWindow, ChevronRight, MessagesSquare, X } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
@@ -25,6 +25,10 @@ import type { ContextChipData } from './viewContextCapture'
 // lifted into the shared `contextChipIcons` module so the timeline `PromptContextChip` reuses the
 // SAME source (no duplication). The composer chip imports them from there now.
 import { PRIMARY_ICON, PRIMARY_NOUN } from './contextChipIcons'
+// cosmos-panel-tab-list-v1 (design §3.3 / D-16): a panel+tab selection renders the SAME panel›tab
+// breadcrumb idiom as the read-only timeline `PromptContextChip` — panel glyph from `SURFACE_ICON`
+// (D-10, the ONE icon source), tab glyph lucide `AppWindow`, plus the composer chip's removable `×`.
+import { SURFACE_ICON } from './surfaceIcons'
 
 export interface ContextChipProps {
   /** The display descriptor; undefined ⇒ render nothing (design state A). */
@@ -47,6 +51,49 @@ export function ContextChip({
   if (!data) {
     return null
   }
+
+  // cosmos-panel-tab-list-v1 (design §3.3 / D-16): a panel+tab tree selection renders the D-11
+  // breadcrumb — `[SURFACE_ICON panel] Panel › [AppWindow] Tab ×` — NOT the `↳` dock-item badge
+  // (a tree selection has no dock item). Same breadcrumb the read-only timeline chip ships, plus
+  // the removable `×` (drops the selection for the next compose, FR-016).
+  if (data.kind === 'panel-tab') {
+    const PanelGlyph = SURFACE_ICON[data.panel.id]
+    return (
+      <div className="mt-2 flex min-w-0 items-center gap-1.5">
+        <Badge
+          variant="secondary"
+          className="min-w-0 max-w-[18rem]"
+          role="note"
+          aria-label={`Prompt context: ${data.panel.label} panel, ${data.tab.label} tab`}
+        >
+          <PanelGlyph aria-hidden="true" className="shrink-0 text-muted-foreground" />
+          <span className="shrink-0">{data.panel.label}</span>
+          <ChevronRight aria-hidden="true" className="shrink-0 text-muted-foreground" />
+          <AppWindow aria-hidden="true" className="shrink-0 text-muted-foreground" />
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <span className="min-w-0 truncate" title={data.tab.label}>
+                {data.tab.label}
+              </span>
+            </TooltipTrigger>
+            <TooltipContent side="top">{data.tab.label}</TooltipContent>
+          </Tooltip>
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon-xs"
+            disabled={running}
+            aria-label={`Remove ${data.tab.label} from this prompt`}
+            className="-mr-1 ml-0.5 shrink-0 rounded-full hover:bg-accent"
+            onClick={onRemoveAll}
+          >
+            <X aria-hidden="true" />
+          </Button>
+        </Badge>
+      </div>
+    )
+  }
+
   const PrimaryIcon = PRIMARY_ICON[data.primary.kind]
   const primaryNoun = PRIMARY_NOUN[data.primary.kind]
   const primaryAria = `${primaryNoun} ${data.primary.label}`

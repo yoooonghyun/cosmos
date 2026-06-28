@@ -83,6 +83,39 @@ beforeEach(() => {
   cleanup()
 })
 
+describe('Dedicated (non-editor) viewer body is focusable (viewer-keyboard-shortcut-nonmonaco-focus-v1)', () => {
+  // The dedicated viewers (PdfView/DocxView/SheetView/ImageView) have ZERO focusable children, so
+  // before the fix focus could never enter the viewer subtree — `onViewerFocusChange(true)` never
+  // fired and the focus-aware `Ctrl/Cmd+W` / `Cmd+Opt+Arrow` routing was dead for image/PDF tabs.
+  // The fix makes the populated body wrapper itself focusable (`tabIndex={-1}`) and focuses it when a
+  // non-editor file becomes active. This guards that contract WITHOUT letting Monaco's case regress.
+  it('focuses the body wrapper + reports viewer focus when a PDF becomes active', () => {
+    const onViewerFocusChange = vi.fn()
+    render(
+      <FileViewer
+        paneId="p1"
+        openFiles={[{ relPath: 'doc.pdf', name: 'doc.pdf' }]}
+        activeRelPath="doc.pdf"
+        viewer={{ kind: 'pdf', relPath: 'doc.pdf', name: 'doc.pdf' }}
+        onActivate={vi.fn()}
+        onClose={vi.fn()}
+        onRenderError={vi.fn()}
+        onViewerFocusChange={onViewerFocusChange}
+      />
+    )
+
+    // The activate effect must have moved DOM focus onto the body wrapper (the only focus target a
+    // PDF/image viewer subtree has). focusin bubbles to the wrapper's onFocus → reports `true`.
+    expect(onViewerFocusChange).toHaveBeenLastCalledWith(true)
+
+    // And the focused element must be inside the viewer subtree (so focus-within holds and the
+    // shortcuts route to the active FILE tab). It carries tabIndex=-1 (the wrapper itself).
+    const active = document.activeElement as HTMLElement | null
+    expect(active).not.toBeNull()
+    expect(active?.getAttribute('tabindex')).toBe('-1')
+  })
+})
+
 describe('Monaco focus drives viewer-focus (terminal-tab-nav-monaco-focus-v1)', () => {
   it('reports viewer focus from onDidFocusEditorText, NOT from DOM focus bubbling', () => {
     const onViewerFocusChange = vi.fn()

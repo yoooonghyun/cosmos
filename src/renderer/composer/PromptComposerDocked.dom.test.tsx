@@ -24,7 +24,9 @@ import '@testing-library/jest-dom/vitest'
 import { useState } from 'react'
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { render, screen, act, fireEvent } from '@testing-library/react'
+import { TooltipProvider } from '@/components/ui/tooltip'
 import { PromptComposer } from './PromptComposer'
+import type { ContextChipData } from '../app/viewContextCapture'
 import { SessionProvider } from '../session/SessionProvider'
 import { OpenPromptPositionProvider } from './OpenPromptPositionProvider'
 
@@ -61,33 +63,66 @@ afterEach(() => {
 function DockedHarness({
   onSubmit = vi.fn(),
   busy = false,
-  initialAutoFocusActive = false
+  initialAutoFocusActive = false,
+  contextChip
 }: {
   onSubmit?: (utterance: string, options?: unknown) => void
   busy?: boolean
   initialAutoFocusActive?: boolean
+  contextChip?: ContextChipData
 }): React.JSX.Element {
   const [autoFocusActive, setAutoFocusActive] = useState(initialAutoFocusActive)
   return (
-    <SessionProvider snapshot={null}>
-      <OpenPromptPositionProvider>
-        <button type="button" data-testid="activate" onClick={() => setAutoFocusActive(true)}>
-          activate
-        </button>
-        <PromptComposer
-          mode="docked"
-          autoFocusActive={autoFocusActive}
-          onSubmit={onSubmit}
-          placeholder="Describe the UI you want…"
-          ariaLabel="Compose generated UI"
-          busy={busy}
-        />
-      </OpenPromptPositionProvider>
-    </SessionProvider>
+    <TooltipProvider>
+      <SessionProvider snapshot={null}>
+        <OpenPromptPositionProvider>
+          <button type="button" data-testid="activate" onClick={() => setAutoFocusActive(true)}>
+            activate
+          </button>
+          <PromptComposer
+            mode="docked"
+            autoFocusActive={autoFocusActive}
+            onSubmit={onSubmit}
+            placeholder="Describe the UI you want…"
+            ariaLabel="Compose generated UI"
+            busy={busy}
+            {...(contextChip ? { contextChip } : {})}
+          />
+        </OpenPromptPositionProvider>
+      </SessionProvider>
+    </TooltipProvider>
   )
 }
 
 describe('PromptComposer docked mode — DOM behavior (CMP-MODE-01)', () => {
+  // cosmos-panel-tab-list-v1 regression: the DOCKED composer render branch previously omitted the
+  // ContextChip entirely, so a Cosmos tree-click panel+tab selection had NO visible affordance. The
+  // docked branch now renders the SAME chip the floating composer does.
+  it('renders a panel+tab ContextChip in DOCKED mode (cosmos-panel-tab-list-v1)', () => {
+    const chip: ContextChipData = {
+      kind: 'panel-tab',
+      panel: { id: 'jira', label: 'Jira' },
+      tab: { id: 'j1', label: 'Sprint board' }
+    }
+    render(<DockedHarness contextChip={chip} />)
+    const note = screen.getByRole('note')
+    expect(note).toHaveAttribute('aria-label', expect.stringContaining('Jira panel'))
+    expect(note).toHaveAttribute('aria-label', expect.stringContaining('Sprint board tab'))
+    // The chip carries a removable `×` (drops the selection for the next compose).
+    expect(screen.getByRole('button', { name: /Remove Sprint board/ })).toBeInTheDocument()
+  })
+
+  it('hides the docked ContextChip once dismissed via its `×` (contextDismiss all)', () => {
+    const chip: ContextChipData = {
+      kind: 'panel-tab',
+      panel: { id: 'jira', label: 'Jira' },
+      tab: { id: 'j1', label: 'Sprint board' }
+    }
+    render(<DockedHarness contextChip={chip} />)
+    fireEvent.click(screen.getByRole('button', { name: /Remove Sprint board/ }))
+    expect(screen.queryByRole('note')).not.toBeInTheDocument()
+  })
+
   it('renders the input ALWAYS-OPEN on mount: a textarea is present, no collapsed logo (FR-001)', () => {
     render(<DockedHarness />)
     // The textarea is immediately present (no click-to-reveal).

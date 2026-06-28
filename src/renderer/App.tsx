@@ -16,7 +16,13 @@ import { SharedComposer } from './app/SharedComposer'
 import { SessionProvider, useEnabledIntegrations, useLoadSession } from './session/SessionProvider'
 import { OpenPromptPositionProvider } from './composer/OpenPromptPositionProvider'
 import { ActiveComposerProvider } from './composer/ActiveComposerProvider'
-import { resolveFallbackSurface, visibleSurfaceIds, type SurfaceId } from './app/railVisibility'
+import {
+  RAIL_LABEL,
+  resolveFallbackSurface,
+  visibleSurfaceIds,
+  type SurfaceId
+} from './app/railVisibility'
+import { PanelTabsProvider } from './panelTabs'
 import { SURFACE_ICON, type RailIcon } from './app/surfaceIcons'
 import './App.css'
 
@@ -33,19 +39,10 @@ import './App.css'
  * regardless, so a re-enable is instant). `SurfaceId` is the shared rail type.
  */
 
-// The rail surface labels. The ICON for every surface is the shared `SURFACE_ICON` map
-// (`app/surfaceIcons.tsx`) — the single source of truth consumed by BOTH this rail and every
-// panel's `PanelFooter`, so the footer icon can never drift from the rail (DESIGN.md D-10).
-const RAIL_LABEL: Record<SurfaceId, string> = {
-  terminal: 'Terminal',
-  // cosmos-conversation-panel-v1: the rail id is 'cosmos' (renamed from 'generated-ui'); the WIRE
-  // render target stays 'generated-ui' (see CosmosPanel + railVisibility). Brand mark = CosmosMark.
-  cosmos: 'Cosmos',
-  slack: 'Slack',
-  jira: 'Jira',
-  confluence: 'Confluence',
-  'google-calendar': 'Google Calendar'
-}
+// The rail surface labels + icons. `RAIL_LABEL` (the single label source) now lives in the pure
+// `railVisibility` module so the Cosmos panel-tab tree's group headers reuse the SAME labels; the
+// ICON for every surface is the shared `SURFACE_ICON` map (`app/surfaceIcons.tsx`), consumed by
+// BOTH this rail and every panel's `PanelFooter`, so the footer icon can never drift (DESIGN.md D-10).
 
 /** The rail item presentation for every surface, keyed by id (order = ALL_SURFACE_IDS). */
 const RAIL_ITEM: Record<SurfaceId, { label: string; Icon: RailIcon }> = Object.fromEntries(
@@ -89,7 +86,14 @@ export function App(): React.JSX.Element {
             PromptComposer the shell renders, so switching panels never re-mounts the
             composer (no flicker) while the submit still routes to the active surface. */}
         <ActiveComposerProvider>
-          <AppShell />
+          {/* cosmos-panel-tab-list-v1: the App-root publish/subscribe registry of each panel's LIVE
+              open tabs. Wraps BOTH the publishers (the four generative panels via
+              `useGenerativePanelTabs`, and the Terminal panel) and the consumer (the Cosmos
+              panel-tab tree). Sibling to ActiveComposerProvider: live cross-panel READ vs. the
+              composer routing registry vs. the debounced persistence SessionRegistry. */}
+          <PanelTabsProvider>
+            <AppShell />
+          </PanelTabsProvider>
         </ActiveComposerProvider>
       </OpenPromptPositionProvider>
     </SessionProvider>
@@ -140,7 +144,7 @@ function useConnectedStatus(): {
 }
 
 function AppShell(): React.JSX.Element {
-  const [surface, setSurface] = useState<SurfaceId>('terminal')
+  const [surface, setSurface] = useState<SurfaceId>('cosmos')
   const [settingsOpen, setSettingsOpen] = useState(false)
   const connected = useConnectedStatus()
   const { enabled, setEnabled } = useEnabledIntegrations()

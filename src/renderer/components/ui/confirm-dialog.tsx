@@ -17,27 +17,35 @@ import {
  * disconnect site so the prompt is uniform by construction; the integration-specific
  * copy is passed in via `title`/`description`.
  *
- * Visual parity (disconnect-modal-design-fix): the body is the SAME canonical
- * `DialogHeader` > `DialogTitle` + `DialogDescription` pair every sibling dialog uses
- * (e.g. SettingsDialog), on the standard popover surface — NOT a red `Alert` card.
+ * This modal IS the canonical CONFIRM / ALERT dialog class (DESIGN.md §4 "Dialog
+ * classes" + D-13). Every dimension is pinned BY RULE so it is indistinguishable in
+ * system language from its siblings, not by per-component judgment:
+ *   • surface  `bg-popover` (#252526) — the `Dialog` primitive default (D-1);
+ *   • width    `sm:max-w-sm` — the ONLY class override (the small decision-forcing size);
+ *   • title    `text-title` foreground semibold / description `text-body` muted (§8),
+ *              carried by the primitive `DialogTitle`/`DialogDescription` (no overrides);
+ *   • footer   `ghost` Cancel + `destructive` confirm, BOTH at the **default** Button
+ *              size (h-9) — the SAME pairing + size SettingsDialog's footer uses (D-13);
+ *   • no `×`   `showCloseButton={false}` — Cancel is the dismiss.
+ * It composes ENTIRELY from the foundation `Dialog` primitive + `Button` variants — no
+ * bespoke surface, typography, color, or off-class button size.
  *
- * SURFACE — load-bearing, do NOT drop (root cause of the recurring "modal looks
- * off-system" report): `DialogContent` MUST carry `bg-popover`. The shadcn
- * `DialogContent` default is `bg-background` (`--background` = #1e1e1e, the editor
- * surface), but EVERY other dialog in the app (SettingsDialog, SlackImageViewer)
- * overrides it to `bg-popover` (`--popover` = #252526, the chrome surface). Without
- * this override the disconnect modal alone renders on the darker #1e1e1e surface, so
- * its background reads wrong AND the same `foreground` / `muted-foreground` text reads
- * at a different contrast than every sibling — which is exactly the four reported axes
- * (background, title color, description color, contrast). Matching `bg-popover` puts it
- * on the identical surface every sibling dialog uses.
+ * SURFACE: the `Dialog` primitive now DEFAULTS to `bg-popover` (the cosmos chrome
+ * surface #252526, foundation §2) with `shadow-overlay` elevation + `z-overlay`
+ * stacking (§11/§13) — so the recurring "modal renders on the wrong #1e1e1e editor
+ * surface" regression (D-1) can no longer happen by omission. `bg-popover` is repeated
+ * here as defense-in-depth. The title is `foreground` at the `text-title` step and the
+ * description is `muted-foreground` at the `text-body` step (§8), carried by the
+ * primitive's `DialogTitle`/`DialogDescription`.
  *
- * So the title is `foreground` at the standard dialog-title size, the description is
- * `muted-foreground` at the standard body size, on the same popover surface as siblings.
- * The destructive SEMANTIC lives ONLY on the confirm action (the `destructive` Button);
- * the rest of the modal stays in neutral system tokens. The `ghost` Cancel + `destructive`
- * confirm pairing at the default Button size is the SAME pairing SettingsDialog's own
- * disconnect-confirm footer uses, so the buttons are on-system by construction.
+ * DESTRUCTIVE AFFORDANCE (§4 / D-2 / D-12): a disconnect IS destructive, so the confirm
+ * is a `destructive` Button — and the variant now renders the cosmos `--destructive`
+ * pastel as a SOLID fill with `--destructive-foreground` text (D-12), so it reads
+ * legibly destructive on the popover surface (the prior washed-out translucent-pink
+ * `dark:bg-destructive/60` + white text was the real "still looks off" defect). The
+ * destructive SEMANTIC lives ONLY on the confirm action; the surrounding text/surface
+ * stay neutral system tokens. `ghost` Cancel + `destructive` confirm at the default
+ * Button size is the SAME pairing SettingsDialog's force-disconnect footer uses.
  *
  * Closing via Esc / overlay / Cancel calls `onOpenChange(false)` WITHOUT confirming
  * (FR-003/FR-010) — only the destructive button calls `onConfirm`. The destructive

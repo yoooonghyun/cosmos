@@ -46,7 +46,10 @@ export const DOCK_KIND_BY_PANEL: Record<PromptPanelId, DockKind | null> = {
   jira: 'jira-issue',
   slack: 'slack-channel',
   confluence: 'confluence-page',
-  'google-calendar': 'calendar-event'
+  'google-calendar': 'calendar-event',
+  // cosmos-panel-tab-list-v1 (T1): the Terminal panel is selectable as panel+tab context from the
+  // Cosmos tree; it has no dock dimension (a terminal never opens a detail overlay).
+  terminal: null
 }
 
 const PANEL_IDS: ReadonlySet<string> = new Set<PromptPanelId>([
@@ -54,7 +57,9 @@ const PANEL_IDS: ReadonlySet<string> = new Set<PromptPanelId>([
   'slack',
   'jira',
   'confluence',
-  'google-calendar'
+  'google-calendar',
+  // cosmos-panel-tab-list-v1 (T1): accept a terminal panel id in a serialized/validated marker.
+  'terminal'
 ])
 
 const DOCK_KINDS: ReadonlySet<string> = new Set<DockKind>([
@@ -147,8 +152,20 @@ export function serializePromptContextMarker(ctx: PromptContext | undefined): st
  * Parse + strip (read side)
  * ------------------------------------------------------------------ */
 
-/** Schema-validate a parsed JSON payload into a clean {@link PromptContext}, or null. */
-function validatePayload(parsed: unknown): PromptContext | null {
+/**
+ * Schema-validate an UNTRUSTED parsed JSON value into a clean {@link PromptContext}, or `null`
+ * when it does not conform (NEVER throws). This is the SINGLE shared PromptContext schema, reused
+ * by BOTH the marker parser ({@link parsePromptContextMarker}) AND the outbound conversation IPC
+ * boundary validator (`conversation.validate.ts`), so the two can never diverge
+ * (cosmos-context-chip-historical-not-showing-v2). Rules:
+ *  - `panel` REQUIRED: a known `id` ∈ {@link PANEL_IDS} + a non-empty `label`.
+ *  - `tab` OPTIONAL: when present it MUST be well-formed (non-empty `id` + `label`) or the WHOLE
+ *    value is rejected (no partial chip).
+ *  - `dock` OPTIONAL: when present it MUST carry a known `kind` + ≥1 populated string ViewContext
+ *    item field, else rejected.
+ * Returns a freshly-built object carrying ONLY the whitelisted non-secret fields.
+ */
+export function validatePromptContext(parsed: unknown): PromptContext | null {
   if (!parsed || typeof parsed !== 'object') {
     return null
   }
@@ -233,7 +250,7 @@ export function parsePromptContextMarker(text: string): { context?: PromptContex
     const stripped = text.replace(MARKER_STRIP_RE, '')
     try {
       const parsed: unknown = JSON.parse(match[1].trim())
-      const context = validatePayload(parsed)
+      const context = validatePromptContext(parsed)
       if (context) {
         return { context, text: stripped }
       }

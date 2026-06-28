@@ -9,10 +9,10 @@
  * ARIA-label prefix (composer design §8). Value-only module (lucide component references) — no JSX.
  */
 import { Calendar, FileText, Hash, Ticket } from 'lucide-react'
-import type { ContextChipData } from './viewContextCapture'
+import type { ItemContextChip } from './viewContextCapture'
 
-/** The primary chip kind shared by the composer + timeline chips. */
-export type PrimaryChipKind = ContextChipData['primary']['kind']
+/** The primary (dock-item) chip kind shared by the composer + timeline chips. */
+export type PrimaryChipKind = ItemContextChip['primary']['kind']
 
 /** The lucide icon used for each primary chip kind (echoes each panel's own glyph). */
 export const PRIMARY_ICON = {

@@ -22,12 +22,32 @@
  * in step 3).
  */
 
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { PanelTabStrip, type PanelTab } from '../tabs/PanelTabStrip'
-import { usePublishComposer } from '../composer/ActiveComposerProvider'
+import {
+  usePublishComposer,
+  useRecordSubmitContext,
+  useLastSubmitContextRef
+} from '../composer/ActiveComposerProvider'
 import { CosmosTimelineEntry } from './CosmosTimelineEntry'
 import { reconcileTimeline, type LiveInFlight } from './cosmosConversation'
 import { initialCosmosTabs, setActiveCosmosTab, closeCosmosTab } from './cosmosTabs'
+import { PanelTabTree } from './PanelTabTree'
+import { panelTabChipFor } from './cosmosSelectedContext'
+// Import the divider from its OWN module, not the `../fileExplorer` barrel — the barrel re-exports
+// the Monaco-backed FileViewer, which crashes jsdom on import (queryCommandSupported). The divider
+// is a self-contained pointer/keyboard handle.
+import { ResizeDivider } from '../fileExplorer/ResizeDivider'
+import {
+  useAllPanelTabs,
+  toPanelTabGroups,
+  reconcileSelectedContext,
+  type CrossPanelId,
+  type LivePanelTab,
+  type PanelTabGroup
+} from '../panelTabs'
+import { RAIL_LABEL, visibleSurfaceIds } from '../app/railVisibility'
+import { useEnabledIntegrations } from '../session/SessionProvider'
 import type { Conversation } from '../../shared/types/conversation'
 import { buildAgentSubmitWithMarker } from '../../shared/promptContext/buildAgentSubmit'
 import type { PromptContext } from '../../shared/promptContext/promptContext'
@@ -36,6 +56,10 @@ import type {
   UiRenderPayload,
   AgentStatusPayload
 } from '../../shared/ipc'
+
+/** Column minimums for the timeline | tree split (design §1.2). Session-only width, NOT persisted. */
+const TIMELINE_MIN = 360
+const TREE_MIN = 240
 
 /** The four read states the panel presents (FR-112). */
 type ReadState =
@@ -64,15 +88,92 @@ export function CosmosPanel({ active }: { active: boolean }): React.JSX.Element 
   const [live, setLive] = useState<LiveInFlight>(null)
   // The last submitted prompt text, shown on the in-flight "generating" affordance.
   const lastPromptRef = useRef<string | undefined>(undefined)
-  // cosmos-timeline-prompt-context-v1 (FR-024): the captured PromptContext for the last submit,
-  // carried alongside lastPromptRef so the `agent:status 'started'` path re-seeds the live entry
-  // with the SAME context the onSubmit seed used (no re-parse of its own marker).
-  const lastPromptContextRef = useRef<PromptContext | undefined>(undefined)
+  // cosmos-context-chip-crosspanel-and-historical-v1 (#2): the captured PromptContext for the last
+  // submit now lives in the App-root ActiveComposerProvider, written by EVERY Open-Prompt submit
+  // site (cosmos here AND useGenerativePanelTabs for Jira/Slack/Confluence/Calendar). The
+  // `agent:status 'started'` seed reads `lastSubmitContextRef.current` so the in-flight chip
+  // reflects the ACTUAL submitting panel — not a cosmos-only default that ignored cross-panel runs.
+  const recordSubmitContext = useRecordSubmitContext()
+  const lastSubmitContextRef = useLastSubmitContextRef()
   // A ref mirror of the tab state so onSubmit reads the CURRENT active tab without re-publishing
   // the composer config on every tab switch.
   const tabsStateRef = useRef(tabsState)
   tabsStateRef.current = tabsState
   const scrollRef = useRef<HTMLDivElement>(null)
+
+  // cosmos-panel-tab-list-v1: the timeline | tree split. Session-only width (mirrors the Terminal
+  // split's renderer-local `treeWidth`; NOT persisted — OQ-1 resolved). The row owns the clamp.
+  const splitRowRef = useRef<HTMLDivElement>(null)
+  const [treeWidth, setTreeWidth] = useState<number | null>(null)
+
+  // The live cross-panel tab registry → ordered groups (FR-005/FR-006). The group order is the rail
+  // order minus cosmos, filtered to the VISIBLE surfaces so a disabled integration is absent (FR-006,
+  // matching rail visibility — disabled panels stay mounted + still publish, so we gate by visibility
+  // here rather than on publish).
+  const { enabled } = useEnabledIntegrations()
+  const order = useMemo<CrossPanelId[]>(
+    () =>
+      visibleSurfaceIds(enabled).filter((id): id is CrossPanelId => id !== 'cosmos'),
+    [enabled]
+  )
+  const registry = useAllPanelTabs()
+  const groups = useMemo<PanelTabGroup[]>(
+    () => toPanelTabGroups(registry, order, RAIL_LABEL),
+    [registry, order]
+  )
+
+  // The one-shot tree-click selection (FR-016): the panel + tab attached to the NEXT prompt. Mirror
+  // it in a ref for stale-free reads inside the (stable) submit handler.
+  const [selectedContext, setSelectedContext] = useState<PromptContext | null>(null)
+  const selectedContextRef = useRef<PromptContext | null>(selectedContext)
+  selectedContextRef.current = selectedContext
+
+  // FR-017: keep the selection honest as tabs close/rename — a closed selected tab clears, a renamed
+  // one relabels. `reconcileSelectedContext` returns the SAME reference when nothing changed, so this
+  // is a no-op render unless the live groups actually invalidate the selection.
+  useEffect(() => {
+    setSelectedContext((prev) => reconcileSelectedContext(prev, groups))
+  }, [groups])
+
+  // The tree's selection marker (panel id + tab id) derived from the selected context.
+  const treeSelection = useMemo(
+    () =>
+      selectedContext?.tab
+        ? { panelId: selectedContext.panel.id, tabId: selectedContext.tab.id }
+        : null,
+    [selectedContext]
+  )
+
+  // A tree row click selects that panel + tab as the next prompt's context (FR-012/FR-013/FR-018:
+  // panel + tab only, no dock). Re-selecting REPLACES (FR-016).
+  const handleActivateTab = useCallback((group: PanelTabGroup, tab: LivePanelTab): void => {
+    setSelectedContext({
+      panel: { id: group.panelId, label: group.label },
+      tab: { id: tab.id, label: tab.label }
+    })
+  }, [])
+
+  // The docked composer's context chip: the `kind: 'panel-tab'` breadcrumb when a tab is selected,
+  // else undefined (the Cosmos panel has no dock-item chip of its own).
+  const contextChip = useMemo(() => panelTabChipFor(selectedContext), [selectedContext])
+
+  // Divider drag: a POSITIVE (rightward) drag SHRINKS the tree (mirror the Terminal viewer|tree
+  // divider), clamped so neither column drops below its min (design §1.2). No xterm here, so no
+  // re-fit — simpler than the Terminal handler.
+  const handleTreeResize = useCallback((deltaPx: number): void => {
+    const row = splitRowRef.current
+    if (!row) {
+      return
+    }
+    const total = row.clientWidth
+    setTreeWidth((current) => {
+      // Default ratio mirrors the Terminal file-explorer tree dock (`flex: 0 0 18%`) per user
+      // request, not the design's 30% — keep the two cross-panel trees the same default width.
+      const base = current ?? total * 0.18
+      const max = total - TIMELINE_MIN
+      return Math.max(TREE_MIN, Math.min(max, base - deltaPx))
+    })
+  }, [])
 
   // FR-106: fetch the full default-session conversation on mount; subscribe to live pushes
   // (main re-reads + pushes on a completed run — FR-107). `window.cosmos.conversation` is a
@@ -130,7 +231,10 @@ export function CosmosPanel({ active }: { active: boolean }): React.JSX.Element 
         setLive({
           phase: 'generating',
           promptText: lastPromptRef.current,
-          promptContext: lastPromptContextRef.current
+          // #2: read the App-root shared ref so the live chip reflects the ACTUAL submitting panel
+          // (a Jira/Slack/etc submit writes it via useGenerativePanelTabs; a cosmos submit via the
+          // onSubmit below). The cosmos-only `lastPromptContextRef` could not see cross-panel runs.
+          promptContext: lastSubmitContextRef.current
         })
       } else {
         // completed / error: clear the in-flight affordance. On completed, the
@@ -153,31 +257,47 @@ export function CosmosPanel({ active }: { active: boolean }): React.JSX.Element 
     'cosmos',
     useMemo(
       () => ({
-        onSubmit: (utterance: string) => {
-          // cosmos-timeline-prompt-context-v1 (FR-001/FR-006): the Cosmos panel + its active tab,
-          // no dock (the Cosmos panel has no dock/selection). Captured ONCE and fed to the builder
-          // (the marker) AND seeded into the live entry so the chip appears immediately on Enter.
-          const ts = tabsStateRef.current
-          const activeTab = ts.tabs.find((t) => t.id === ts.activeTabId)
-          const promptContext: PromptContext = {
-            panel: { id: 'cosmos', label: 'Cosmos' },
-            ...(activeTab ? { tab: { id: activeTab.id, label: activeTab.label } } : {})
+        onSubmit: (utterance: string, options?: { contextDismiss: 'none' | 'thread' | 'all' }) => {
+          // cosmos-panel-tab-list-v1 (FR-015/FR-016): if a tree row is selected, the captured
+          // PromptContext is that SELECTED panel + tab (no dock — FR-018); dismissing the chip
+          // (`contextDismiss:'all'`) drops it; otherwise it is the Cosmos panel + its active tab
+          // (cosmos-timeline-prompt-context-v1 default). Captured ONCE and fed to the builder (the
+          // marker) AND seeded into the live entry so the chip appears immediately on Enter. The
+          // wire target stays 'generated-ui' regardless of which panel the context names (FR-015).
+          const dismissed = options?.contextDismiss === 'all'
+          const selected = dismissed ? null : selectedContextRef.current
+          let promptContext: PromptContext
+          if (selected) {
+            promptContext = selected
+          } else {
+            const ts = tabsStateRef.current
+            const activeTab = ts.tabs.find((t) => t.id === ts.activeTabId)
+            promptContext = {
+              panel: { id: 'cosmos', label: 'Cosmos' },
+              ...(activeTab ? { tab: { id: activeTab.id, label: activeTab.label } } : {})
+            }
           }
           // Keep the RAW (marker-free) utterance for the live bubble text (FR-024).
           lastPromptRef.current = utterance
-          lastPromptContextRef.current = promptContext
+          // #2: publish this submit's context into the App-root shared ref so the
+          // `agent:status 'started'` seed reads the SAME context (matches the cross-panel path).
+          recordSubmitContext(promptContext)
           // FR-113: a new in-flight turn appears immediately (the run's 'started' status will
           // also set this, but seeding here makes the prompt bubble appear on Enter).
           setLive({ phase: 'generating', promptText: utterance, promptContext })
           window.cosmos.agent.submit(
             buildAgentSubmitWithMarker(utterance, 'generated-ui', promptContext)
           )
+          // One-shot (OQ-2 resolved): clear the tree selection after a submit so the chip
+          // disappears for the next compose (a fresh compose, matching the view-context chip).
+          setSelectedContext(null)
         },
         placeholder: 'Describe the UI you want…',
         ariaLabel: 'Compose generated UI',
+        contextChip,
         busy: showSpinner
       }),
-      [showSpinner]
+      [showSpinner, recordSubmitContext, contextChip]
     )
   )
 
@@ -221,32 +341,48 @@ export function CosmosPanel({ active }: { active: boolean }): React.JSX.Element 
         ariaLabel="Cosmos tabs"
       />
 
-      <div
-        ref={scrollRef}
-        className="min-h-0 flex-1 space-y-3 overflow-auto p-3 text-card-foreground"
-        role="tabpanel"
-      >
-        {read.phase === 'loading' && (
-          <p className="text-[13px] text-muted-foreground">Loading conversation…</p>
-        )}
-        {read.phase === 'error' && (
-          <p
-            className="rounded-md border border-destructive/40 bg-destructive/15 px-2.5 py-2 text-[13px] text-destructive"
-            role="alert"
-          >
-            Could not read the conversation transcript. You can still describe a UI below.
-          </p>
-        )}
-        {(read.phase === 'empty' || read.phase === 'populated') &&
-          !hasLiveOrTurns && (
-            <p className="text-[13px] text-muted-foreground">
-              Describe a UI below and Claude will build it here — your conversation will appear in
-              this timeline.
+      {/* cosmos-panel-tab-list-v1 (design §1): the panel body is a horizontal SPLIT — the
+          conversation timeline LEFT, the cross-panel `PanelTabTree` RIGHT, a `ResizeDivider`
+          between. The docked Open-Prompt composer band (App-level, below this `<section>`) is
+          unchanged (DESIGN.md D-3). Both columns are `min-h-0` so they scroll independently. */}
+      <div ref={splitRowRef} className="flex min-h-0 flex-1 flex-row">
+        <div
+          ref={scrollRef}
+          className="min-h-0 min-w-0 flex-1 space-y-3 overflow-auto p-3 text-card-foreground"
+          role="tabpanel"
+        >
+          {read.phase === 'loading' && (
+            <p className="text-[13px] text-muted-foreground">Loading conversation…</p>
+          )}
+          {read.phase === 'error' && (
+            <p
+              className="rounded-md border border-destructive/40 bg-destructive/15 px-2.5 py-2 text-[13px] text-destructive"
+              role="alert"
+            >
+              Could not read the conversation transcript. You can still describe a UI below.
             </p>
           )}
-        {timeline.map((entry, i) => (
-          <CosmosTimelineEntry key={entryKey(entry, i)} entry={entry} />
-        ))}
+          {(read.phase === 'empty' || read.phase === 'populated') &&
+            !hasLiveOrTurns && (
+              <p className="text-[13px] text-muted-foreground">
+                Describe a UI below and Claude will build it here — your conversation will appear in
+                this timeline.
+              </p>
+            )}
+          {timeline.map((entry, i) => (
+            <CosmosTimelineEntry key={entryKey(entry, i)} entry={entry} />
+          ))}
+        </div>
+
+        <ResizeDivider onResize={handleTreeResize} ariaLabel="Resize timeline and panel tabs" />
+
+        <aside
+          className="flex min-h-0 flex-col border-l border-border"
+          style={treeWidth !== null ? { flex: `0 0 ${treeWidth}px` } : { flex: '0 0 30%' }}
+          aria-label="Open panel tabs"
+        >
+          <PanelTabTree groups={groups} selected={treeSelection} onActivate={handleActivateTab} />
+        </aside>
       </div>
 
       {/* cosmos-open-prompt-pinned-v1 (design §1.3): the bottom chrome of the Cosmos panel is

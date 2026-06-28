@@ -2,7 +2,7 @@
  * PromptContextChip — the read-only timeline affordance that names what the user was looking at
  * when they sent a prompt (cosmos-timeline-prompt-context-v1, design spec + FR-022/FR-023).
  *
- * A quiet, single-line breadcrumb pill attached UNDER the right-aligned `UserBubble` (historical
+ * A quiet, single-line breadcrumb pill attached ABOVE the right-aligned `UserBubble` (historical
  * `user-prompt` turn AND live in-flight bubble). It collapses the panel / tab / dock dimensions
  * into ONE cohesive `Badge variant="secondary"` breadcrumb (read-only history → nothing removable,
  * unlike the composer `ContextChip` which splits removable badges). Segments left→right, joined by
@@ -23,7 +23,7 @@ import { Badge } from '@/components/ui/badge'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { SURFACE_ICON } from '../app/surfaceIcons'
 import { PRIMARY_ICON, PRIMARY_NOUN } from '../app/contextChipIcons'
-import { contextChipFor, type ContextChipData } from '../app/viewContextCapture'
+import { contextChipFor, type ItemContextChip } from '../app/viewContextCapture'
 import type { PromptContext } from '../../shared/promptContext/promptContext'
 
 /** A truncatable label segment with a full-text tooltip (design state Long label). */
@@ -41,7 +41,7 @@ function TruncLabel({ label }: { label: string }): React.JSX.Element {
 }
 
 /** The dock-item breadcrumb tail: `› ↳ [DockGlyph] item [› [MessagesSquare] Thread]` (design §3). */
-function DockSegment({ chip }: { chip: ContextChipData }): React.JSX.Element {
+function DockSegment({ chip }: { chip: ItemContextChip }): React.JSX.Element {
   const PrimaryIcon = PRIMARY_ICON[chip.primary.kind]
   return (
     <>
@@ -63,7 +63,7 @@ function DockSegment({ chip }: { chip: ContextChipData }): React.JSX.Element {
 }
 
 /** Build the single comprehensive ARIA label (omitting absent dimensions — design §5). */
-function ariaLabelFor(context: PromptContext, dockChip: ContextChipData | undefined): string {
+function ariaLabelFor(context: PromptContext, dockChip: ItemContextChip | undefined): string {
   const parts = [`${context.panel.label} panel`]
   if (context.tab) {
     parts.push(`${context.tab.label} tab`)
@@ -90,9 +90,13 @@ export function PromptContextChip({
   // Derive the dock segment via the SAME composer helper so it is byte-identical to the
   // composer's primary badge content (SC-009). The `kind` discriminator on the dock is extra
   // data `contextChipFor` ignores — it reads the literal ViewContext item fields. A dock only
-  // ever exists on the four integration panels (never `cosmos`), and those ids ARE valid
-  // `UiRenderTarget`s, so the guard narrows the type safely.
-  const dockTarget = context.panel.id === 'cosmos' ? undefined : context.panel.id
+  // ever exists on the four integration panels (never `cosmos`, never `terminal` — both have
+  // `DOCK_KIND_BY_PANEL = null`), and those four ids ARE valid `UiRenderTarget`s, so excluding
+  // them narrows the type safely (cosmos-panel-tab-list-v1 added 'terminal' to PromptPanelId).
+  const dockTarget =
+    context.panel.id === 'cosmos' || context.panel.id === 'terminal'
+      ? undefined
+      : context.panel.id
   const dockChip =
     context.dock && dockTarget ? contextChipFor(dockTarget, context.dock) : undefined
 
@@ -100,7 +104,7 @@ export function PromptContextChip({
     <div className="flex justify-end">
       <Badge
         variant="secondary"
-        className="min-w-0 max-w-[85%]"
+        className="min-w-0 max-w-chat-bubble"
         role="note"
         aria-label={ariaLabelFor(context, dockChip)}
       >

@@ -15,6 +15,7 @@
  */
 
 import type { UiRenderTarget, ViewContext } from '../../shared/ipc'
+import type { PromptPanelId } from '../../shared/promptContext/promptContext'
 
 /** True for a string that has at least one non-whitespace character. */
 function present(value: string | undefined | null): value is string {
@@ -111,11 +112,21 @@ export function calendarViewContext(event: CalendarEventState): ViewContext | un
  * ------------------------------------------------------------------ */
 
 /**
- * Display-only descriptor of the in-view item the composer chip shows (design §6,
- * Option 1). DERIVED from the same panel state as `viewContext` but kept SEPARATE from
- * the IPC contract — it carries whatever the chip needs to read well. NON-SECRET labels.
+ * Display-only descriptor of the composer's context chip — a DISCRIMINATED UNION on `kind`
+ * (cosmos-panel-tab-list-v1, design §3.2 / DESIGN.md D-16). DERIVED from panel state but kept
+ * SEPARATE from the IPC contract; NON-SECRET labels only (FR-011).
+ *
+ *  - `kind: 'item'` — the EXISTING in-view dock-item chip (open-prompt-view-context-v1): a primary
+ *    badge (jira issue / slack channel / confluence page / calendar event) + an optional Slack
+ *    thread. Its glyph/noun come from `PRIMARY_ICON`/`PRIMARY_NOUN`.
+ *  - `kind: 'panel-tab'` — a Cosmos panel-tab TREE selection: a panel (glyph via `SURFACE_ICON`,
+ *    D-10) + a tab, with NO dock item. Rendered as the D-11 breadcrumb, not the `↳` primary badge.
  */
-export interface ContextChipData {
+export type ContextChipData = ItemContextChip | PanelTabContextChip
+
+/** The existing in-view dock-item chip (open-prompt-view-context-v1), now tagged `kind: 'item'`. */
+export interface ItemContextChip {
+  kind: 'item'
   /** The lead dimension shown as the primary badge. */
   primary: {
     kind: 'jira' | 'slack-channel' | 'confluence' | 'calendar'
@@ -129,6 +140,17 @@ export interface ContextChipData {
 }
 
 /**
+ * A Cosmos panel-tab tree selection (cosmos-panel-tab-list-v1, design §3.2). The panel glyph
+ * resolves via `SURFACE_ICON[panel.id]` (D-10), NOT `PRIMARY_ICON`; there is no dock item. Only
+ * non-secret display/identity labels (FR-011).
+ */
+export interface PanelTabContextChip {
+  kind: 'panel-tab'
+  panel: { id: PromptPanelId; label: string }
+  tab: { id: string; label: string }
+}
+
+/**
  * Build the composer chip descriptor for a `target` from its captured `viewContext`, or
  * undefined when there is nothing to show (design state A: generated-ui always; any panel
  * with no selection). RENDER data only — never crosses the IPC boundary.
@@ -136,7 +158,7 @@ export interface ContextChipData {
 export function contextChipFor(
   target: UiRenderTarget,
   viewContext: ViewContext | undefined
-): ContextChipData | undefined {
+): ItemContextChip | undefined {
   if (!viewContext) {
     return undefined
   }
@@ -144,7 +166,7 @@ export function contextChipFor(
     if (!present(viewContext.selectedIssueKey)) {
       return undefined
     }
-    return { primary: { kind: 'jira', label: viewContext.selectedIssueKey } }
+    return { kind: 'item', primary: { kind: 'jira', label: viewContext.selectedIssueKey } }
   }
   if (target === 'slack') {
     if (!present(viewContext.selectedChannelId)) {
@@ -153,7 +175,7 @@ export function contextChipFor(
     const label = present(viewContext.selectedChannelName)
       ? `#${viewContext.selectedChannelName}`
       : viewContext.selectedChannelId
-    const chip: ContextChipData = { primary: { kind: 'slack-channel', label } }
+    const chip: ItemContextChip = { kind: 'item', primary: { kind: 'slack-channel', label } }
     if (present(viewContext.threadTs)) {
       chip.secondary = { kind: 'slack-thread', label: 'Thread' }
     }
@@ -165,6 +187,7 @@ export function contextChipFor(
     }
     if (present(viewContext.selectedPageTitle)) {
       return {
+        kind: 'item',
         primary: {
           kind: 'confluence',
           label: viewContext.selectedPageTitle,
@@ -172,7 +195,7 @@ export function contextChipFor(
         }
       }
     }
-    return { primary: { kind: 'confluence', label: 'Page' } }
+    return { kind: 'item', primary: { kind: 'confluence', label: 'Page' } }
   }
   if (target === 'google-calendar') {
     if (!present(viewContext.selectedEventId)) {
@@ -180,6 +203,7 @@ export function contextChipFor(
     }
     if (present(viewContext.selectedEventTitle)) {
       return {
+        kind: 'item',
         primary: {
           kind: 'calendar',
           label: viewContext.selectedEventTitle,
@@ -187,7 +211,7 @@ export function contextChipFor(
         }
       }
     }
-    return { primary: { kind: 'calendar', label: 'Event' } }
+    return { kind: 'item', primary: { kind: 'calendar', label: 'Event' } }
   }
   // generated-ui (and any future target with no panel selection) → no chip (state A).
   return undefined

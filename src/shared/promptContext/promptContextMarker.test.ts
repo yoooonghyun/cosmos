@@ -145,6 +145,18 @@ describe('round-trip (SC-008)', () => {
     expect(DOCK_KIND_BY_PANEL.confluence).toBe('confluence-page')
     expect(DOCK_KIND_BY_PANEL['google-calendar']).toBe('calendar-event')
     expect(DOCK_KIND_BY_PANEL.cosmos).toBeNull()
+    // cosmos-panel-tab-list-v1 (T1): terminal is selectable as panel+tab context; it has no dock.
+    expect(DOCK_KIND_BY_PANEL.terminal).toBeNull()
+  })
+
+  it('round-trips a TERMINAL panel+tab selection (T1 — terminal id whitelisted)', () => {
+    const terminalTab: PromptContext = {
+      panel: { id: 'terminal', label: 'Terminal' },
+      tab: { id: 'pane-1', label: 'Terminal 2' }
+    }
+    const out = roundTrip('what is this command doing', terminalTab)
+    expect(out.text).toBe('what is this command doing')
+    expect(out.context).toEqual(terminalTab)
   })
 })
 

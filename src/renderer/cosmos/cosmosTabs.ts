@@ -31,7 +31,7 @@ export const DEFAULT_TAB_ID = 'cosmos-default'
 /** The pinned default conversation tab (FR-114). Immutable; always present + first. */
 export const DEFAULT_TAB: CosmosTab = {
   id: DEFAULT_TAB_ID,
-  label: 'Conversation',
+  label: 'Home',
   kind: 'default'
 }
 

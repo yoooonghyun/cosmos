@@ -48,17 +48,19 @@ names what the user was looking at when they sent a prompt. It attaches to the *
 of the Cosmos conversation timeline (both the historical `user-prompt` turn and the
 `live-generating` in-flight bubble), nowhere else.
 
-**Placement — directly BELOW the `UserBubble`, right-aligned to it.** The bubble is right-aligned
-with a squared bottom-right corner (`rounded-br-sm`, a "sent" tail); the chip sits under it as
-trailing metadata (the conventional chat position for a sent-message annotation). This preserves the
-composer's "input ↳ item" reading as "message ↳ context."
+**Placement — directly ABOVE the `UserBubble`, right-aligned to it
+(cosmos-context-chip-position-and-historical-v1 #2).** The bubble is right-aligned with a squared
+bottom-right corner (`rounded-br-sm`, a "sent" tail); the chip sits above it as a leading "I was
+looking at …" caption, so the captured context is read BEFORE the prompt it scoped. This keeps the
+composer's "↳ item" reading as "context ↳ message."
 
-- **Historical `user-prompt` turn** (`CosmosTimelineEntry`, `case 'user-prompt'`): wrap the existing
-  `<UserBubble>` and `<PromptContextChip context={turn.context} />` in a `flex flex-col gap-1`
-  container. Today's bare `<UserBubble>` is unchanged when there is no context (chip returns null).
-- **`live-generating` entry**: the existing `flex flex-col gap-1` already stacks `UserBubble` then
-  `TypingIndicator`; insert `<PromptContextChip context={entry.promptContext} />` BETWEEN them
-  (bubble → chip → typing dots). The chip belongs to the user prompt; the dots are the assistant.
+- **Historical `user-prompt` turn** (`CosmosTimelineEntry`, `case 'user-prompt'`): wrap
+  `<PromptContextChip context={turn.context} />` then the existing `<UserBubble>` in a
+  `flex flex-col gap-1` container. Today's bare `<UserBubble>` is unchanged when there is no context
+  (chip returns null).
+- **`live-generating` entry**: the `flex flex-col gap-1` stacks the chip FIRST, then `UserBubble`,
+  then `TypingIndicator` (chip → bubble → typing dots). The chip belongs to the user prompt; the
+  dots are the assistant.
 
 **Chip internal layout — ONE pill, breadcrumb of segments left→right:**
 

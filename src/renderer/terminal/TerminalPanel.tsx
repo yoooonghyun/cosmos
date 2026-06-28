@@ -44,6 +44,7 @@ import {
   seedTerminalIndex,
   terminalLabel
 } from '../tabs/panelTabs'
+import { usePublishPanelTabs, type LivePanelTabs } from '../panelTabs'
 import { useReportPanel, useRestoredTerminalPanel } from '../session/SessionProvider'
 import { buildTerminalDraft, capScrollback, hydrateTerminalTabs } from '../session/sessionSnapshot'
 import { terminalThemeFromTokens } from './terminalTheme'
@@ -677,6 +678,16 @@ export function TerminalPanel({ active }: { active: boolean }): React.JSX.Elemen
   useEffect(() => {
     reportTerminal({ tabs, activeTabId })
   }, [tabs, activeTabId, reportTerminal])
+
+  // cosmos-panel-tab-list-v1 (FR-005/FR-008): publish the Terminal panel's live tab list into the
+  // App-root PanelTabsProvider so the Cosmos tree's "Terminal" group reflects every open terminal
+  // tab (its label, e.g. "Terminal 2", + the active id), live. Non-secret { id, label } only — no
+  // scrollback, cwd, sessionId, or open-files (FR-011).
+  const livePanelTabs = useMemo<LivePanelTabs>(
+    () => ({ tabs: tabs.map((t) => ({ id: t.id, label: t.label })), activeTabId }),
+    [tabs, activeTabId]
+  )
+  usePublishPanelTabs('terminal', livePanelTabs)
 
   const handleNewTab = (): void => {
     // FR-022: mint a new pane + open a tab (its TerminalView issues pty:start).

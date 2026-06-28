@@ -108,6 +108,7 @@ describe('calendarViewContext (FR-004/FR-005)', () => {
 describe('contextChipFor — display descriptor for the composer chip (design §3/§6)', () => {
   it('jira → a single jira chip labelled by the issue key', () => {
     expect(contextChipFor('jira', { selectedIssueKey: 'PROJ-123' })).toEqual({
+      kind: 'item',
       primary: { kind: 'jira', label: 'PROJ-123' }
     })
   })
@@ -115,11 +116,12 @@ describe('contextChipFor — display descriptor for the composer chip (design §
   it('slack channel-only → one slack-channel chip labelled #name', () => {
     expect(
       contextChipFor('slack', { selectedChannelId: 'C1', selectedChannelName: 'general' })
-    ).toEqual({ primary: { kind: 'slack-channel', label: '#general' } })
+    ).toEqual({ kind: 'item', primary: { kind: 'slack-channel', label: '#general' } })
   })
 
   it('slack channel falls back to the id when the name is absent', () => {
     expect(contextChipFor('slack', { selectedChannelId: 'C1' })).toEqual({
+      kind: 'item',
       primary: { kind: 'slack-channel', label: 'C1' }
     })
   })
@@ -132,6 +134,7 @@ describe('contextChipFor — display descriptor for the composer chip (design §
         threadTs: '1700000000.0001'
       })
     ).toEqual({
+      kind: 'item',
       primary: { kind: 'slack-channel', label: '#general' },
       secondary: { kind: 'slack-thread', label: 'Thread' }
     })
@@ -141,12 +144,14 @@ describe('contextChipFor — display descriptor for the composer chip (design §
     expect(
       contextChipFor('confluence', { selectedPageId: 'p1', selectedPageTitle: 'Release notes' })
     ).toEqual({
+      kind: 'item',
       primary: { kind: 'confluence', label: 'Release notes', fullLabel: 'Release notes' }
     })
   })
 
   it('confluence falls back to "Page" when the title is absent but a page id is present', () => {
     expect(contextChipFor('confluence', { selectedPageId: 'p1' })).toEqual({
+      kind: 'item',
       primary: { kind: 'confluence', label: 'Page' }
     })
   })
@@ -158,12 +163,14 @@ describe('contextChipFor — display descriptor for the composer chip (design §
         selectedEventTitle: 'Sprint planning'
       })
     ).toEqual({
+      kind: 'item',
       primary: { kind: 'calendar', label: 'Sprint planning', fullLabel: 'Sprint planning' }
     })
   })
 
   it('calendar falls back to "Event" when the title is absent but an event id is present', () => {
     expect(contextChipFor('google-calendar', { selectedEventId: 'e1' })).toEqual({
+      kind: 'item',
       primary: { kind: 'calendar', label: 'Event' }
     })
   })
