@@ -30,11 +30,11 @@ import '@xterm/xterm/css/xterm.css'
 import type { PtyExitPayload } from '../../shared/ipc'
 import { Button } from '@/components/ui/button'
 import { useExplorerPanes, ResizeDivider, type RestoredOpenFiles } from '../fileExplorer'
-import { PanelTabStrip, type PanelTab } from '../PanelTabStrip'
+import { PanelTabStrip, type PanelTab } from '../tabs/PanelTabStrip'
 import { PanelFooter } from '../PanelFooter'
-import { usePanelTabs } from '../usePanelTabs'
-import { useTabShortcuts } from '../useTabShortcuts'
-import { resolveCloseTarget, resolveTabNavTarget } from '../closeTabRouting'
+import { usePanelTabs } from '../tabs/usePanelTabs'
+import { useTabShortcuts } from '../tabs/useTabShortcuts'
+import { resolveCloseTarget, resolveTabNavTarget } from '../tabs/closeTabRouting'
 import { mapTerminalKey } from './terminalKeymap'
 import {
   isFolderOpen,
@@ -42,7 +42,7 @@ import {
   seedEverOpenedFrom,
   seedTerminalIndex,
   terminalLabel
-} from '../panelTabs'
+} from '../tabs/panelTabs'
 import { useReportPanel, useRestoredTerminalPanel } from '../session/SessionProvider'
 import { buildTerminalDraft, capScrollback, hydrateTerminalTabs } from '../session/sessionSnapshot'
 import { terminalThemeFromTokens } from './terminalTheme'

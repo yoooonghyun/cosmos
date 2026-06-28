@@ -10,7 +10,7 @@ import {
   updateOpenFile,
   type OpenFilesState
 } from './openFiles'
-import { adjacentActiveId } from '../panelTabs'
+import { adjacentActiveId } from '../tabs/panelTabs'
 import type { ViewerState } from './viewerState'
 
 /*

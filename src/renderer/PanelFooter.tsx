@@ -14,7 +14,7 @@
 
 import { CircleAlert, Loader2 } from 'lucide-react'
 import { cn } from '@/lib/utils'
-import type { PanelTab } from './PanelTabStrip'
+import type { PanelTab } from './tabs/PanelTabStrip'
 
 export interface PanelFooterProps {
   /** The panel/surface name shown on the left, e.g. "Terminal", "Slack". */

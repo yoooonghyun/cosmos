@@ -32,7 +32,7 @@ import { render, screen, fireEvent, act } from '@testing-library/react'
 import { cycleActiveId } from './panelTabs'
 import { resolveTabNavTarget } from './closeTabRouting'
 import { useTabShortcuts } from './useTabShortcuts'
-import type { ShortcutTriggerPayload } from '../shared/ipc'
+import type { ShortcutTriggerPayload } from '../../shared/ipc'
 
 // ---------------------------------------------------------------------------
 // window.cosmos stub — mimics the Electron preload shortcuts IPC

@@ -18,7 +18,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { renderHook } from '@testing-library/react'
 import { useTabShortcuts } from './useTabShortcuts'
-import type { ShortcutTriggerPayload } from '../shared/ipc'
+import type { ShortcutTriggerPayload } from '../../shared/ipc'
 
 // ---------------------------------------------------------------------------
 // window.cosmos stub — mimics the Electron preload API

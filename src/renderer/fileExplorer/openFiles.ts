@@ -23,7 +23,7 @@
  *   FR-009  updateOpenFile — patch one file's resolved ViewerState without touching siblings.
  */
 
-import { adjacentActiveId } from '../panelTabs'
+import { adjacentActiveId } from '../tabs/panelTabs'
 import { baseName, selectFile, type ViewerState } from './viewerState'
 
 /** One open file in the strip: its relPath (the stable key), its basename label, and its

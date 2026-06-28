@@ -32,7 +32,7 @@ import {
 } from '@a2ui-sdk/react/0.9'
 import type { UiDataModelPayload } from '../shared/ipc'
 import { applyDataModel } from './dataModelApply'
-import type { TabSurface } from './useGenerativePanelTabs'
+import type { TabSurface } from './tabs/useGenerativePanelTabs'
 
 class SurfaceErrorBoundary extends Component<
   { children: ReactNode; panelName: string },

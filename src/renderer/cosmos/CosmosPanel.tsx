@@ -23,7 +23,7 @@
  */
 
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { PanelTabStrip, type PanelTab } from '../PanelTabStrip'
+import { PanelTabStrip, type PanelTab } from '../tabs/PanelTabStrip'
 import { usePublishComposer } from '../ActiveComposerProvider'
 import { CosmosTimelineEntry } from './CosmosTimelineEntry'
 import { reconcileTimeline, type LiveInFlight } from './cosmosConversation'

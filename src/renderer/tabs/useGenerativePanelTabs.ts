@@ -27,7 +27,7 @@ import type {
   UiRenderPayload,
   UiRenderTarget,
   ViewContext
-} from '../shared/ipc'
+} from '../../shared/ipc'
 import { usePanelTabs, type PanelTabsController } from './usePanelTabs'
 import {
   defaultRequestDecision,
@@ -37,11 +37,11 @@ import {
   shouldApplyAutoLabel,
   shouldFlushDeferredDefault
 } from './panelTabs'
-import { buildGenerativePanel, hydrateGenerativeTabs } from './session/sessionSnapshot'
-import { inFlightOnSubmit, shouldReleaseInFlightOnCompleted } from './promptComposerLogic'
-import { useReportPanel } from './session/SessionProvider'
-import type { GenerativePanelKey } from '../shared/ipc'
-import type { AdapterBinding, AdapterDescriptor } from '../shared/types/adapter'
+import { buildGenerativePanel, hydrateGenerativeTabs } from '../session/sessionSnapshot'
+import { inFlightOnSubmit, shouldReleaseInFlightOnCompleted } from '../promptComposerLogic'
+import { useReportPanel } from '../session/SessionProvider'
+import type { GenerativePanelKey } from '../../shared/ipc'
+import type { AdapterBinding, AdapterDescriptor } from '../../shared/types/adapter'
 
 /** A rendered surface stored on a tab: the spec to (re)process + its requestId. */
 export interface TabSurface {

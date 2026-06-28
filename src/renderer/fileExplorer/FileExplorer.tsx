@@ -13,7 +13,7 @@
 
 import { useCallback } from 'react'
 import { FolderTree } from 'lucide-react'
-import { cycleActiveId } from '../panelTabs'
+import { cycleActiveId } from '../tabs/panelTabs'
 import { FileTree } from './FileTree'
 import { FileViewer } from './FileViewer'
 import { useFileExplorer, type RestoredOpenFiles } from './useFileExplorer'

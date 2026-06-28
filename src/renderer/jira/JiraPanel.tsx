@@ -44,7 +44,7 @@ import {
   JIRA_OPEN_DETAIL_ACTION,
   isDetailSurfaceSpec
 } from './jiraCatalog'
-import { PanelTabStrip, type PanelTab } from '../PanelTabStrip'
+import { PanelTabStrip, type PanelTab } from '../tabs/PanelTabStrip'
 import { PanelRefreshButton } from '../PanelRefreshButton'
 import { panelRefreshInputsFor } from '../panelRefreshLogic'
 import { PanelFooter } from '../PanelFooter'
@@ -53,16 +53,16 @@ import { usePublishComposer } from '../ActiveComposerProvider'
 import { SurfaceSpinner } from '../SurfaceSpinner'
 import { GlassDock } from '../glassDock/GlassDock'
 import { contextChipFor, jiraViewContext } from '../viewContextCapture'
-import { useGenerativePanelTabs, type TabSurface } from '../useGenerativePanelTabs'
+import { useGenerativePanelTabs, type TabSurface } from '../tabs/useGenerativePanelTabs'
 import { useRestoredGenerativePanel } from '../session/SessionProvider'
-import { usePerTabNav } from '../usePerTabNav'
+import { usePerTabNav } from '../tabs/usePerTabNav'
 import {
   shouldAutoRefreshOnActivation,
   autoRefreshValues
 } from '../activeTabSurfaceRefresh'
 import { surfaceSpinnerVisible } from '../promptComposerLogic'
-import { shouldAutoLoadDefaultView } from '../panelTabs'
-import { useTabShortcuts } from '../useTabShortcuts'
+import { shouldAutoLoadDefaultView } from '../tabs/panelTabs'
+import { useTabShortcuts } from '../tabs/useTabShortcuts'
 import { useConfirm } from '../useConfirm'
 import { ConfirmDialog } from '@/components/ui/confirm-dialog'
 import { confirmCopy } from '../confirmLogic'
