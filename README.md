@@ -15,21 +15,25 @@ It does this by embedding **Claude Code** as the engine and giving it two surfac
    rich, interactive panels for your integrations (Slack, Jira, Confluence, Google Calendar)
    right inside cosmos by calling render MCP tools.
 
-You drive everything from one place — the floating **Open Prompt** composer — which commands a
-single persistent agent session whose conversation is recorded and resumable. One prompt, one
-workspace, instead of a dozen scattered tabs.
+You drive everything from one place — the **Open Prompt** composer (docked at the bottom of the
+Cosmos panel, floating on the others) — which commands a single persistent agent session whose
+conversation is recorded and resumable. One prompt, one workspace, instead of a dozen scattered
+tabs.
 
 ## What you can do
 
 - **Terminal**: multiple live Claude Code tabs, each its own PTY session, with a side
   file explorer + viewer; sessions restore (and recover orphaned processes) on relaunch.
-- **Cosmos panel**: command the persistent default agent and see its generated UI / (planned)
-  full conversation history.
+- **Cosmos panel** (the default landing surface): the persistent default agent's full
+  conversation timeline — your prompt bubbles (with the screen-context they were sent from shown
+  inline), the agent's replies under its logo, tool calls, and inline interactive A2UI surfaces.
+  A side **panel-tab tree** lists every other panel's open tabs; click one to attach it as
+  context for your next prompt.
 - **Integrations**: connect Slack, Jira, Confluence, and Google Calendar via browser OAuth.
   The agent can read and (where granted) write — e.g. create/update Confluence pages, comment,
   transition Jira issues, browse Slack threads — and present results as native panels.
-- **Open Prompt**: a draggable, position-persistent composer that routes prompts to the
-  active surface's agent.
+- **Open Prompt**: the composer that routes prompts to the active surface's agent — docked in the
+  Cosmos panel, a draggable position-persistent card on the others.
 
 ## Architecture (in brief)
 
@@ -41,8 +45,9 @@ workspace, instead of a dozen scattered tabs.
 - **A2UI render path**: the agent runs `claude -p --output-format json`, calls render MCP tools,
   and the resulting frames flow through a UI bridge to the renderer, which hosts them in a
   catalog-driven A2UI surface.
-- Authoritative design lives in **`docs/ARCHITECTURE.md`**; the file-by-file map in
-  **`docs/PROJECT-STRUCTURE.md`**; dev conventions and gotchas in **`docs/DEVELOPMENT.md`**.
+- Authoritative architecture lives in **`docs/ARCHITECTURE.md`**; the visual design foundation +
+  enforced criteria in **`docs/DESIGN.md`**; the file-by-file map in **`docs/PROJECT-STRUCTURE.md`**;
+  dev conventions and gotchas in **`docs/DEVELOPMENT.md`**.
 
 ## Getting started
 
@@ -74,7 +79,7 @@ src/main/       Electron main: window, IPC, integrations, MCP servers, session/P
 src/preload/    The typed window.cosmos bridge
 src/renderer/   React UI: terminal, panels, A2UI catalogs, Open Prompt
 src/shared/     The one typed IPC contract + shared types
-docs/           ARCHITECTURE.md (design) · DEVELOPMENT.md (conventions) · PROJECT-STRUCTURE.md
+docs/           ARCHITECTURE.md (design) · DESIGN.md (visual system) · DEVELOPMENT.md · PROJECT-STRUCTURE.md
 ```
 
 ## Security model
@@ -83,3 +88,7 @@ docs/           ARCHITECTURE.md (design) · DEVELOPMENT.md (conventions) · PROJ
   main, encrypted at rest, and are never logged or exposed to the renderer or the agent.
 - Local file access in the renderer goes through scoped custom protocols confined to the
   active tab's root — no arbitrary filesystem reach.
+
+## License
+
+[MIT](LICENSE) © yoooonghyun
