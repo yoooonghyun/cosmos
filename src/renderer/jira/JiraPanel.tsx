@@ -49,7 +49,7 @@ import { PanelRefreshButton } from '../PanelRefreshButton'
 import { panelRefreshInputsFor } from '../panelRefreshLogic'
 import { PanelFooter } from '../PanelFooter'
 import { ActiveTabSurface } from '../ActiveTabSurface'
-import { usePublishComposer } from '../ActiveComposerProvider'
+import { usePublishComposer } from '../composer/ActiveComposerProvider'
 import { SurfaceSpinner } from '../SurfaceSpinner'
 import { GlassDock } from '../glassDock/GlassDock'
 import { contextChipFor, jiraViewContext } from '../viewContextCapture'
@@ -60,7 +60,7 @@ import {
   shouldAutoRefreshOnActivation,
   autoRefreshValues
 } from '../activeTabSurfaceRefresh'
-import { surfaceSpinnerVisible } from '../promptComposerLogic'
+import { surfaceSpinnerVisible } from '../composer/promptComposerLogic'
 import { shouldAutoLoadDefaultView } from '../tabs/panelTabs'
 import { useTabShortcuts } from '../tabs/useTabShortcuts'
 import { useConfirm } from '../useConfirm'

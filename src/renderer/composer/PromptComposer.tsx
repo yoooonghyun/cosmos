@@ -41,13 +41,13 @@ import {
   type KeyboardEvent,
   type PointerEvent as ReactPointerEvent
 } from 'react'
-import type { AgentStatusPayload } from '../shared/ipc'
+import type { AgentStatusPayload } from '../../shared/ipc'
 import { Button } from '@/components/ui/button'
 import { Textarea } from '@/components/ui/textarea'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
-import { CosmosMark } from './CosmosMark'
-import { ContextChip } from './ContextChip'
-import type { ContextChipData } from './viewContextCapture'
+import { CosmosMark } from '../CosmosMark'
+import { ContextChip } from '../ContextChip'
+import type { ContextChipData } from '../viewContextCapture'
 import {
   submitDecision,
   draftAfterDismiss,
@@ -74,8 +74,8 @@ import {
   type CardSize
 } from './openPromptPosition'
 import { useOpenPromptPosition } from './OpenPromptPositionProvider'
-import { useGlassDockFilter, ALL_EDGES } from './glassDock/useGlassDockFilter'
-import { OPEN_PROMPT_GLASS_CONFIG } from './glassDock/config'
+import { useGlassDockFilter, ALL_EDGES } from '../glassDock/useGlassDockFilter'
+import { OPEN_PROMPT_GLASS_CONFIG } from '../glassDock/config'
 
 // open-prompt-glass: corner radius (px) of the expanded composer card. It wears `rounded-lg`
 // = `--radius` (0.5rem ≈ 8px), so the all-edges bezel refraction must sweep an 8px rounded rim.

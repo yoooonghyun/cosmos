@@ -15,13 +15,13 @@ import { GoogleCalendarPanel } from './calendar/GoogleCalendarPanel'
 import { SettingsDialog } from './SettingsDialog'
 import { CosmosSpinner } from './CosmosSpinner'
 import { SessionProvider, useEnabledIntegrations, useLoadSession } from './session/SessionProvider'
-import { OpenPromptPositionProvider } from './OpenPromptPositionProvider'
+import { OpenPromptPositionProvider } from './composer/OpenPromptPositionProvider'
 import {
   ActiveComposerProvider,
   useActiveComposerConfig
-} from './ActiveComposerProvider'
-import { PromptComposer } from './PromptComposer'
-import { composerModeForSurface } from './activeComposer'
+} from './composer/ActiveComposerProvider'
+import { PromptComposer } from './composer/PromptComposer'
+import { composerModeForSurface } from './composer/activeComposer'
 import { resolveFallbackSurface, visibleSurfaceIds, type SurfaceId } from './railVisibility'
 import './App.css'
 

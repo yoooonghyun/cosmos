@@ -18,7 +18,7 @@
  */
 
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react'
-import type { SurfaceId } from './railVisibility'
+import type { SurfaceId } from '../railVisibility'
 import type { ComposerConfig, ComposerRegistry } from './activeComposer'
 import { selectActiveComposerConfig } from './activeComposer'
 

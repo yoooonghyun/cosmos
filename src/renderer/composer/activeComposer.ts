@@ -12,8 +12,8 @@
  * `promptComposerLogic.ts` / `openPromptPosition.ts` `.ts`/`.test.ts` split.
  */
 
-import type { SurfaceId } from './railVisibility'
-import type { ContextChipData } from './viewContextCapture'
+import type { SurfaceId } from '../railVisibility'
+import type { ContextChipData } from '../viewContextCapture'
 import type { ContextDismiss } from './PromptComposer'
 
 /**

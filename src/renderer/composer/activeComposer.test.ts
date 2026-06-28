@@ -13,7 +13,7 @@ import {
   composerModeForSurface,
   type ComposerRegistry
 } from './activeComposer'
-import { ALL_SURFACE_IDS } from './railVisibility'
+import { ALL_SURFACE_IDS } from '../railVisibility'
 
 const jiraConfig = {
   onSubmit: () => {},
