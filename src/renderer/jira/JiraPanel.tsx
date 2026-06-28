@@ -54,7 +54,7 @@ import { SurfaceSpinner } from '../SurfaceSpinner'
 import { GlassDock } from '../glassDock/GlassDock'
 import { contextChipFor, jiraViewContext } from '../viewContextCapture'
 import { useGenerativePanelTabs, type TabSurface } from '../useGenerativePanelTabs'
-import { useRestoredGenerativePanel } from '../SessionProvider'
+import { useRestoredGenerativePanel } from '../session/SessionProvider'
 import { usePerTabNav } from '../usePerTabNav'
 import {
   shouldAutoRefreshOnActivation,

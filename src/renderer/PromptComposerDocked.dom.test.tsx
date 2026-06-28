@@ -25,7 +25,7 @@ import { useState } from 'react'
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { render, screen, act, fireEvent } from '@testing-library/react'
 import { PromptComposer } from './PromptComposer'
-import { SessionProvider } from './SessionProvider'
+import { SessionProvider } from './session/SessionProvider'
 import { OpenPromptPositionProvider } from './OpenPromptPositionProvider'
 
 // PromptComposer subscribes to `window.cosmos.agent.onStatus` and SessionProvider calls

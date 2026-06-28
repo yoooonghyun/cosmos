@@ -43,8 +43,8 @@ import {
   seedTerminalIndex,
   terminalLabel
 } from '../panelTabs'
-import { useReportPanel, useRestoredTerminalPanel } from '../SessionProvider'
-import { buildTerminalDraft, capScrollback, hydrateTerminalTabs } from '../sessionSnapshot'
+import { useReportPanel, useRestoredTerminalPanel } from '../session/SessionProvider'
+import { buildTerminalDraft, capScrollback, hydrateTerminalTabs } from '../session/sessionSnapshot'
 import { terminalThemeFromTokens } from './terminalTheme'
 import './TerminalPanel.css'
 

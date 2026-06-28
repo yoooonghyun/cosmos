@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import type { GenerativeTab } from './useGenerativePanelTabs'
+import type { GenerativeTab } from '../useGenerativePanelTabs'
 import {
   buildGenerativePanel,
   buildGenerativeTab,

@@ -15,7 +15,7 @@
 
 import { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react'
 import { DEFAULT_OPEN_PROMPT_POSITION, type OpenPromptPosition } from './openPromptPosition'
-import { useRestoredOpenPromptPosition, useSessionRegistry } from './SessionProvider'
+import { useRestoredOpenPromptPosition, useSessionRegistry } from './session/SessionProvider'
 
 interface OpenPromptPositionContextValue {
   /** The live, globally-shared normalized button position. */

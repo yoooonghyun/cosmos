@@ -20,7 +20,7 @@ import type {
   GenerativePanelSnapshot,
   SessionSnapshot,
   TerminalPanelSnapshot
-} from '../shared/ipc'
+} from '../../shared/ipc'
 import { emptyEnabled, SessionRegistry, type PanelKey } from './sessionRegistry'
 import type { TerminalPanelDraft } from './sessionSnapshot'
 

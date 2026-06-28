@@ -14,7 +14,7 @@ import { ConfluencePanel } from './confluence/ConfluencePanel'
 import { GoogleCalendarPanel } from './calendar/GoogleCalendarPanel'
 import { SettingsDialog } from './SettingsDialog'
 import { CosmosSpinner } from './CosmosSpinner'
-import { SessionProvider, useEnabledIntegrations, useLoadSession } from './SessionProvider'
+import { SessionProvider, useEnabledIntegrations, useLoadSession } from './session/SessionProvider'
 import { OpenPromptPositionProvider } from './OpenPromptPositionProvider'
 import {
   ActiveComposerProvider,

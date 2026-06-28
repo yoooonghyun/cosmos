@@ -25,9 +25,9 @@ import type {
   GenerativePanelSnapshot,
   GenerativeTabSnapshot,
   TerminalPanelSnapshot
-} from '../shared/ipc'
-import type { GenerativeTab } from './useGenerativePanelTabs'
-import { seedEverOpenedFrom } from './panelTabs'
+} from '../../shared/ipc'
+import type { GenerativeTab } from '../useGenerativePanelTabs'
+import { seedEverOpenedFrom } from '../panelTabs'
 
 export { seedEverOpenedFrom }
 

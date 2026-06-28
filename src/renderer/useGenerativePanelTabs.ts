@@ -37,9 +37,9 @@ import {
   shouldApplyAutoLabel,
   shouldFlushDeferredDefault
 } from './panelTabs'
-import { buildGenerativePanel, hydrateGenerativeTabs } from './sessionSnapshot'
+import { buildGenerativePanel, hydrateGenerativeTabs } from './session/sessionSnapshot'
 import { inFlightOnSubmit, shouldReleaseInFlightOnCompleted } from './promptComposerLogic'
-import { useReportPanel } from './SessionProvider'
+import { useReportPanel } from './session/SessionProvider'
 import type { GenerativePanelKey } from '../shared/ipc'
 import type { AdapterBinding, AdapterDescriptor } from '../shared/types/adapter'
 

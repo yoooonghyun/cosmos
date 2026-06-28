@@ -23,7 +23,7 @@ import {
   type GenerativePanelSnapshot,
   type SessionSnapshot,
   type TerminalPanelSnapshot
-} from '../shared/ipc'
+} from '../../shared/ipc'
 import type { TerminalPanelDraft } from './sessionSnapshot'
 
 /** The five contribution keys (one per rail panel). */
