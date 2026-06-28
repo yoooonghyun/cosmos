@@ -13,7 +13,7 @@ import {
   SLACK_MESSAGES_PATH,
   type SlackAdapterManager
 } from './slackAdapter'
-import { SlackAdapterSource } from '../shared/types/slack'
+import { SlackAdapterSource } from '../../shared/types/slack'
 import type {
   SlackChannel,
   SlackHistoryParams,
@@ -24,7 +24,7 @@ import type {
   SlackSearchMatch,
   SlackSearchParams,
   SlackUser
-} from '../shared/types/slack'
+} from '../../shared/types/slack'
 
 /* slack-generative-adapter-v1 — the Slack-specific resolver + bind options (FR-005..FR-008).
  * Maps a secret-free descriptor to a SlackManager read, resolves author names in MAIN, and

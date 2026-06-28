@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { extractImageRefs } from './slackImageExtract'
-import { decodeImageRef } from '../slackImageRef'
+import { decodeImageRef } from '../slack/slackImageRef'
 
 describe('extractImageRefs (slack-rich-message-render-v1 FR-009/010)', () => {
   it('extracts an image file as an opaque ref, dropping the token-bearing URL', () => {

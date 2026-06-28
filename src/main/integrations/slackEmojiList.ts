@@ -21,7 +21,7 @@
  * Slack client). The map-resolution helpers are pure + node-testable in isolation.
  */
 
-import { encodeImageRef, isAllowedSlackImageHost } from '../slackImageRef'
+import { encodeImageRef, isAllowedSlackImageHost } from '../slack/slackImageRef'
 
 /** The raw `{ name: value }` map `emoji.list` returns (value = image URL or `alias:other`). */
 export type EmojiListMap = Record<string, string>

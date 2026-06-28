@@ -139,8 +139,8 @@ import {
   slackRenderUiMcpServerEntry
 } from './mcpConfig'
 import { UiBridge } from './uiBridge'
-import { SlackBridge } from './slackBridge'
-import { SlackManager } from './slackManager'
+import { SlackBridge } from './slack/slackBridge'
+import { SlackManager } from './slack/slackManager'
 import { SlackClient } from './integrations/slackClient'
 import { TokenStore } from './integrations/tokenStore'
 import {
@@ -166,7 +166,7 @@ import { jiraAdapterResolver, jiraListBindOptions, jiraDetailBindOptions } from 
 // Slack's bound lists. A composite resolver branches Slack vs Jira by dataSource (the two
 // source namespaces don't collide), and the lazy re-registration consults Slack's
 // bind-options selector for a restored Slack descriptor.
-import { slackAdapterResolver, slackBindOptionsForSource } from './slackAdapter'
+import { slackAdapterResolver, slackBindOptionsForSource } from './slack/slackAdapter'
 // confluence-generative-adapter-v1 (FR-005/FR-008/FR-015): the same shared dispatcher
 // also serves Confluence's two append-only lists + its refresh-only page detail. The
 // composite resolver branches Confluence-vs-Slack-vs-Jira by dataSource; the lazy
@@ -206,7 +206,7 @@ import { createFsExplorer, type ExplorerFs, type FsExplorer } from './fsExplorer
 import {
   registerSlackImageScheme,
   installSlackImageProtocol
-} from './slackImageProtocol'
+} from './slack/slackImageProtocol'
 import { GoogleCalendarBridge } from './googleCalendarBridge'
 import { GoogleCalendarManager } from './googleCalendarManager'
 import { GoogleCalendarClient } from './integrations/googleCalendarClient'

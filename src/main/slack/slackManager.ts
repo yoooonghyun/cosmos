@@ -38,15 +38,15 @@ import type {
   SlackSendParams,
   SlackSendResult,
   SlackUser
-} from '../shared/types/slack'
-import { SLACK_WRITE_NOT_AUTHORIZED_MESSAGE, SLACK_WRITE_SCOPE } from '../shared/types/slack'
-import type { MessageResolvers, SlackCallAuth, SlackClient } from './integrations/slackClient'
-import type { StoredTokenSet, TokenStore } from './integrations/tokenStore'
-import { expiryFromSeconds } from './integrations/tokenStore'
-import type { SlackOAuthResult } from './integrations/slackOAuth'
-import type { TokenExchangeResult } from './integrations/oauthPkce'
-import { SLACK_SEARCH_SCOPE } from './integrations/slackConfig'
-import { SlackCustomEmojiResolver } from './integrations/slackEmojiList'
+} from '../../shared/types/slack'
+import { SLACK_WRITE_NOT_AUTHORIZED_MESSAGE, SLACK_WRITE_SCOPE } from '../../shared/types/slack'
+import type { MessageResolvers, SlackCallAuth, SlackClient } from '../integrations/slackClient'
+import type { StoredTokenSet, TokenStore } from '../integrations/tokenStore'
+import { expiryFromSeconds } from '../integrations/tokenStore'
+import type { SlackOAuthResult } from '../integrations/slackOAuth'
+import type { TokenExchangeResult } from '../integrations/oauthPkce'
+import { SLACK_SEARCH_SCOPE } from '../integrations/slackConfig'
+import { SlackCustomEmojiResolver } from '../integrations/slackEmojiList'
 
 /** Refresh a rotating Slack user token; main wires {@link refreshSlackToken}. */
 export type SlackRefreshFn = (refreshToken: string) => Promise<TokenExchangeResult>

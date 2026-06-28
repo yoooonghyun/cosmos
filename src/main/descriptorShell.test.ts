@@ -20,7 +20,7 @@ import {
   SURFACE_SLACK_CHANNELS,
   SURFACE_SLACK_HISTORY,
   SURFACE_SLACK_SEARCH
-} from './slackSurfaceBuilder'
+} from './slack/slackSurfaceBuilder'
 import {
   SURFACE_CONFLUENCE_FEED,
   SURFACE_CONFLUENCE_SEARCH,

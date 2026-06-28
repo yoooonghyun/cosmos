@@ -16,7 +16,7 @@
  */
 
 import type { SlackImageRef } from '../../shared/types/slack'
-import { encodeImageRef } from '../slackImageRef'
+import { encodeImageRef } from '../slack/slackImageRef'
 
 function isRecord(v: unknown): v is Record<string, unknown> {
   return typeof v === 'object' && v !== null

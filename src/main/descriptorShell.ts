@@ -28,10 +28,10 @@
 import type { A2uiSurfaceUpdate } from '../shared/ipc'
 import type { AdapterDescriptor } from '../shared/types/adapter'
 import type { AdapterRegisterOptions } from './adapterDispatcher'
-import { buildSlackBoundShell } from './slackSurfaceBuilder'
+import { buildSlackBoundShell } from './slack/slackSurfaceBuilder'
 import { buildConfluenceBoundShell } from './confluenceSurfaceBuilder'
 import { buildJiraBoundShell } from './jiraSurfaceBuilder'
-import { slackBindOptionsForSource } from './slackAdapter'
+import { slackBindOptionsForSource } from './slack/slackAdapter'
 import { confluenceBindOptionsForSource } from './confluenceAdapter'
 import { jiraBindOptionsForSource } from './jiraAdapter'
 

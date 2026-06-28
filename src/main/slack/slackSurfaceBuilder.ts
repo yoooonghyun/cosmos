@@ -16,20 +16,20 @@
  * descriptor cross (FR-018).
  */
 
-import type { A2uiSurfaceUpdate, UiDataModelPayload } from '../shared/ipc'
+import type { A2uiSurfaceUpdate, UiDataModelPayload } from '../../shared/ipc'
 import type {
   SlackChannel,
   SlackMessage,
   SlackPage,
   SlackSearchMatch
-} from '../shared/types/slack'
+} from '../../shared/types/slack'
 import {
   SlackAdapterSource,
   slackChannelsDescriptor,
   slackHistoryDescriptor,
   slackSearchDescriptor,
   type SlackAdapterDescriptor
-} from '../shared/types/slack'
+} from '../../shared/types/slack'
 import {
   SLACK_CHANNELS_PATH,
   SLACK_MATCHES_PATH,

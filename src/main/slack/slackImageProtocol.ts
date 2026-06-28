@@ -20,7 +20,7 @@
  */
 
 import { protocol, net } from 'electron'
-import type { SlackCallAuth } from './integrations/slackClient'
+import type { SlackCallAuth } from '../integrations/slackClient'
 import {
   COSMOS_SLACK_IMG_SCHEME,
   buildSlackImageUrl,

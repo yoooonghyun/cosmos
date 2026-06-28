@@ -5,7 +5,7 @@ import {
   SlackCustomEmojiResolver,
   type EmojiListMap
 } from './slackEmojiList'
-import { decodeImageRef } from '../slackImageRef'
+import { decodeImageRef } from '../slack/slackImageRef'
 
 const IMG = 'https://emoji.slack-edge.com/T1/parrot/abc.gif'
 const IMG2 = 'https://emoji.slack-edge.com/T1/cat/def.png'
