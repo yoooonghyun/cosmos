@@ -5,7 +5,7 @@
   "description": "Conductor-style Electron host app embedding Claude Code as its engine",
   "main": "out/main/index.js",
   "author": "cosmos",
-  "license": "UNLICENSED",
+  "license": "MIT",
   "private": true,
   "type": "module",
   "scripts": {
