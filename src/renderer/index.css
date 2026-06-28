@@ -101,6 +101,102 @@
   --color-glass-dock-fill: var(--glass-dock-fill);
   --color-glass-dock-edge: var(--glass-dock-edge);
   --color-glass-dock-highlight: var(--glass-dock-highlight);
+
+  /* ==========================================================================
+   * FOUNDATION SCALES (design-foundation-v1) — the formal, named scale system.
+   * These are ADDITIVE: they reconcile the values already shipped across the
+   * renderer (the audited raw `text-[Npx]`, `z-50`, `duration-[…]`, `shadow-*`)
+   * into named tokens so a NEW surface composes from names, never raw values.
+   * Adding them does NOT restyle any existing surface — existing components keep
+   * their current raw classes until the deferred migration. Full usage rules +
+   * the surface-by-surface mapping live in docs/DESIGN.md §7–§13.
+   * ========================================================================== */
+
+  /* --- Typography ramp (DESIGN.md §8) -------------------------------------
+   * Seven named steps covering the REAL sizes in use (10/11/12/13/14/16px),
+   * each pairing a size with its canonical line-height. Consumable as
+   * `text-micro … text-title`. Tailwind's built-in `text-xs`(12)/`text-sm`(14)/
+   * `text-base`(16) remain valid aliases for the body steps; the named tokens
+   * ADD the sub-12px dense steps (micro/nano) the panels/calendar genuinely
+   * need and a single `title` step. Weight + tracking are separate roles
+   * (§8): use `font-normal|medium|semibold` and `tracking-wide` (uppercase
+   * micro-labels) only — no other typographic axes. */
+  --text-nano: 0.625rem;            /* 10px — densest chips/overflow counts */
+  --text-nano--line-height: 0.875rem;   /* 14px */
+  --text-micro: 0.6875rem;          /* 11px — dense panel labels/status */
+  --text-micro--line-height: 1rem;      /* 16px */
+  --text-caption: 0.75rem;          /* 12px — == Tailwind text-xs; meta/footer */
+  --text-caption--line-height: 1rem;    /* 16px */
+  --text-body-sm: 0.8125rem;        /* 13px — primary dense body (rows/tabs) */
+  --text-body-sm--line-height: 1.25rem; /* 20px */
+  --text-body: 0.875rem;            /* 14px — == Tailwind text-sm; default body */
+  --text-body--line-height: 1.25rem;    /* 20px */
+  --text-base: 1rem;                /* 16px — == Tailwind text-base; inputs/lead */
+  --text-base--line-height: 1.5rem;     /* 24px */
+  --text-title: 1.125rem;           /* 18px — dialog/section titles */
+  --text-title--line-height: 1.75rem;   /* 28px */
+
+  /* --- Spacing rhythm (DESIGN.md §9) --------------------------------------
+   * cosmos uses Tailwind's native 0.25rem (4px) spacing grid unchanged; the
+   * foundation does NOT redefine `--spacing`, it names the dense-surface step
+   * aliases that recur (the `1.5`=6px / `2.5`=10px pads the panels lean on) so
+   * they read as sanctioned rhythm rather than arbitrary. Genuine off-scale
+   * density (calendar hour-cell height) goes through a NAMED density var, never
+   * a bare arbitrary value. */
+  --space-density-1: 0.375rem;      /* 6px  — == Tailwind p-1.5; dense row pad-y */
+  --space-density-2: 0.625rem;      /* 10px — == Tailwind p-2.5; dense control pad-x */
+  --space-cal-hour: 3rem;           /* 48px — calendar hour-cell height (was raw --cal-hour-h) */
+
+  /* --- Radius scale (DESIGN.md §10) ---------------------------------------
+   * Formalizes the existing 0.5rem base + sm/md/lg/xl derivations (above) as
+   * the named radius system. No new values; documented surface→step mapping in
+   * DESIGN.md §10. `rounded-2xl`/`rounded-full` (chat bubbles, pills, dots) stay
+   * Tailwind built-ins. */
+
+  /* --- Elevation / shadow ramp (DESIGN.md §11) ----------------------------
+   * Four named tiers reconciling the ad-hoc shadow-xs/sm/md/lg usage:
+   *   flat       — no shadow (panels/tabs/chrome sit on color, not lift)
+   *   control    — resting controls (input, switch, outline button) == shadow-xs
+   *   raised     — cards / composer / cosmos button == shadow-sm
+   *   overlay    — dialog / dropdown / floating composer launch == shadow-lg
+   * The glass-dock material is its OWN composed floating-dock treatment (the
+   * inset specular rim + outer depth shadow in the @utility below) — it is the
+   * `floating-dock` tier and is NOT one of these flat ramp tokens. */
+  --shadow-control:
+    0 1px 2px 0 rgb(0 0 0 / 0.18);
+  --shadow-raised:
+    0 1px 3px 0 rgb(0 0 0 / 0.28),
+    0 1px 2px -1px rgb(0 0 0 / 0.28);
+  --shadow-overlay:
+    0 10px 15px -3px rgb(0 0 0 / 0.45),
+    0 4px 6px -4px rgb(0 0 0 / 0.45);
+
+  /* --- Motion: durations + easings (DESIGN.md §12) ------------------------
+   * Named durations reconcile 120/200/400/450ms; named easings reconcile the
+   * dock ease-out and the composer "launch" curve. EVERY motion usage stays
+   * `prefers-reduced-motion`-gated (motion-reduce:transition-none / the
+   * cosmos-spinner @media gate). Canonical recipes in DESIGN.md §12. */
+  --duration-micro: 120ms;          /* hover/color reveals (scrollbar, tint) */
+  --duration-fast: 200ms;           /* overlay enter/exit, dock slide, dialog */
+  --duration-slow: 400ms;           /* composer launch fade */
+  --duration-slower: 450ms;         /* composer launch scale/filter */
+  --ease-standard: cubic-bezier(0, 0, 0.2, 1);          /* ease-out — docks/overlays */
+  --ease-launch: cubic-bezier(0.16, 1, 0.3, 1);         /* composer launch (expo-out) */
+
+  /* --- Z-index ladder (DESIGN.md §13) -------------------------------------
+   * The named stacking ladder formalizing the current order. base content sits
+   * at auto/0; everything above picks a NAMED rung, never a fresh literal:
+   *   raised   (10) — in-panel scrim, avatar status badge, resize divider
+   *   dock     (20) — glass detail docks / in-panel overlays
+   *   overlay  (50) — app dialog / dropdown / popover / tooltip
+   *   composer (50) — floating composer fixed drag/logo layer (peer of overlay)
+   * dock < overlay because an app dialog must cover a panel's own detail dock.
+   * composer shares 50 with overlay (they are never co-stacked in a way that
+   * needs ordering); kept a distinct name so intent is explicit. */
+  --z-raised: 10;
+  --z-dock: 20;
+  --z-overlay: 50;
+  --z-composer: 50;
 }
 
 /*
@@ -280,6 +376,82 @@
   @supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
     background-color: color-mix(in oklab, var(--card) 92%, transparent);
   }
+}
+
+/* ==========================================================================
+ * FOUNDATION-SCALE UTILITIES (design-foundation-v1, FR-081) — explicit
+ * @utility wrappers for the foundation token namespaces Tailwind v4 does NOT
+ * auto-map to utilities.
+ *
+ * Verified against the renderer build (tailwindcss 4.3): Tailwind v4 auto-emits
+ * utilities for the `--text-*` (incl. the `--text-*--line-height` pair),
+ * `--shadow-*`, and `--ease-*` namespaces from the @theme block above, so those
+ * scales (`text-nano…text-title`, `shadow-control/raised/overlay`,
+ * `ease-standard/launch`) need NO wrapper here. It does NOT emit utilities for
+ * the `--duration-*`, `--z-*`, or the custom `--space-*` namespaces, so the
+ * named steps from DESIGN.md §9/§12/§13 are exposed explicitly below. Token
+ * VALUES are untouched — these utilities only reference the @theme vars so the
+ * documented names are real, consumable classes. This is additive: no existing
+ * surface references these new class names yet (migration is deferred). */
+
+/* Motion durations (DESIGN.md §12) — `duration-micro|fast|slow|slower`. */
+@utility duration-micro {
+  transition-duration: var(--duration-micro);
+}
+@utility duration-fast {
+  transition-duration: var(--duration-fast);
+}
+@utility duration-slow {
+  transition-duration: var(--duration-slow);
+}
+@utility duration-slower {
+  transition-duration: var(--duration-slower);
+}
+
+/* Z-index ladder (DESIGN.md §13) — `z-raised|dock|overlay|composer`. */
+@utility z-raised {
+  z-index: var(--z-raised);
+}
+@utility z-dock {
+  z-index: var(--z-dock);
+}
+@utility z-overlay {
+  z-index: var(--z-overlay);
+}
+@utility z-composer {
+  z-index: var(--z-composer);
+}
+
+/* Dense-surface spacing rhythm (DESIGN.md §9) — the two named density steps
+ * (`density-1` = 6px row pad-y, `density-2` = 10px control pad-x) as the
+ * padding/gap variants the panels lean on, plus the one off-grid calendar
+ * hour-cell height. All reference the @theme `--space-*` vars (values unchanged). */
+@utility p-density-1 {
+  padding: var(--space-density-1);
+}
+@utility p-density-2 {
+  padding: var(--space-density-2);
+}
+@utility px-density-1 {
+  padding-inline: var(--space-density-1);
+}
+@utility px-density-2 {
+  padding-inline: var(--space-density-2);
+}
+@utility py-density-1 {
+  padding-block: var(--space-density-1);
+}
+@utility py-density-2 {
+  padding-block: var(--space-density-2);
+}
+@utility gap-density-1 {
+  gap: var(--space-density-1);
+}
+@utility gap-density-2 {
+  gap: var(--space-density-2);
+}
+@utility h-cal-hour {
+  height: var(--space-cal-hour);
 }
 
 :root {

@@ -607,7 +607,12 @@ serving **both** surfaces:
   tool is intentionally NOT in the panel's `--allowedTools` grant — `CONFLUENCE_TOOL_GRANTS`); the
   `confluence_create_page` write lives only on the MCP server for the interactive TUI. Both panels
   render the not-connected / loading / idle-empty / error / reconnect-needed states and reuse the
-  shared Tailwind + shadcn/ui design system and the Slack panel's chrome.
+  shared Tailwind + shadcn/ui design system and the Slack panel's chrome. The design system's
+  authoritative canon is **`docs/DESIGN.md`** (design-foundation-v1): the named scale system
+  (color / typography / spacing / radius / elevation / motion / z-index) realized as `index.css`
+  `@theme` tokens, plus the Design Criteria Registry of enforced rules; the `designer` agent reads
+  and updates it every cycle, and existing raw-value drift is tracked in `TODO.md` for incremental
+  migration (no big-bang restyle).
 - **MCP tools** — read: `jira_search_issues`, `jira_get_issue` and `confluence_search_content`,
   `confluence_get_page`; **Jira write** (all in the SAME `cosmos-jira` server —
   `src/mcp/jiraMcpServer.ts` + `src/main/jiraBridge.ts`): `jira_transition_issue`,

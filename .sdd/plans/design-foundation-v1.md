@@ -148,18 +148,25 @@ no new product features, no IPC/MCP/main changes, no new UI dependency.
 
 ### Phase 2 — Interface / wiring + audit (owner: `developer`)
 
-- [ ] **Wire Tailwind `@theme`** — make the new scale tokens consumable as utility classes where
-      needed (so a surface can apply a named type/spacing/z/elevation/motion step instead of an
-      arbitrary value). Confirm the chosen consumption mechanism for each scale (Tailwind theme key
-      vs. utility vs. token var) matches how the designer intends surfaces to apply it. (FR-081)
-- [ ] **Build + typecheck green** — `npm run build` and `npm run typecheck` pass; no Tailwind
-      cascade-layer regression; no visible restyle of existing surfaces (foundation is additive).
-- [ ] **Produce the migration audit/backlog** — enumerate the drifting surfaces (the ~26 files /
-      ~85 ad-hoc occurrences) grouped by foundation area, recorded into the "Migration backlog"
-      section below AND promoted as milestone items into `TODO.md`. Must include the OQ-2
-      Button/Badge `ring-[3px]` → thin-ring flip as an explicit item. (FR-082)
-- [ ] **Confirm no component rewrite happened** — verify Phase 2 added tokens/wiring + the audit
-      list only; no existing surface was mass-migrated this cycle (SC-004, out-of-scope guard).
+- [x] **Wire Tailwind `@theme`** — made the new scale tokens consumable as utility classes.
+      VERIFIED via a throwaway probe + renderer build (tailwindcss 4.3): Tailwind v4 AUTO-emits the
+      `--text-*` (incl. the `--text-*--line-height` pair → `text-nano…text-title` set font-size +
+      line-height), `--shadow-*` (`shadow-control/raised/overlay`), and `--ease-*`
+      (`ease-standard/launch`) namespaces — NO `@utility` needed. It does NOT emit `--duration-*`,
+      `--z-*`, or the custom `--space-*` namespaces, so those were exposed with explicit `@utility`
+      blocks in `index.css` (`duration-micro|fast|slow|slower`, `z-raised|dock|overlay|composer`,
+      `p/px/py/gap-density-1|2`, `h-cal-hour`). Token VALUES untouched. (FR-081)
+- [x] **Build + typecheck green** — `npm run build` succeeds (exit 0), `npm run typecheck` clean,
+      `npm test` 2566/2566 pass; no Tailwind cascade-layer regression; foundation is additive (only
+      index.css token/@utility + docs/TODO changed — zero existing-surface restyle).
+- [x] **Produce the migration audit/backlog** — enumerated the drifting surfaces grouped by
+      foundation area (Grep of the new restructured `src/renderer/**`: 58 `text-[Npx]`/21 files,
+      20 z-literals, 18 motion, 19 shadow, ~93 dense pads, the ring-[3px] sites) into the "Migration
+      backlog" section below AND the "Design-foundation migration (deferred)" section of `TODO.md`.
+      Includes the OQ-2 Button/Badge `ring-[3px]` → thin-ring flip (D-7) as an explicit item. (FR-082)
+- [x] **Confirm no component rewrite happened** — Phase 2 added tokens/@utility + the audit list
+      only; `git diff` shows index.css additions + DESIGN.md + TODO.md + this plan, no `components/ui/`
+      edits, no existing-surface class changes (SC-004, out-of-scope guard).
 
 ### Phase 3 — Docs & wrap-up
 
@@ -230,8 +237,31 @@ Coordination rules (to avoid path churn — the foundation is NOT blocked by the
 - **Spacing** — replace arbitrary `px-2.5`/`py-1.5`/`gap-[…]` one-offs with scale steps (or a
   documented density token for genuinely dense cells).
 - **Primitive reconciliation (OQ-2)** — flip `components/ui/button.tsx` + `components/ui/badge.tsx`
-  `focus-visible:ring-[3px]` → the canonical thin (~1.5px) ring (DESIGN.md D-5), matching
-  `textarea.tsx`. Deliberately NOT done this cycle.
+  (+ `tabs.tsx`/`switch.tsx`/`select.tsx`/`scroll-area.classes.ts`/`PanelTabStrip`/`FileTabStrip`/
+  `ResizeDivider`) `focus-visible:ring-[3px]` → the canonical thin (~1.5px) ring (DESIGN.md D-5/D-7),
+  matching `textarea.tsx`. Deliberately NOT done this cycle.
+
+### Phase-2 audit (enumerated 2026-06-28, restructured `src/renderer/**` tree)
+
+Concrete counts behind the `TODO.md` "Design-foundation migration (deferred)" section:
+- **Typography** — 58 `text-[Npx]` across 21 files (sizes: 15×`[10px]`, 24×`[11px]`, 2×`[12px]`,
+  17×`[13px]`). Hotspot `calendar/googleCalendarCatalog/components.tsx` (15).
+- **Z-index** — 20 literals (7×`z-10`, 5×`z-20`, 8×`z-50`) across 10 files incl. `ui/dialog`,
+  `ui/tooltip`, `ui/select`, `ui/avatar`, `fileExplorer/ResizeDivider`.
+- **Motion** — 18 raw (1×`duration-[400ms]`, 1×`duration-[450ms]`, 2×`ease-[cubic-bezier(0.16,1,0.3,1)]`,
+  12×`duration-200`, 1×`duration-150`) across 6 files.
+- **Elevation** — 19 `shadow-xs/sm/md/lg` (5×xs, 5×sm, 3×md, 6×lg) across 14 files.
+- **Spacing** — ~93 `*-1.5`/`*-2.5` dense pads (most stay on the 4px grid; selective density-token
+  adoption) + a handful of off-grid arbitraries (`p-[3px]`, `my-[7px]`, `h-[64..96px]`). The calendar
+  hour cell still uses a raw inline `--cal-hour-h: 2.5rem` (40px) — see the value-reconciliation caveat.
+- **Ring flip (D-7)** — `ring-[3px]` on button/badge/tabs/switch/select/scroll-area + PanelTabStrip/
+  FileTabStrip/ResizeDivider.
+
+**Value-reconciliation caveat (NOT appearance-neutral):** `--space-cal-hour` is authored as **48px**
+(DESIGN.md §9) but the live calendar inline `--cal-hour-h` is **40px** (`2.5rem`). Migrating the
+calendar onto `--space-cal-hour`/`h-cal-hour` would change the hour-cell height; the designer must
+decide (set the token to `2.5rem`, or accept the 48px bump) before that migration runs. Flagged in the
+TODO row.
 
 ---
 
@@ -243,3 +273,12 @@ Coordination rules (to avoid path churn — the foundation is NOT blocked by the
   designer-territory). Cross-track restructure coordination captured (no hard block; no `components/`
   edits this cycle). No `.sdd/*restructure*` spec/plan file exists yet — restructure is an in-flight
   orchestrator-coordinated track; revisit the path-coordination note when that track's Phase 2 lands.
+- **2026-06-28 (Phase 2, developer)**: FR-081 wiring done. Empirically verified (probe element +
+  renderer build, tailwindcss 4.3) which `@theme` namespaces auto-emit utilities. Finding that
+  DIVERGED from the wiring hypothesis: `--duration-*` does **NOT** auto-map to a `duration-*` utility
+  in Tailwind v4.3 (the task brief expected it to, alongside `--ease-*`); only `--text-*`, `--shadow-*`,
+  and `--ease-*` auto-emit. So explicit `@utility` blocks were added for `--duration-*`, `--z-*`, and
+  the custom `--space-*` (`duration-*`, `z-*`, `p/px/py/gap-density-*`, `h-cal-hour`). No token value
+  changed; appearance unchanged (no existing surface references the new class names yet). Recorded the
+  `--space-cal-hour` 48px-vs-live-40px value-reconciliation caveat in the audit + TODO so the calendar
+  migration is not silently appearance-changing.

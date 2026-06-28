@@ -247,6 +247,69 @@ For the authoritative design see `docs/ARCHITECTURE.md`.
   history/threads, search availability, reconnect_needed recovery). Connect via browser OAuth
   is user-verified working.
 
+## Design-foundation migration (deferred)
+
+> Source: `design-foundation-v1` (FR-082). The named foundation scales now exist as tokens +
+> utilities in `src/renderer/index.css` (§7–§14 of `docs/DESIGN.md`); the foundation cycle was
+> strictly ADDITIVE and did NOT migrate any existing surface. The items below move shipped surfaces
+> off their raw arbitrary values onto the named scales, incrementally — they are NOT done this cycle.
+> File paths are as-of 2026-06-28 (the new restructured `src/renderer/**` tree); a separate in-flight
+> `src/` restructure may move `components/` later, so re-resolve paths against the then-current tree
+> before migrating. Each migration must stay appearance-neutral (the tokens reconcile the shipped
+> values) UNLESS the row calls out a value reconciliation — verify against the running app.
+
+- [ ] **Typography → named ramp (§8).** Replace the 58 raw `text-[Npx]` occurrences across 21 files
+  with the named step (`text-[10px]`→`text-nano`, `text-[11px]`→`text-micro`, `text-[12px]`→
+  `text-caption`/`text-xs`, `text-[13px]`→`text-body-sm`). Hotspots by count:
+  `calendar/googleCalendarCatalog/components.tsx` (15), `slack/SlackPanel.tsx` (6),
+  `jira/jiraCatalog/components.tsx` (4), `calendar/GoogleCalendarPanel.tsx` (4),
+  `cosmos/CosmosTimelineEntry.tsx` (3), `cosmos/CosmosPanel.tsx` (3), `confluence/ConfluencePanel.tsx`
+  (3), `composer/PromptComposer.tsx` (3), `atlassian/atlassianPanelBits.tsx` (3),
+  `tabs/PanelTabStrip.tsx` (2), `confluence/confluenceCatalog/components.tsx` (2); plus single
+  occurrences in `slack/slackCatalog/{SlackMessageRow,components}.tsx`, `jira/JiraPanel.tsx`,
+  `generative/ActiveTabSurface.tsx`, `fileExplorer/{FileTree,FileTabStrip}.tsx`,
+  `confluence/confluenceCatalog/CommentsSection.tsx`, `app/{SurfaceSpinner,PanelFooter}.tsx`, `App.tsx`.
+- [ ] **Z-index → named ladder (§13).** Replace the 20 literal `z-10`/`z-20`/`z-50` occurrences with
+  the named rung (`z-10`→`z-raised`, `z-20`→`z-dock`, `z-50`→`z-overlay`, and the floating composer
+  layer → `z-composer`). Sites: `slack/SlackPanel.tsx` (4), `composer/PromptComposer.tsx` (3),
+  `jira/JiraPanel.tsx` (2), `confluence/ConfluencePanel.tsx` (2), `calendar/GoogleCalendarPanel.tsx`
+  (2), `components/ui/{tooltip,dialog}.tsx` (2 each), `components/ui/{select,avatar}.tsx` (1 each),
+  `fileExplorer/ResizeDivider.tsx` (1).
+- [ ] **Motion → named duration/easing (§12).** Replace the 18 raw motion values with the named
+  tokens: `duration-[400ms]`→`duration-slow`, `duration-[450ms]`→`duration-slower`,
+  `ease-[cubic-bezier(0.16,1,0.3,1)]`→`ease-launch`, the 12 `duration-200` dock/overlay transitions →
+  `duration-fast`, `duration-150`→`duration-micro` (or `duration-fast` — pick the nearest named step
+  per usage). Sites: `composer/PromptComposer.tsx` (5: the launch fade/scale + dock),
+  `slack/SlackPanel.tsx` (4), `confluence/ConfluencePanel.tsx` (2), `calendar/GoogleCalendarPanel.tsx`
+  (2), `slack/slackCatalog/SlackMessageImage.tsx` (1), `components/ui/dialog.tsx` (1). Keep every usage
+  `prefers-reduced-motion`-gated.
+- [ ] **Elevation → named ramp (§11).** Replace the 19 ad-hoc `shadow-xs/sm/md/lg` with the named
+  tier (`shadow-xs`→`shadow-control`, `shadow-sm`/`shadow-md`→`shadow-raised`, `shadow-lg`→
+  `shadow-overlay`; align any dock shadow to the `glass-dock` floating-dock tier). Sites:
+  `composer/PromptComposer.tsx` (3), `slack/SlackPanel.tsx` (2), `components/ui/{switch,select,button}.tsx`
+  (2 each), `jira/JiraPanel.tsx` (1), `fileExplorer/PdfView.tsx` (1), `confluence/ConfluencePanel.tsx`
+  (1), `components/ui/{textarea,tabs,input,dialog,card}.tsx` (1 each). NOTE: mapping `shadow-md`→
+  `shadow-raised` collapses two old tiers into one — confirm appearance per site.
+- [ ] **Spacing → rhythm / density (§9).** Audit the ~93 `*-1.5`/`*-2.5` dense pads (top files:
+  `slack/SlackPanel.tsx` 18, `jira/jiraCatalog/components.tsx` 15, `calendar/googleCalendarCatalog/
+  components.tsx` 8, `confluence/ConfluencePanel.tsx` 7, `app/SettingsDialog.tsx` 6,
+  `slack/slackCatalog/components.tsx` 5, `confluence/confluenceCatalog/CommentsSection.tsx` 5, …):
+  the `p-1.5`/`p-2.5` etc. stay on the Tailwind 4px grid (already sanctioned — only adopt
+  `p-density-1`/`p-density-2` where the doc names dense-row pad-y / dense-control pad-x as a
+  *semantic* density step, not blanket). Migrate the few genuinely off-grid arbitrary spacings
+  (`p-[3px]`, `my-[7px]`, the `h-[64px]/72/80/96px` event blocks) onto a grid step or a named density
+  token. **Calendar hour cell:** the catalog still sets a raw inline `--cal-hour-h: 2.5rem` (40px) on
+  three rows of `googleCalendarCatalog/components.tsx`; migrate to the `--space-cal-hour` token /
+  `h-cal-hour` utility. CAVEAT: the new `--space-cal-hour` is **48px** (DESIGN.md §9) but the live
+  inline value is **40px** — this migration is NOT appearance-neutral; confirm the intended hour-cell
+  height with the designer before swapping (either change the token to 2.5rem or accept the 48px bump).
+- [ ] **Primitive ring flip — D-7 (§14).** Flip `focus-visible:ring-[3px]` → the canonical thin
+  `ring-[1.5px]` (matches Textarea/Input) on the primitives + chrome that still ship the thick ring:
+  `components/ui/button.tsx`, `components/ui/badge.tsx`, `components/ui/{tabs,switch,select}.tsx`,
+  `components/ui/scroll-area.classes.ts`, `tabs/PanelTabStrip.tsx`, `fileExplorer/FileTabStrip.tsx`
+  (2), `fileExplorer/ResizeDivider.tsx`. Deliberately NOT flipped in the foundation cycle (DESIGN.md
+  D-7) so the appearance-unchanged guarantee held; this is the tracked follow-up.
+
 ## Deferred / future
 
 - [ ] Decide whether session control stays purely interactive (PTY) or adds the Claude Agent
