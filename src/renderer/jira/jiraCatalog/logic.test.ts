@@ -20,7 +20,7 @@ import {
   TRANSITION_APPLYING_TIMEOUT_MS,
   TRANSITION_APPLYING_TIMEOUT_MESSAGE
 } from './logic'
-import { validateJiraTransition } from '../../shared/ipc/jira.validate'
+import { validateJiraTransition } from '../../../shared/ipc/jira.validate'
 
 /* Jira generative-UI v2 — pure catalog decision logic (FR-006/008/010). */
 
@@ -333,7 +333,7 @@ describe('JIRA_LAYOUT_CLAMP_CLASS (generative wrap clamp)', () => {
     // SurfaceProvider context, so they can't be mounted in the node test env — we assert the
     // emitted className from source.) This test fails the day the SDK adds its own clamp,
     // signalling the wrapper is no longer needed.
-    const sdkDir = '../../../node_modules/@a2ui-sdk/react/dist/0.9/components/layout'
+    const sdkDir = '../../../../node_modules/@a2ui-sdk/react/dist/0.9/components/layout'
     const columnSrc = readFileSync(new URL(`${sdkDir}/ColumnComponent.js`, import.meta.url), 'utf8')
     const rowSrc = readFileSync(new URL(`${sdkDir}/RowComponent.js`, import.meta.url), 'utf8')
     expect(columnSrc).toContain('flex flex-col')

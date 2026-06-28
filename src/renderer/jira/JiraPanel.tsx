@@ -37,37 +37,37 @@ import { Input } from '@/components/ui/input'
 import { Skeleton } from '@/components/ui/skeleton'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import type { FormEvent } from 'react'
-import { ConnectionStatus, ConnectForm } from './atlassianPanelBits'
+import { ConnectionStatus, ConnectForm } from '../atlassianPanelBits'
 import {
   jiraCatalog,
   JIRA_CATALOG_ID,
   JIRA_OPEN_DETAIL_ACTION,
   isDetailSurfaceSpec
 } from './jiraCatalog'
-import { PanelTabStrip, type PanelTab } from './PanelTabStrip'
-import { PanelRefreshButton } from './PanelRefreshButton'
-import { panelRefreshInputsFor } from './panelRefreshLogic'
-import { PanelFooter } from './PanelFooter'
-import { ActiveTabSurface } from './ActiveTabSurface'
-import { usePublishComposer } from './ActiveComposerProvider'
-import { SurfaceSpinner } from './SurfaceSpinner'
-import { GlassDock } from './glassDock/GlassDock'
-import { contextChipFor, jiraViewContext } from './viewContextCapture'
-import { useGenerativePanelTabs, type TabSurface } from './useGenerativePanelTabs'
-import { useRestoredGenerativePanel } from './SessionProvider'
-import { usePerTabNav } from './usePerTabNav'
+import { PanelTabStrip, type PanelTab } from '../PanelTabStrip'
+import { PanelRefreshButton } from '../PanelRefreshButton'
+import { panelRefreshInputsFor } from '../panelRefreshLogic'
+import { PanelFooter } from '../PanelFooter'
+import { ActiveTabSurface } from '../ActiveTabSurface'
+import { usePublishComposer } from '../ActiveComposerProvider'
+import { SurfaceSpinner } from '../SurfaceSpinner'
+import { GlassDock } from '../glassDock/GlassDock'
+import { contextChipFor, jiraViewContext } from '../viewContextCapture'
+import { useGenerativePanelTabs, type TabSurface } from '../useGenerativePanelTabs'
+import { useRestoredGenerativePanel } from '../SessionProvider'
+import { usePerTabNav } from '../usePerTabNav'
 import {
   shouldAutoRefreshOnActivation,
   autoRefreshValues
-} from './activeTabSurfaceRefresh'
-import { surfaceSpinnerVisible } from './promptComposerLogic'
-import { shouldAutoLoadDefaultView } from './panelTabs'
-import { useTabShortcuts } from './useTabShortcuts'
-import { useConfirm } from './useConfirm'
+} from '../activeTabSurfaceRefresh'
+import { surfaceSpinnerVisible } from '../promptComposerLogic'
+import { shouldAutoLoadDefaultView } from '../panelTabs'
+import { useTabShortcuts } from '../useTabShortcuts'
+import { useConfirm } from '../useConfirm'
 import { ConfirmDialog } from '@/components/ui/confirm-dialog'
-import { confirmCopy } from './confirmLogic'
-import type { UiRenderPayload } from '../shared/ipc'
-import type { JiraConnectionStatus } from '../shared/types/jira'
+import { confirmCopy } from '../confirmLogic'
+import type { UiRenderPayload } from '../../shared/ipc'
+import type { JiraConnectionStatus } from '../../shared/types/jira'
 
 /**
  * The my-tickets JQL — the native search box's placeholder AND the empty-submit fallback
