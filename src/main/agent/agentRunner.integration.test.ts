@@ -26,8 +26,8 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { EventEmitter } from 'node:events'
 import { AgentRunner, type AgentRunnerSinks, type SpawnFn } from './agentRunner'
-import { RESUME_RETRY_BACKOFF_MS, type SessionLockEnv } from './pty/sessionLockRecovery'
-import type { AgentStatusPayload } from '../shared/ipc'
+import { RESUME_RETRY_BACKOFF_MS, type SessionLockEnv } from '../pty/sessionLockRecovery'
+import type { AgentStatusPayload } from '../../shared/ipc'
 
 // ---------------------------------------------------------------------------
 // Shared test infrastructure

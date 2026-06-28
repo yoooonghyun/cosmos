@@ -121,10 +121,10 @@ import {
 import { PtyManager } from './pty/ptyManager'
 import { SessionStore } from './sessionStore'
 import { validateSnapshot } from './sessionSnapshot'
-import { AgentRunner } from './agentRunner'
-import { AgentSessionStore } from './agentSessionStore'
+import { AgentRunner } from './agent/agentRunner'
+import { AgentSessionStore } from './agent/agentSessionStore'
 import { TranscriptReader } from './transcriptReader'
-import { selectDefaultSessionId } from './agentSessionQueue'
+import { selectDefaultSessionId } from './agent/agentSessionQueue'
 import {
   CONFLUENCE_RENDER_UI_SERVER_NAME,
   GOOGLE_CALENDAR_RENDER_UI_SERVER_NAME,

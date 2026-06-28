@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { EventEmitter } from 'node:events'
 import { AgentRunner, type AgentRunnerSinks, type SpawnFn } from './agentRunner'
-import type { AgentStatusPayload } from '../shared/ipc'
+import type { AgentStatusPayload } from '../../shared/ipc'
 
 /**
  * A fake `ChildProcess` for the injected spawn: an EventEmitter with `stdout` /

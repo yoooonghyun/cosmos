@@ -29,21 +29,21 @@
  */
 
 import { spawn as nodeSpawn, type ChildProcess } from 'node:child_process'
-import { isExecutableResolvable } from './pty/ptyManager'
-import { allowedToolForTarget, groundingPromptForTarget, renderMcpConfigJsonForTarget } from './mcpConfig'
-import { viewContextGroundingClause } from './viewContextGrounding'
+import { isExecutableResolvable } from '../pty/ptyManager'
+import { allowedToolForTarget, groundingPromptForTarget, renderMcpConfigJsonForTarget } from '../mcpConfig'
+import { viewContextGroundingClause } from '../viewContextGrounding'
 import { decideSubmit } from './agentSessionQueue'
 import {
   isAlreadyInUseError,
   planResumeRetry,
   type SessionLockEnv
-} from './pty/sessionLockRecovery'
+} from '../pty/sessionLockRecovery'
 import {
   DEFAULT_UI_RENDER_TARGET,
   type AgentStatusPayload,
   type UiRenderTarget,
   type ViewContext
-} from '../shared/ipc'
+} from '../../shared/ipc'
 
 /** Sinks the runner pushes lifecycle status into; wired to IPC by the caller. */
 export interface AgentRunnerSinks {
