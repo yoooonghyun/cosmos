@@ -174,4 +174,14 @@ the user commits current work first, so the restructure lands on an otherwise-em
 
 > Record anything that differs during implementation. Date each entry.
 
-- (none yet)
+- **2026-06-28 — `test:integration` glob (Phase 0).** The plan prescribed changing the glob to
+  the single pattern `src/main/**/*.integration.test.ts`. Empirically, in vitest 4 the `**`
+  segment REQUIRES at least one intermediate directory, so `src/main/**/*.integration.test.ts`
+  matches ZERO of the 4 still-flat `src/main/*.integration.test.ts` files (verified via npm run
+  + a temp nested probe). Using the single `**` glob would make the gate RED while flat and only
+  partially green mid-transition — the opposite of the plan's stated intent ("must stay green
+  with the same 4 tests"). Deviation: used the TWO-pattern glob
+  `src/main/*.integration.test.ts src/main/**/*.integration.test.ts`, which matches both the
+  flat files (4) AND any nested files, so the gate stays green through every transition state and
+  in the final nested layout. This satisfies the plan's intent (never silently drop an
+  integration test) more robustly than the literal single-glob instruction.

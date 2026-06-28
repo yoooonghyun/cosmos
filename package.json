@@ -17,7 +17,7 @@
     "typecheck": "npm run typecheck:node && npm run typecheck:web",
     "test": "vitest run",
     "test:watch": "vitest",
-    "test:integration": "vitest run src/main/*.integration.test.ts",
+    "test:integration": "vitest run src/main/*.integration.test.ts src/main/**/*.integration.test.ts",
     "test:dom": "vitest run --config vitest.dom.config.ts",
     "test:dom:watch": "vitest --config vitest.dom.config.ts",
     "test:visual": "playwright test --config playwright.visual.config.ts",
