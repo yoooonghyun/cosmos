@@ -27,14 +27,14 @@ import { FitAddon } from '@xterm/addon-fit'
 import { SerializeAddon } from '@xterm/addon-serialize'
 import { FolderOpen, Loader2, SquareTerminal } from 'lucide-react'
 import '@xterm/xterm/css/xterm.css'
-import type { PtyExitPayload } from '../shared/ipc'
+import type { PtyExitPayload } from '../../shared/ipc'
 import { Button } from '@/components/ui/button'
-import { useExplorerPanes, ResizeDivider, type RestoredOpenFiles } from './fileExplorer'
-import { PanelTabStrip, type PanelTab } from './PanelTabStrip'
-import { PanelFooter } from './PanelFooter'
-import { usePanelTabs } from './usePanelTabs'
-import { useTabShortcuts } from './useTabShortcuts'
-import { resolveCloseTarget, resolveTabNavTarget } from './closeTabRouting'
+import { useExplorerPanes, ResizeDivider, type RestoredOpenFiles } from '../fileExplorer'
+import { PanelTabStrip, type PanelTab } from '../PanelTabStrip'
+import { PanelFooter } from '../PanelFooter'
+import { usePanelTabs } from '../usePanelTabs'
+import { useTabShortcuts } from '../useTabShortcuts'
+import { resolveCloseTarget, resolveTabNavTarget } from '../closeTabRouting'
 import { mapTerminalKey } from './terminalKeymap'
 import {
   isFolderOpen,
@@ -42,9 +42,9 @@ import {
   seedEverOpenedFrom,
   seedTerminalIndex,
   terminalLabel
-} from './panelTabs'
-import { useReportPanel, useRestoredTerminalPanel } from './SessionProvider'
-import { buildTerminalDraft, capScrollback, hydrateTerminalTabs } from './sessionSnapshot'
+} from '../panelTabs'
+import { useReportPanel, useRestoredTerminalPanel } from '../SessionProvider'
+import { buildTerminalDraft, capScrollback, hydrateTerminalTabs } from '../sessionSnapshot'
 import { terminalThemeFromTokens } from './terminalTheme'
 import './TerminalPanel.css'
 
