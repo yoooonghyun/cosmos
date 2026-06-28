@@ -37,6 +37,7 @@ import {
   CONFLUENCE_COMMENT_READ_NOT_AUTHORIZED_MESSAGE,
   CONFLUENCE_COMMENT_READ_SCOPE,
   CONFLUENCE_COMMENT_SCOPE,
+  CONFLUENCE_USER_READ_SCOPE,
   CONFLUENCE_WRITE_NOT_AUTHORIZED_MESSAGE,
   CONFLUENCE_WRITE_SCOPE
 } from '../shared/confluence'
@@ -373,6 +374,20 @@ export class ConfluenceManager {
   ): Promise<ConfluenceResult<ConfluenceGetCommentsResult>> {
     if (!this.getCommentReadCapability()) {
       return Promise.resolve(this.commentReadNotAuthorized())
+    }
+    // confluence-comment-author-name-v1: the author display-NAME lookup needs a SEPARATE
+    // `read:user:confluence` scope. When the stored token lacks it (connected before the scope
+    // was added, OR the Atlassian app registration never enabled it), the per-author lookup 403s
+    // silently and every author renders as the raw account id. This is the single recurring
+    // "author shows uuid" cause — surface it ONCE per read as an actionable main-process warning
+    // (no token logged) instead of failing invisibly. Reads still proceed (names are best-effort).
+    const tokens = this.deps.tokenStore.load()
+    if (Array.isArray(tokens?.scopes) && !tokens.scopes.includes(CONFLUENCE_USER_READ_SCOPE)) {
+      console.warn(
+        `[confluence] author names will show as account ids: the connected token is missing the ` +
+          `"${CONFLUENCE_USER_READ_SCOPE}" scope. Disconnect + reconnect Confluence (and ensure that ` +
+          `scope is enabled on the Atlassian app registration) to resolve author display names.`
+      )
     }
     return this.run((auth) => this.deps.client.getComments(auth, params))
   }

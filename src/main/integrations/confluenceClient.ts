@@ -615,8 +615,28 @@ export class ConfluenceClient {
     const pending = (async () => {
       const url = new URL(`${this.base(auth.cloudId)}/wiki/rest/api/user`)
       url.searchParams.set('accountId', accountId)
-      const r = await this.call(url.toString(), auth.token)
-      return r.ok ? confluenceUserName(r.body) : undefined
+      // TEMP DIAGNOSTIC (confluence-author uuid): capture the REAL HTTP status + granted
+      // token scopes — `call`/`resolveUserName` otherwise swallow the signal, which is why
+      // every prior blind fix passed tests but failed live. Remove once root cause known.
+      let diagStatus: number | string = 'no-response'
+      let diagName: string | undefined
+      try {
+        const res = await this.fetchImpl(url.toString(), {
+          method: 'GET',
+          headers: { authorization: `Bearer ${auth.token}`, accept: 'application/json' }
+        })
+        diagStatus = res.status
+        if (res.ok) {
+          const body = await res.json()
+          diagName = confluenceUserName(body)
+          console.warn('[confluence-author] user lookup', { accountId, status: diagStatus, name: diagName, scopes: decodeTokenScopes(auth.token) })
+          return diagName
+        }
+      } catch (e) {
+        diagStatus = `throw:${(e as Error)?.message ?? 'unknown'}`
+      }
+      console.warn('[confluence-author] user lookup FAILED', { accountId, status: diagStatus, scopes: decodeTokenScopes(auth.token) })
+      return undefined
     })()
     cache.set(accountId, pending)
     return pending
@@ -738,6 +758,23 @@ export function footerCommentBody(comment: Record<string, unknown>): string {
  * neither is a non-empty string (so the caller degrades to the raw account id). NEVER reads or
  * returns any secret/email field. Pure; never throws. Exported for the unit test.
  */
+/**
+ * TEMP DIAGNOSTIC (confluence-author uuid): decode the `scope` claim from an Atlassian
+ * access token (a JWT) WITHOUT verifying it, so the diagnostic log can show whether
+ * `read:user:confluence` was actually granted. NEVER logs the token; returns only the
+ * space-delimited scope string (or 'undecodable'). Remove with the diagnostic.
+ */
+function decodeTokenScopes(token: string): string {
+  try {
+    const payload = token.split('.')[1]
+    if (!payload) return 'no-payload'
+    const json = JSON.parse(Buffer.from(payload, 'base64url').toString('utf8'))
+    return typeof json?.scope === 'string' ? json.scope : 'no-scope-claim'
+  } catch {
+    return 'undecodable'
+  }
+}
+
 export function confluenceUserName(responseBody: unknown): string | undefined {
   if (!isRecord(responseBody)) {
     return undefined

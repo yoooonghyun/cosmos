@@ -68,6 +68,18 @@ const commentReadTokens: StoredTokenSet = {
   scopes: ['read:page:confluence', 'read:comment:confluence', 'offline_access']
 }
 
+// read:comment AND read:user — the latter authorizes author display-name resolution, so a
+// getComments read with this token must NOT emit the "author names will show as account ids" warn.
+const commentAuthorTokens: StoredTokenSet = {
+  ...connectedTokens,
+  scopes: [
+    'read:page:confluence',
+    'read:comment:confluence',
+    'read:user:confluence',
+    'offline_access'
+  ]
+}
+
 const refreshOk = async (): Promise<TokenExchangeResult> => ({
   accessToken: 'at-2',
   refreshToken: 'rt-2',
@@ -423,6 +435,36 @@ describe('ConfluenceManager.getComments (separate comment-READ scope, confluence
       { token: 'at-1', cloudId: 'cloud-9' },
       { pageId: '777', cursor: 'CUR' }
     )
+  })
+
+  // confluence-comment-author-name-v1 (recurring "author shows uuid" bug): the author display-NAME
+  // lookup needs the SEPARATE read:user:confluence scope. When the connected token lacks it, the
+  // per-author lookup 403s silently and authors render as raw account ids — so getComments must
+  // emit ONE actionable main-process warning naming the missing scope (the only visible signal of
+  // the otherwise-silent failure), while STILL routing the read (names are best-effort).
+  it('warns about the missing read:user:confluence scope (author names fall back to ids)', async () => {
+    const { store } = makeFakeStore(commentReadTokens) // read:comment but NOT read:user
+    const client = makeClient()
+    const { manager } = makeManager({ store, client })
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const result = await manager.getComments({ pageId: '777' })
+    expect(result.ok).toBe(true) // read still proceeds
+    expect(client.getComments).toHaveBeenCalledTimes(1)
+    expect(warn).toHaveBeenCalledTimes(1)
+    expect(warn.mock.calls[0]?.[0]).toContain('read:user:confluence')
+    warn.mockRestore()
+  })
+
+  it('does NOT warn when the read:user:confluence scope IS granted', async () => {
+    const { store } = makeFakeStore(commentAuthorTokens)
+    const client = makeClient()
+    const { manager } = makeManager({ store, client })
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const result = await manager.getComments({ pageId: '777' })
+    expect(result.ok).toBe(true)
+    const authorWarns = warn.mock.calls.filter((c) => String(c[0]).includes('read:user:confluence'))
+    expect(authorWarns).toHaveLength(0)
+    warn.mockRestore()
   })
 
   it('read-not-authorized does NOT disable the independent comment-write add (FR-007)', async () => {

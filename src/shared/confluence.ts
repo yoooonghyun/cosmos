@@ -361,6 +361,14 @@ export const CONFLUENCE_COMMENT_SCOPE = 'write:comment:confluence'
  */
 export const CONFLUENCE_COMMENT_READ_SCOPE = 'read:comment:confluence'
 
+/**
+ * The granular OAuth scope resolving a comment author's `accountId` to a display NAME requires
+ * (confluence-comment-author-name-v1): authorizes `GET /wiki/rest/api/user?accountId=…`. Added
+ * AFTER the comment-read scope, so a connection made before it lacks the scope and every comment
+ * author renders as the raw account id until the user reconnects ONCE (the silent-uuid root cause).
+ */
+export const CONFLUENCE_USER_READ_SCOPE = 'read:user:confluence'
+
 /** User-facing message when a page write is attempted without the page-write scope (reconnect to grant it). */
 export const CONFLUENCE_WRITE_NOT_AUTHORIZED_MESSAGE =
   'cosmos is not authorized to create or edit Confluence pages yet. Disconnect and ' +
