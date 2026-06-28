@@ -11,7 +11,7 @@
 import type {
   GoogleCalendarDefaultView,
   GoogleCalendarRequestDefaultViewPayload
-} from '../shared/ipc'
+} from '../../shared/ipc'
 import { monthFromWindow } from './googleCalendarCatalog/logic'
 
 /** The renderer-side displayed-month intent. `month` is 0-based (0 = January). */
