@@ -5,35 +5,117 @@ the detailed file-by-file map of the source tree. See `ARCHITECTURE.md` §4.6 fo
 four Electron process roles map to the tree, and the per-component sections (§4.1–§4.11)
 for the design rationale behind each piece.
 
+The `src/main/`, `src/renderer/`, and `src/shared/` trees are grouped into **per-domain /
+feature subfolders** (directory-restructure-v1). Test files (`*.test.ts`,
+`*.dom.test.tsx`, `*.integration.test.ts`) stay co-located in the same folder as the source
+module they exercise. Cross-process imports are relative (`../shared`, `../main`, `../renderer`);
+the `@/` alias resolves to `src/renderer` and is depth-independent (used for `@/components/ui/*`
+and `@/lib/utils`).
+
 ## Source tree
 
-- `src/main/` — Electron main process: `index.ts` (window + IPC wiring), `ptyManager.ts` (PTY
-  lifecycle), `agentRunner.ts` (headless `claude` for utterance→generative-UI runs), socket
-  bridges (`uiBridge.ts`, `slackBridge.ts`, `jiraBridge.ts`, `confluenceBridge.ts`), integration
-  managers (`jiraManager.ts`, `slackManager.ts`, `confluenceManager.ts`) + `integrations/`, and the
-  deterministic `jira.*` write path (`jiraActionDispatcher.ts` + `jiraSurfaceBuilder.ts`); the
-  per-tab file-explorer filesystem sandbox (`fsExplorer.ts` list/read/watch manager,
-  `pathConfine.ts` real-path confinement, `fileKind.ts` text/binary/image classification) + the
-  `cosmos-file://` privileged image scheme (`localFileRef.ts` pure codec/validator +
-  `localFileProtocol.ts` Electron wiring), each with a sibling `*.test.ts`
-- `src/preload/` — `contextBridge` preload exposing only the per-channel surfaces as `window.cosmos.*`
-  (`pty`, `fs`, `ui`, `slack`, `jira`, `confluence`)
-- `src/renderer/` — React renderer; `App.tsx` is the app shell (left icon-rail **single-surface
-  switcher** — one surface visible full-width, all kept mounted); `TerminalPanel.tsx` is the xterm.js
-  terminal (one xterm per terminal tab); `GeneratedUiPanel.tsx`/`JiraPanel.tsx`/`SlackPanel.tsx`/
-  `ConfluencePanel.tsx` are the rail surfaces (Jira/Slack/Confluence are all generative custom-catalog
-  A2UI panels); each rail surface hosts its own **VS Code-style tabs** via `panelTabs.ts` (pure
-  open/close/label logic) + `usePanelTabs.ts` (generic controller) + `PanelTabStrip.tsx` (reusable
-  strip), and the generative panels share `useGenerativePanelTabs.ts` (originating-tab correlation) +
-  `ActiveTabSurface.tsx` (per-tab A2UI host) + `perTabNav.ts`/`usePerTabNav.ts` (per-tab native-base
-  browser nav); `jiraCatalog/`, `slackCatalog/`, `confluenceCatalog/`
-  are the per-panel A2UI custom catalogs; `fileExplorer/` is the per-tab 3-column terminal/viewer/tree
-  layout (the `useExplorerPanes` hook + `FileTree`/`FileViewer`/`FileTabStrip`/`ResizeDivider` components, the
-  `useFileExplorer` hook, the pure node-tested `tree.ts`/`fileGlyph.ts`/`monacoTheme.ts`/`localFileSrc.ts`/
-  `viewerState.ts`/`openFiles.ts` (the multi-file open-files collection, terminal-file-tabs-v1), and the
-  impure `monacoSetup.ts` Monaco-worker wiring); `components/ui/` is the shadcn set
-- `src/mcp/` — standalone stdio MCP entry scripts (`renderUiServer.ts`, `jiraRenderUiServer.ts`,
-  `slackRenderUiServer.ts`, `confluenceRenderUiServer.ts`, `jiraMcpServer.ts`, `slackMcpServer.ts`,
-  `confluenceMcpServer.ts`) relaying to the main bridges
-- `src/shared/` — code shared across processes: `ipc.ts` (typed IPC contract), `bridge.ts` (NDJSON
-  socket framing), `validate.ts` (pure IPC payload validators), per-integration types (`jira.ts` etc.)
+### `src/main/` — Electron main process
+
+Grouped into per-domain folders; cross-cutting files stay at the root.
+
+- root: `index.ts` (window + IPC wiring; the largest importer of the rest), `mcpConfig.ts`
+  (per-target MCP config + grounding), `clientConfigResolver.ts` / `clientConfigMutate.ts`
+  (settings/OAuth client config), `shortcutMatch.ts` (global-shortcut matching) — each with a
+  sibling `*.test.ts`
+- `integrations/` — the integration foundation (PKCE OAuth, token store, per-provider clients,
+  text/config helpers) — UNCHANGED grouping
+- `slack/` — `slackBridge.ts`, `slackManager.ts`, `slackAdapter.ts`, `slackSurfaceBuilder.ts`,
+  `slackImageRef.ts`, `slackImageProtocol.ts`
+- `jira/` — `jiraBridge.ts`, `jiraManager.ts`, `jiraAdapter.ts`, `jiraActionDispatcher.ts`
+  (deterministic write path), `jiraSurfaceBuilder.ts`
+- `confluence/` — `confluenceBridge.ts`, `confluenceManager.ts`, `confluenceAdapter.ts`,
+  `confluenceSurfaceBuilder.ts`, `confluenceImageRef.ts`, `confluenceImageProtocol.ts`,
+  `confluenceComments.integration.test.ts`
+- `calendar/` — `googleCalendarBridge.ts`, `googleCalendarManager.ts`,
+  `googleCalendarSurfaceBuilder.ts`, `googleCalendarWindow.ts`
+- `pty/` — `ptyManager.ts` (PTY lifecycle), `paneSpawn.ts`, `processGroupKill.ts`,
+  `orphanReaper.ts`, `sessionLockRecovery.ts`
+- `agent/` — `agentRunner.ts` (headless `claude` for utterance→generative-UI runs),
+  `agentSessionStore.ts`, `agentSessionQueue.ts` (+ `agentRunner.integration.test.ts`)
+- `session/` — `sessionStore.ts`, `sessionSnapshot.ts`
+- `fs/` — the per-tab file-explorer filesystem sandbox (`fsExplorer.ts` list/read/watch,
+  `pathConfine.ts` real-path confinement, `fileKind.ts` text/binary/image classification,
+  `viewerKind.ts` / `viewerCaps.ts`) + the `cosmos-file://` privileged image scheme
+  (`localFileRef.ts` pure codec/validator + `localFileProtocol.ts` Electron wiring) + transcript
+  reading (`transcriptReader.ts` / `transcriptParse.ts`) (+ `fsExplorer.integration.test.ts`,
+  `localFileProtocol.integration.test.ts`)
+- `generative/` — the descriptor/adapter engine: `uiBridge.ts` (UI socket bridge),
+  `descriptorShell.ts`, `descriptorRegistration.ts`, `adapterDispatcher.ts`,
+  `adapterBindingRegistry.ts`, `specRebinder.ts`, `dataBearingWarning.ts`, `pendingCalls.ts`,
+  `viewContextGrounding.ts` (+ `refreshRepaintIntegration.test.ts`, the cross-tree main↔renderer
+  integration test)
+
+### `src/preload/`
+
+`contextBridge` preload exposing only the per-channel surfaces as `window.cosmos.*`
+(`pty`, `fs`, `ui`, `slack`, `jira`, `confluence`, `googleCalendar`).
+
+### `src/renderer/` — React renderer
+
+Entry/shell files stay at the root; everything else is grouped by domain/feature.
+`components/ui/` (shadcn primitives) and `lib/` are untouched.
+
+- root: `App.tsx` (app shell — left icon-rail **single-surface switcher**, all surfaces kept
+  mounted), `main.tsx`, `index.html`, `index.css`, `App.css`, `vite-env.d.ts`
+- `app/` — app-shell pieces: `railVisibility.ts`, `CosmosMark.tsx`, `CosmosSpinner.tsx`,
+  `SurfaceSpinner.tsx`, `PanelFooter.tsx`, `SettingsDialog.tsx`, `settingsStatusDot.ts`,
+  `ContextChip.tsx`, `viewContextCapture.ts`
+- `session/` — `SessionProvider.tsx`, `sessionRegistry.ts`, `sessionSnapshot.ts`
+- `tabs/` — VS Code-style tab/nav plumbing: `panelTabs.ts` (pure open/close/label logic),
+  `usePanelTabs.ts` (generic controller), `PanelTabStrip.tsx` (reusable strip),
+  `useGenerativePanelTabs.ts` (originating-tab correlation), `perTabNav.ts` / `usePerTabNav.ts`
+  (per-tab native-base browser nav), `closeTabRouting.ts`, `useTabShortcuts.ts`,
+  `TerminalTabNavRouting.dom.test.tsx`
+- `composer/` — open-prompt composer: `PromptComposer.tsx`, `promptComposerLogic.ts`,
+  `activeComposer.ts`, `ActiveComposerProvider.tsx`, `OpenPromptPositionProvider.tsx`,
+  `openPromptPosition.ts` (+ `PromptComposerDocked.dom.test.tsx`)
+- `generative/` — per-tab generative host: `ActiveTabSurface.tsx` (per-tab A2UI host),
+  `activeTabSurfaceRefresh.ts`, `panelRefreshLogic.ts`, `PanelRefreshButton.tsx`,
+  `dataModelApply.ts` (renderer-PURE; cross-listed in `tsconfig.node.json` for the main
+  integration test), and the shared catalog primitives `catalogShared/`
+- `terminal/` — `TerminalPanel.tsx` (+ `TerminalPanel.css`), `terminalTheme.ts`, `terminalKeymap.ts`
+- `slack/` — `SlackPanel.tsx`, the renderer-side Slack logic (`slackComposerLogic.ts`,
+  `slackThreadPanelLogic.ts`, `slackChannelSearchLogic.ts`, `slackScrollToLatest.ts` /
+  `useSlackScrollToLatest.ts`, `slackScrollPaginate.ts` / `useSlackScrollPaginate.ts`), and the
+  nested A2UI custom catalog `slackCatalog/`
+- `jira/` — `JiraPanel.tsx` + nested `jiraCatalog/`
+- `confluence/` — `ConfluencePanel.tsx` + nested `confluenceCatalog/`
+- `atlassian/` — `atlassianPanelBits.tsx` (shared Jira + Confluence panel bits)
+- `calendar/` — `GoogleCalendarPanel.tsx`, `calendarNavLogic.ts` + nested `googleCalendarCatalog/`
+- `cosmos/` — `CosmosPanel.tsx`, `cosmosConversation.ts`, `cosmosTabs.ts`, `CosmosTimelineEntry.tsx`
+- `confirm/` — `confirmLogic.ts`, `useConfirm.ts`
+- `fileExplorer/` — the per-tab 3-column terminal/viewer/tree layout (the `useExplorerPanes` hook +
+  `FileTree`/`FileViewer`/`FileTabStrip`/`ResizeDivider` components, the `useFileExplorer` hook, the
+  pure node-tested `tree.ts`/`fileGlyph.ts`/`monacoTheme.ts`/`localFileSrc.ts`/`viewerState.ts`/
+  `openFiles.ts`, and the impure `monacoSetup.ts` Monaco-worker wiring) — UNCHANGED internals
+- `glassDock/` — the glass-dock filter/config + `GlassDock` component — UNCHANGED
+- `components/ui/` — the shadcn primitive set — UNTOUCHED (Phase 2, deferred)
+- `lib/` — `utils.ts` (the `cn` helper) — UNTOUCHED
+
+### `src/mcp/` — standalone stdio MCP entry scripts
+
+Left flat (high coupling to rollup input keys + `mcpConfig.ts` output-filename lookups):
+`renderUiServer.ts`, `jiraRenderUiServer.ts`, `slackRenderUiServer.ts`,
+`confluenceRenderUiServer.ts`, `googleCalendarRenderUiServer.ts`, `jiraMcpServer.ts`,
+`slackMcpServer.ts`, `confluenceMcpServer.ts`, `googleCalendarMcpServer.ts`, plus `uiCatalog.ts`
+and `confluenceToolDescription.ts`. Each render/tool server relays over a Unix-domain socket to
+the matching bridge in main. The bundles emit to `out/main/mcp/<name>.js` with names that must
+stay stable (rollup input keys + `mcpConfig.ts` runtime `join(__dirname, 'mcp/<name>.js')`).
+
+### `src/shared/` — code shared across processes
+
+- root barrels: `ipc.ts` (typed IPC contract — single source of truth for channel names +
+  payload types), `validate.ts` (pure IPC payload validators), `bridge.ts` (NDJSON socket
+  framing) (+ `bridge.test.ts` and the top-level `validate*.test.ts` files that exercise the
+  `ipc/` barrels next to `validate.ts`)
+- `ipc/` — the per-domain IPC contract modules behind the same-path barrels
+  (`common`/`pty`/`ui`/`agent`/`shortcut`/`slack`/`jira`/`confluence`/`googleCalendar`/`session`/
+  `settings`/`conversation`, each with a sibling `*.validate.ts`) — UNCHANGED grouping
+- `types/` — per-integration + generative-contract types: `jira.ts`, `slack.ts`, `confluence.ts`,
+  `googleCalendar.ts`, `googleCalendarColor.ts`, `adapter.ts`, `conversation.ts`,
+  `dataBearingSpec.ts`

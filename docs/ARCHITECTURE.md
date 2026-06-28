@@ -287,12 +287,15 @@ The four Electron process roles map to the source tree as below; the full file-b
 in [`PROJECT-STRUCTURE.md`](./PROJECT-STRUCTURE.md), and the detailed development conventions and
 gotchas are in [`DEVELOPMENT.md`](./DEVELOPMENT.md).
 
-- **main** (`src/main/`) — owns the PTY (`ptyManager.ts`), the headless agent runner
-  (`agentRunner.ts`, §4.10), the socket bridges (`uiBridge.ts`, and per-integration siblings
-  like `slackBridge.ts`), the integration foundation (`integrations/`) + managers (e.g.
-  `slackManager.ts`), the deterministic Jira action dispatcher + surface builder
-  (`jiraActionDispatcher.ts`, `jiraSurfaceBuilder.ts`, §4.9), and all `ipcMain` wiring
-  (`index.ts`). Validates every inbound IPC payload at the boundary.
+- **main** (`src/main/`) — owns the PTY (`pty/ptyManager.ts`), the headless agent runner
+  (`agent/agentRunner.ts`, §4.10), the socket bridges (`generative/uiBridge.ts`, and
+  per-integration siblings like `slack/slackBridge.ts`), the integration foundation
+  (`integrations/`) + managers (e.g. `slack/slackManager.ts`), the deterministic Jira action
+  dispatcher + surface builder (`jira/jiraActionDispatcher.ts`, `jira/jiraSurfaceBuilder.ts`,
+  §4.9), and all `ipcMain` wiring (`index.ts`). The main tree is grouped into per-domain folders
+  (`slack/`, `jira/`, `confluence/`, `calendar/`, `pty/`, `agent/`, `session/`, `fs/`,
+  `generative/`) plus the cross-cutting `index.ts`, `mcpConfig.ts`, `clientConfig*.ts`,
+  `shortcutMatch.ts` at the root. Validates every inbound IPC payload at the boundary.
 - **mcp** (`src/mcp/`) — standalone stdio MCP entry scripts (the four render-style entries
   `renderUiServer.ts`, `jiraRenderUiServer.ts`, `slackRenderUiServer.ts`,
   `confluenceRenderUiServer.ts`, plus the integration tool servers `slackMcpServer.ts` and the
@@ -300,14 +303,23 @@ gotchas are in [`DEVELOPMENT.md`](./DEVELOPMENT.md).
 - **preload** (`src/preload/`) — `contextBridge` exposes the per-channel surfaces as
   `window.cosmos.*` (`pty`, `ui`, `slack`); no Node globals reach the renderer.
 - **renderer** (`src/renderer/`) — React app; `App.tsx` is the shell (left icon-rail
-  single-surface switcher, §3), `TerminalPanel.tsx` hosts xterm.js + FitAddon, the Generated-UI
-  panel renders `target: 'generated-ui'` A2UI (standard catalog), and `JiraPanel.tsx`,
-  `SlackPanel.tsx`, `ConfluencePanel.tsx` are generative surfaces each rendering their own
-  `target` A2UI with their own custom catalog (`jiraCatalog/`, `slackCatalog/`,
-  `confluenceCatalog/`; §4.8/§4.9).
+  single-surface switcher, §3) and stays at the renderer root with the other entry/shell files
+  (`main.tsx`, `index.html`, `index.css`, `App.css`, `vite-env.d.ts`). `terminal/TerminalPanel.tsx`
+  hosts xterm.js + FitAddon, the Generated-UI panel renders `target: 'generated-ui'` A2UI
+  (standard catalog), and `jira/JiraPanel.tsx`, `slack/SlackPanel.tsx`,
+  `confluence/ConfluencePanel.tsx` are generative surfaces each rendering their own `target` A2UI
+  with their own custom catalog nested under the domain folder (`jira/jiraCatalog/`,
+  `slack/slackCatalog/`, `confluence/confluenceCatalog/`; §4.8/§4.9). The renderer is grouped into
+  domain/feature folders (`app/`, `session/`, `tabs/`, `composer/`, `generative/`, `terminal/`,
+  `slack/`, `jira/`, `confluence/`, `atlassian/`, `calendar/`, `cosmos/`, `confirm/`,
+  `fileExplorer/`, `glassDock/`), with `components/ui/` (shadcn primitives) and `lib/` left
+  untouched at the root. The `@/` alias → `src/renderer` is depth-independent.
 - **shared** (`src/shared/`) — `ipc.ts` is the single source of truth for channel names and
   payload types (consumed by all three processes); `bridge.ts` holds the NDJSON socket-frame
-  contract; `validate.ts` holds pure, unit-tested validators.
+  contract; `validate.ts` holds pure, unit-tested validators. The barrels (`ipc.ts`/`validate.ts`)
+  and the per-domain `ipc/` folder stay at the shared root; the per-integration + generative
+  contract types live under `src/shared/types/` (`jira.ts`, `slack.ts`, `confluence.ts`,
+  `googleCalendar.ts`, `adapter.ts`, `conversation.ts`, `dataBearingSpec.ts`).
 
 Conventions:
 - One typed IPC contract in `src/shared/ipc.ts`; never define channel strings ad hoc.

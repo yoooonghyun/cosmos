@@ -107,11 +107,11 @@ catalogue of conventions and hard-won gotchas. The file-by-file source map lives
   Rules: (1) capture is at SEND time — `useGenerativePanelTabs` calls a per-panel `getViewContext()`
   provider (read through a ref so `submit` stays stable; each panel updates a live-selection ref
   because its nav state comes from `usePerTabNav` defined AFTER the hook). (2) `viewContext` is
-  DATA-ONLY non-secret labels (pure mappers in `src/renderer/viewContextCapture.ts`); validated
+  DATA-ONLY non-secret labels (pure mappers in `src/renderer/app/viewContextCapture.ts`); validated
   warn-and-ignore at the main boundary (`validateViewContext`) — an invalid value is DROPPED while
   the run still starts (never `null`s the payload). (3) it is delivered as GROUNDING, not by
   mutating the utterance: `AgentRunner.run`'s 3rd arg feeds `viewContextGroundingClause(target, vc)`
-  (`src/main/viewContextGrounding.ts`), which `composeGroundingPrompt` joins with the per-target
+  (`src/main/generative/viewContextGrounding.ts`), which `composeGroundingPrompt` joins with the per-target
   grounding into ONE `--append-system-prompt`; the `-p` utterance stays byte-for-byte. (4) it NEVER
   broadens tool grants — context-only. (5) the visible chip below the textarea is `ContextChip.tsx`
   (Badge/Button/Tooltip composite, NOT a `components/ui/` primitive); dismissing it threads a
@@ -140,7 +140,7 @@ catalogue of conventions and hard-won gotchas. The file-by-file source map lives
 - **A2UI custom catalogs are per-`<A2UIProvider>`, not global.** A `Catalog`
   (`{ components: Record<typeName, ReactComponentType>, functions: {} }`) is passed via the
   `catalog=` prop, so two panels can host different catalogs in independent React subtrees. The
-  Jira panel registers `src/renderer/jiraCatalog/` this way; catalog components are plain cosmos
+  Jira panel registers `src/renderer/jira/jiraCatalog/` this way; catalog components are plain cosmos
   React (they receive `{ surfaceId, componentId, ...nodeProps }`) and may use any Tailwind class
   incl. the `--status-*` tokens. Inputs bind via `useFormBinding`; actions emit via
   `useDispatchAction`. Render frames are **target-routed** (`UiRenderPayload.target`): each panel
@@ -279,7 +279,7 @@ detail.
   re-validated + secret-stripped by `validateAdapterDescriptor` at load. NEVER put a token in a
   descriptor, data-model value, or any IPC frame — `validateAdapterDescriptor`/`validateAdapterAction`
   STRIP secret-looking query keys (token/access_token/client_secret/…) and warn.
-- **`AdapterDispatcher` (`src/main/adapterDispatcher.ts`) is channel-independent.** It holds the
+- **`AdapterDispatcher` (`src/main/generative/adapterDispatcher.ts`) is channel-independent.** It holds the
   per-surface descriptor + accumulated list + cursor/loading state and pushes `updateDataModel`; it
   has NO PtyManager/AgentRunner deps (inject `resolve`/`pushDataModel`/`cancelActive`/`warn`).
   Append pagination writes the FULL accumulated list at the bound path (main holds the accumulation —
@@ -348,7 +348,7 @@ detail.
   ['openDirectory'] })` (cancel/error → `{ path: null }`, which keeps the `[Open]` state). The
   picked dir is passed as an OPTIONAL `cwd` on `pty.start(paneId, { cwd })`, boundary-validated in
   main. A RESTORED tab skips the picker and auto-resumes. The fresh-vs-resume cwd rule is the pure
-  `resolvePaneSpawn` (`src/main/paneSpawn.ts`): a resume IGNORES any override cwd (the snapshot's
+  `resolvePaneSpawn` (`src/main/pty/paneSpawn.ts`): a resume IGNORES any override cwd (the snapshot's
   own cwd wins), a fresh spawn uses `overrideCwd ?? sandboxDir`. `TerminalView` carries the
   `autoStart`/`phase`/`pending` state for this; restored tabs set `autoStart` so they resume
   without a pick.
@@ -411,7 +411,7 @@ single new `window.cosmos.session` namespace in `src/shared/ipc.ts` (`session:lo
 `session:save` via `send`).
 
 - **Plain UNENCRYPTED JSON, atomic, under `userData`.** The snapshot is `session.json` in
-  `app.getPath('userData')`, written by `SessionStore` (`src/main/sessionStore.ts`) as
+  `app.getPath('userData')`, written by `SessionStore` (`src/main/session/sessionStore.ts`) as
   `session.json.tmp` then `renameSync` over the target (atomic, never a half-written file). NO
   `safeStorage` — the snapshot is non-secret by construction (decision D1). `SessionStore` takes an
   injectable `SessionFsLike` (the tokenStore `FsLike` shape + `renameSync`) so it is node-testable.
@@ -424,7 +424,7 @@ single new `window.cosmos.session` namespace in `src/shared/ipc.ts` (`session:lo
   and never enter any session payload. `sessionStore.test.ts` SC-004 asserts no
   `accessToken`/`refreshToken`/`client_secret`/`Authorization` ever reaches disk.
 - **Validate at BOTH boundaries; never crash, never clobber a good snapshot.** `validateSnapshot`
-  lives in `src/main/sessionSnapshot.ts` (NOT `src/shared/validate.ts` — shared cannot import main,
+  lives in `src/main/session/sessionSnapshot.ts` (NOT `src/shared/validate.ts` — shared cannot import main,
   and snapshot validation is a main-only boundary concern; this is a deliberate deviation from the
   plan's checklist). On `save`, an invalid/old-schema/corrupt payload → warn + ignore + KEEP the
   existing file. On `load`, a missing/corrupt/unknown-version file → warn + clean empty session
@@ -448,7 +448,7 @@ single new `window.cosmos.session` namespace in `src/shared/ipc.ts` (`session:lo
   renderer keys the set by tab id: `GoogleCalendarPanel` reads the active tab's `GenerativeTab.hiddenCalendars`,
   injects it through `CalendarVisibilityContext`, and writes every toggle back with
   `update(activeTabId, { hiddenCalendars })` so it round-trips through that tab's snapshot
-  (build/hydrate in `src/renderer/sessionSnapshot.ts`). There is NO global `hiddenCalendars` and NO
+  (build/hydrate in `src/renderer/session/sessionSnapshot.ts`). There is NO global `hiddenCalendars` and NO
   `SessionRegistry.setHiddenCalendars` — a per-tab UI preference rides the tab's own persisted record,
   not a snapshot-wide field, so it can't leak across tabs.
 - **Main owns the terminal session id (decision D2).** The renderer never mints or sees the `claude`
@@ -611,7 +611,7 @@ single new `window.cosmos.session` namespace in `src/shared/ipc.ts` (`session:lo
     shared `decodeUnicodeEscapes`. Confluence ALSO serializes that literal-escape form into plain
     `title`/`excerpt`/space fields, so the main process (`confluenceClient` `mapSearchResultsPage` +
     `getPage`) applies `decodeUnicodeEscapes` at the data source → the search/feed LIST screen, detail
-    header, and gen-UI catalog all show real glyphs. `decodeUnicodeEscapes` lives in `src/shared/confluence.ts`
+    header, and gen-UI catalog all show real glyphs. `decodeUnicodeEscapes` lives in `src/shared/types/confluence.ts`
     so main + renderer share one transform; decode HTML body at the text-node level (renderer), never on the
     serialized string (would corrupt attributes).
   - **Provider message text is wire-format, not plain text — decode it at the single client mapping
@@ -791,7 +791,7 @@ single new `window.cosmos.session` namespace in `src/shared/ipc.ts` (`session:lo
 xterm.js forwards raw arrow keys to the PTY but does NOT translate the macOS Cmd/Option arrow
 chords that iTerm/Terminal.app map to readline line/word motion, nor emit a soft newline for
 Shift/Option+Enter — so word/line motion + newline-without-submit don't work in the embedded
-`claude` prompt by default. The pure mapping lives in `src/renderer/terminalKeymap.ts`
+`claude` prompt by default. The pure mapping lives in `src/renderer/terminal/terminalKeymap.ts`
 (`mapTerminalKey(e) → bytes | null`, node-tested in `terminalKeymap.test.ts`) and is wired in
 `TerminalView`'s mount effect via `term.attachCustomKeyEventHandler` — a non-null result is written
 through the existing `window.cosmos.pty.sendInput` path and returns `false` to suppress xterm's
@@ -826,9 +826,9 @@ path, NO token ever crosses to the renderer.
 - **`window.cosmos.fs.*` is a NEW preload surface → a full `npm run dev` restart is required**
   (HMR alone leaves the methods `not a function`), like every other new bridge method.
 - **`cosmos-file://` privileged image scheme** (mirrors `cosmos-confluence-img://` /
-  `cosmos-slack-img://`). Pure codec/validator `src/main/localFileRef.ts` (base64url
+  `cosmos-slack-img://`). Pure codec/validator `src/main/fs/localFileRef.ts` (base64url
   `cosmos-file://file/<paneId>/<base64url(relPath)>`, node-testable, no Electron) + thin wiring
-  `src/main/localFileProtocol.ts`. Gotchas: (1) `registerLocalFileScheme()` must run at module load
+  `src/main/fs/localFileProtocol.ts`. Gotchas: (1) `registerLocalFileScheme()` must run at module load
   BEFORE `app.whenReady` (next to the confluence/slack registrations) or the scheme is silently not
   privileged; `installLocalFileProtocol(getRoot)` runs `protocol.handle` AFTER ready. (2) The handler
   reuses `pathConfine` (confine to the tab's cwd subtree) and NEVER throws — a forged/out-of-root/
@@ -845,7 +845,7 @@ path, NO token ever crosses to the renderer.
   `src/renderer/fileExplorer/fetchLocalFileBytes.ts`, which calls `window.cosmos.fs.readBytes(paneId,
   relPath)` (channel `FsChannel.ReadBytes`, contract in `src/shared/ipc/fs.ts`) and returns an
   `ArrayBuffer`, throwing on any typed failure so each viewer's existing try/catch shows its calm
-  `render-error` block. The main handler delegates to `FsExplorer.readBytes` (`src/main/fsExplorer.ts`),
+  `render-error` block. The main handler delegates to `FsExplorer.readBytes` (`src/main/fs/fsExplorer.ts`),
   which resolves the root by `paneId`, `pathConfine`-checks the target, and enforces the SAME per-format
   `viewerCaps` size cap as `fs:read` BEFORE reading (over-cap → `too-large`). The result carries a
   `Uint8Array` (structured-clone-safe); never raw bytes for text/image (those keep their existing

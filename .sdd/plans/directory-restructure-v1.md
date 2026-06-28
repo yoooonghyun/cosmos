@@ -87,63 +87,63 @@ the user commits current work first, so the restructure lands on an otherwise-em
 
 ### Phase 0 — Preflight (gated on clean tree)
 
-- [ ] Confirm working tree is clean (user has committed all in-flight work). Do NOT start on a dirty tree.
-- [ ] Read the spec; confirm OQ defaults are adopted (renderer/main taxonomy; nest the four `*Catalog/` under their domain folder; `atlassianPanelBits.tsx`→`atlassian/`; group clear `src/main/` clusters, leave cross-cutting files near root; `src/mcp/` flat; `components/` deferred).
-- [ ] Establish a baseline: run `npm run typecheck`, `npm test`, `npm run test:dom`, `npm run test:integration` and record the GREEN counts (the "same set of tests" reference for SC-002).
-- [ ] **Up-front config fix:** change `package.json` `test:integration` glob to `src/main/**/*.integration.test.ts`. Re-run `npm run test:integration` (still flat) → must stay green with the same 4 tests. Commit.
+- [x] Confirm working tree is clean (user has committed all in-flight work). Do NOT start on a dirty tree.
+- [x] Read the spec; confirm OQ defaults are adopted (renderer/main taxonomy; nest the four `*Catalog/` under their domain folder; `atlassianPanelBits.tsx`→`atlassian/`; group clear `src/main/` clusters, leave cross-cutting files near root; `src/mcp/` flat; `components/` deferred).
+- [x] Establish a baseline: run `npm run typecheck`, `npm test`, `npm run test:dom`, `npm run test:integration` and record the GREEN counts (the "same set of tests" reference for SC-002).
+- [x] **Up-front config fix:** change `package.json` `test:integration` glob to `src/main/**/*.integration.test.ts`. Re-run `npm run test:integration` (still flat) → must stay green with the same 4 tests. Commit.
 
 ### Phase 1 — `src/shared/` (do FIRST: everything imports it; keep barrels stable)
 
 > Lowest depth-change risk, but done first so later renderer/main re-paths target a settled shared tree.
 
-- [ ] Create `src/shared/types/`. Move per-integration type files into it: `jira.ts`, `slack.ts`, `confluence.ts`, `googleCalendar.ts`, `googleCalendarColor.ts` (+ `googleCalendarColor.test.ts`). Move generative-contract types `adapter.ts`, `conversation.ts`, `dataBearingSpec.ts` (+ `dataBearingSpec.test.ts`) into `src/shared/types/` (or a `core/` — keep with the spec's taxonomy).
-- [ ] DO NOT move `ipc.ts`, `validate.ts`, `bridge.ts`, or the `ipc/` folder — barrel/consumer paths (`../shared/ipc`, `../shared/validate`, `../shared/bridge`) stay STABLE.
-- [ ] Re-path importers of the moved type files across `src/main`, `src/renderer`, `src/mcp`, `src/shared/ipc/*` (e.g. `../shared/jira` → `../shared/types/jira`). Keep the top-level `validate*.test.ts` files where they are (they exercise the `ipc/` barrels next to `validate.ts`).
-- [ ] **Gate.** (typecheck + test) Commit.
+- [x] Create `src/shared/types/`. Move per-integration type files into it: `jira.ts`, `slack.ts`, `confluence.ts`, `googleCalendar.ts`, `googleCalendarColor.ts` (+ `googleCalendarColor.test.ts`). Move generative-contract types `adapter.ts`, `conversation.ts`, `dataBearingSpec.ts` (+ `dataBearingSpec.test.ts`) into `src/shared/types/` (or a `core/` — keep with the spec's taxonomy).
+- [x] DO NOT move `ipc.ts`, `validate.ts`, `bridge.ts`, or the `ipc/` folder — barrel/consumer paths (`../shared/ipc`, `../shared/validate`, `../shared/bridge`) stay STABLE.
+- [x] Re-path importers of the moved type files across `src/main`, `src/renderer`, `src/mcp`, `src/shared/ipc/*` (e.g. `../shared/jira` → `../shared/types/jira`). Keep the top-level `validate*.test.ts` files where they are (they exercise the `ipc/` barrels next to `validate.ts`).
+- [x] **Gate.** (typecheck + test) Commit.
 
 ### Phase 2 — `src/main/` (one domain cluster per step)
 
 > `index.ts` stays at root. Cross-cutting files (`mcpConfig`(+test), `shortcutMatch`(+test), `clientConfigResolver`(+test), `clientConfigMutate`(+test)) stay near root for this cycle (OQ default). Main files import shared via `../shared/...`; moving one level deeper makes that `../../shared/...`.
 
-- [ ] **`src/main/slack/`** — move `slackBridge`, `slackManager`, `slackAdapter`, `slackSurfaceBuilder`, `slackImageRef`, `slackImageProtocol` (+ each `*.test.ts`). Re-path `../shared`→`../../shared`, `./integrations/*`→`../integrations/*`. **Gate.** Commit.
-- [ ] **`src/main/jira/`** — move `jiraBridge`, `jiraManager`, `jiraAdapter`, `jiraActionDispatcher`, `jiraSurfaceBuilder` (+ tests). Re-path. **Gate.** Commit.
-- [ ] **`src/main/confluence/`** — move `confluenceBridge`, `confluenceAdapter`, `confluenceSurfaceBuilder`, `confluenceImageRef`, `confluenceImageProtocol` (+ tests, incl. `confluenceComments.integration.test.ts`). Re-path. **Gate** (run `test:integration` here). Commit.
-- [ ] **`src/main/calendar/`** — move `googleCalendarBridge`, `googleCalendarManager`, `googleCalendarSurfaceBuilder`, `googleCalendarWindow` (+ tests). Re-path. **Gate.** Commit.
-- [ ] **`src/main/pty/`** — move `ptyManager`, `paneSpawn`, `processGroupKill`, `orphanReaper`, `sessionLockRecovery` (+ tests). Re-path. **Gate.** Commit.
-- [ ] **`src/main/agent/`** — move `agentRunner`, `agentSessionStore`, `agentSessionQueue` (+ tests, incl. `agentRunner.integration.test.ts`). Re-path. **Gate** (run `test:integration`). Commit.
-- [ ] **`src/main/session/`** — move `sessionStore`, `sessionSnapshot` (+ tests). Re-path. **Gate.** Commit. (Note: a same-named `sessionSnapshot` also exists in renderer — they are separate files in separate trees; keep them in their own trees.)
-- [ ] **`src/main/fs/`** — move `fsExplorer`, `pathConfine`, `fileKind`, `localFileRef`, `localFileProtocol`, `viewerKind`, `viewerCaps`, `transcriptReader`, `transcriptParse` (+ tests, incl. `fsExplorer.integration.test.ts` + `localFileProtocol.integration.test.ts`). Re-path. **Gate** (run `test:integration`). Commit.
-- [ ] **`src/main/generative/`** — move `uiBridge`, `descriptorShell`, `descriptorRegistration`, `adapterDispatcher`, `adapterBindingRegistry`, `specRebinder`, `dataBearingWarning`, `pendingCalls`, `viewContextGrounding` (+ tests). **Hold `refreshRepaintIntegration.test.ts` for Phase 3** (it imports `../renderer/dataModelApply`, which moves in Phase 3). Re-path. **Gate.** Commit.
-- [ ] Verify `index.ts` imports all re-path correctly after each group; it is the largest importer of main modules. (No move of `index.ts`.)
+- [x] **`src/main/slack/`** — move `slackBridge`, `slackManager`, `slackAdapter`, `slackSurfaceBuilder`, `slackImageRef`, `slackImageProtocol` (+ each `*.test.ts`). Re-path `../shared`→`../../shared`, `./integrations/*`→`../integrations/*`. **Gate.** Commit.
+- [x] **`src/main/jira/`** — move `jiraBridge`, `jiraManager`, `jiraAdapter`, `jiraActionDispatcher`, `jiraSurfaceBuilder` (+ tests). Re-path. **Gate.** Commit.
+- [x] **`src/main/confluence/`** — move `confluenceBridge`, `confluenceAdapter`, `confluenceSurfaceBuilder`, `confluenceImageRef`, `confluenceImageProtocol` (+ tests, incl. `confluenceComments.integration.test.ts`). Re-path. **Gate** (run `test:integration` here). Commit.
+- [x] **`src/main/calendar/`** — move `googleCalendarBridge`, `googleCalendarManager`, `googleCalendarSurfaceBuilder`, `googleCalendarWindow` (+ tests). Re-path. **Gate.** Commit.
+- [x] **`src/main/pty/`** — move `ptyManager`, `paneSpawn`, `processGroupKill`, `orphanReaper`, `sessionLockRecovery` (+ tests). Re-path. **Gate.** Commit.
+- [x] **`src/main/agent/`** — move `agentRunner`, `agentSessionStore`, `agentSessionQueue` (+ tests, incl. `agentRunner.integration.test.ts`). Re-path. **Gate** (run `test:integration`). Commit.
+- [x] **`src/main/session/`** — move `sessionStore`, `sessionSnapshot` (+ tests). Re-path. **Gate.** Commit. (Note: a same-named `sessionSnapshot` also exists in renderer — they are separate files in separate trees; keep them in their own trees.)
+- [x] **`src/main/fs/`** — move `fsExplorer`, `pathConfine`, `fileKind`, `localFileRef`, `localFileProtocol`, `viewerKind`, `viewerCaps`, `transcriptReader`, `transcriptParse` (+ tests, incl. `fsExplorer.integration.test.ts` + `localFileProtocol.integration.test.ts`). Re-path. **Gate** (run `test:integration`). Commit.
+- [x] **`src/main/generative/`** — move `uiBridge`, `descriptorShell`, `descriptorRegistration`, `adapterDispatcher`, `adapterBindingRegistry`, `specRebinder`, `dataBearingWarning`, `pendingCalls`, `viewContextGrounding` (+ tests). **Hold `refreshRepaintIntegration.test.ts` for Phase 3** (it imports `../renderer/dataModelApply`, which moves in Phase 3). Re-path. **Gate.** Commit.
+- [x] Verify `index.ts` imports all re-path correctly after each group; it is the largest importer of main modules. (No move of `index.ts`.)
 
 ### Phase 3 — `src/renderer/` (entry/shell files stay at root; `components/` UNTOUCHED)
 
 > Stays at root: `index.html`, `main.tsx`, `App.tsx`, `App.css`, `index.css`, `vite-env.d.ts`. UNTOUCHED: `components/`, `lib/`. Renderer→shared is relative `../shared`; one level deeper → `../../shared`. `@/components/ui/*` + `@/lib/utils` need NO change.
 
-- [ ] **`src/renderer/terminal/`** — move `TerminalPanel.tsx` **+ `TerminalPanel.css`** (asset travels with it), `terminalTheme`(+test), `terminalKeymap`(+test). Re-path; update `App.tsx`'s import of `TerminalPanel`. **Gate.** Commit.
-- [ ] **`src/renderer/slack/`** — move `SlackPanel.tsx`, `slackComposerLogic`(+test), `slackThreadPanelLogic`(+test), `slackChannelSearchLogic`(+test), `slackScrollToLatest`(+test), `useSlackScrollToLatest`(+`.dom.test.tsx`), `slackScrollPaginate`(+test), `useSlackScrollPaginate.dom.test.tsx` + `useSlackScrollPaginate.ts`. **Nest `slackCatalog/` → `src/renderer/slack/slackCatalog/`** (folder move; re-path its `@/`-imports are unaffected, its `../shared`/`../../` relatives shift by one). Re-path. **Gate** (+`test:dom`). Commit.
-- [ ] **`src/renderer/jira/`** — move `JiraPanel.tsx`; **nest `jiraCatalog/`**. Re-path. **Gate.** Commit.
-- [ ] **`src/renderer/confluence/`** — move `ConfluencePanel.tsx`; **nest `confluenceCatalog/`**. Re-path. **Gate.** Commit.
-- [ ] **`src/renderer/atlassian/`** — move shared `atlassianPanelBits.tsx` here; update `JiraPanel`/`ConfluencePanel` imports to point at `../atlassian/atlassianPanelBits`. **Gate.** Commit.
-- [ ] **`src/renderer/calendar/`** — move `GoogleCalendarPanel.tsx`, `calendarNavLogic`(+test); **nest `googleCalendarCatalog/`**. Re-path. **Gate.** Commit.
-- [ ] **`src/renderer/cosmos/`** — move `CosmosPanel.tsx` (+ `cosmosConversation`(+test), `cosmosTabs`(+test), `CosmosTimelineEntry.tsx` if not placed in `session/`; per OQ keep cosmos conversation/timeline with `CosmosPanel`). Re-path. **Gate.** Commit.
-- [ ] **`src/renderer/session/`** — move `SessionProvider.tsx`, `sessionRegistry`(+test), `sessionSnapshot`(+test). Re-path. **Gate.** Commit.
-- [ ] **`src/renderer/tabs/`** — move `panelTabs`(+test), `usePanelTabs`, `PanelTabStrip.tsx`, `useGenerativePanelTabs`, `perTabNav`(+test), `usePerTabNav`, `closeTabRouting`(+test), `useTabShortcuts`(+`.dom.test.tsx`), `cosmosTabs`(if not in cosmos/), `TerminalTabNavRouting.dom.test.tsx`. Re-path. **Gate** (+`test:dom`). Commit.
-- [ ] **`src/renderer/composer/`** — move `PromptComposer.tsx`, `PromptComposerDocked.dom.test.tsx`, `promptComposerLogic`(+test), `activeComposer`(+test), `ActiveComposerProvider.tsx`, `OpenPromptPositionProvider.tsx`, `openPromptPosition`(+test). Re-path. **Gate** (+`test:dom`). Commit.
-- [ ] **`src/renderer/generative/`** (HIGHEST RISK — cross-tree file) — move `ActiveTabSurface.tsx`, `activeTabSurfaceRefresh`(+test), `panelRefreshLogic`(+test), `PanelRefreshButton.tsx`, **`dataModelApply.ts`(+`dataModelApply.test.ts`)**, and **nest `catalogShared/`**. In the SAME step: (a) update `tsconfig.node.json` literal `"src/renderer/dataModelApply.ts"` → new path; (b) update main `refreshRepaintIntegration.test.ts` import `../renderer/dataModelApply` → new path AND move it into `src/main/generative/` now (held from Phase 2), re-pathing its `../shared`/`../renderer` accordingly; (c) update `ActiveTabSurface`'s `./dataModelApply` import. **Gate** (typecheck node+web + test + `test:dom` + `test:integration`). Commit.
-- [ ] **`src/renderer/app/`** — move `railVisibility`(+test), `CosmosMark.tsx`, `CosmosSpinner.tsx`, `SurfaceSpinner.tsx`, `PanelFooter.tsx`, `SettingsDialog.tsx`, `settingsStatusDot`(+test), `ContextChip.tsx`, `viewContextCapture`(+test). Re-path; update `App.tsx` imports. **Gate.** Commit.
-- [ ] **`src/renderer/confirm/`** — move `confirmLogic`(+test), `useConfirm.ts` (or fold into `app/` per OQ — pick one and stay consistent). Re-path. **Gate.** Commit.
-- [ ] Final renderer sweep: confirm `App.tsx` (the largest renderer importer) compiles with all updated paths; confirm `fileExplorer/` (moved as-is, untouched internals) still resolves.
+- [x] **`src/renderer/terminal/`** — move `TerminalPanel.tsx` **+ `TerminalPanel.css`** (asset travels with it), `terminalTheme`(+test), `terminalKeymap`(+test). Re-path; update `App.tsx`'s import of `TerminalPanel`. **Gate.** Commit.
+- [x] **`src/renderer/slack/`** — move `SlackPanel.tsx`, `slackComposerLogic`(+test), `slackThreadPanelLogic`(+test), `slackChannelSearchLogic`(+test), `slackScrollToLatest`(+test), `useSlackScrollToLatest`(+`.dom.test.tsx`), `slackScrollPaginate`(+test), `useSlackScrollPaginate.dom.test.tsx` + `useSlackScrollPaginate.ts`. **Nest `slackCatalog/` → `src/renderer/slack/slackCatalog/`** (folder move; re-path its `@/`-imports are unaffected, its `../shared`/`../../` relatives shift by one). Re-path. **Gate** (+`test:dom`). Commit.
+- [x] **`src/renderer/jira/`** — move `JiraPanel.tsx`; **nest `jiraCatalog/`**. Re-path. **Gate.** Commit.
+- [x] **`src/renderer/confluence/`** — move `ConfluencePanel.tsx`; **nest `confluenceCatalog/`**. Re-path. **Gate.** Commit.
+- [x] **`src/renderer/atlassian/`** — move shared `atlassianPanelBits.tsx` here; update `JiraPanel`/`ConfluencePanel` imports to point at `../atlassian/atlassianPanelBits`. **Gate.** Commit.
+- [x] **`src/renderer/calendar/`** — move `GoogleCalendarPanel.tsx`, `calendarNavLogic`(+test); **nest `googleCalendarCatalog/`**. Re-path. **Gate.** Commit.
+- [x] **`src/renderer/cosmos/`** — move `CosmosPanel.tsx` (+ `cosmosConversation`(+test), `cosmosTabs`(+test), `CosmosTimelineEntry.tsx` if not placed in `session/`; per OQ keep cosmos conversation/timeline with `CosmosPanel`). Re-path. **Gate.** Commit.
+- [x] **`src/renderer/session/`** — move `SessionProvider.tsx`, `sessionRegistry`(+test), `sessionSnapshot`(+test). Re-path. **Gate.** Commit.
+- [x] **`src/renderer/tabs/`** — move `panelTabs`(+test), `usePanelTabs`, `PanelTabStrip.tsx`, `useGenerativePanelTabs`, `perTabNav`(+test), `usePerTabNav`, `closeTabRouting`(+test), `useTabShortcuts`(+`.dom.test.tsx`), `cosmosTabs`(if not in cosmos/), `TerminalTabNavRouting.dom.test.tsx`. Re-path. **Gate** (+`test:dom`). Commit.
+- [x] **`src/renderer/composer/`** — move `PromptComposer.tsx`, `PromptComposerDocked.dom.test.tsx`, `promptComposerLogic`(+test), `activeComposer`(+test), `ActiveComposerProvider.tsx`, `OpenPromptPositionProvider.tsx`, `openPromptPosition`(+test). Re-path. **Gate** (+`test:dom`). Commit.
+- [x] **`src/renderer/generative/`** (HIGHEST RISK — cross-tree file) — move `ActiveTabSurface.tsx`, `activeTabSurfaceRefresh`(+test), `panelRefreshLogic`(+test), `PanelRefreshButton.tsx`, **`dataModelApply.ts`(+`dataModelApply.test.ts`)**, and **nest `catalogShared/`**. In the SAME step: (a) update `tsconfig.node.json` literal `"src/renderer/dataModelApply.ts"` → new path; (b) update main `refreshRepaintIntegration.test.ts` import `../renderer/dataModelApply` → new path AND move it into `src/main/generative/` now (held from Phase 2), re-pathing its `../shared`/`../renderer` accordingly; (c) update `ActiveTabSurface`'s `./dataModelApply` import. **Gate** (typecheck node+web + test + `test:dom` + `test:integration`). Commit.
+- [x] **`src/renderer/app/`** — move `railVisibility`(+test), `CosmosMark.tsx`, `CosmosSpinner.tsx`, `SurfaceSpinner.tsx`, `PanelFooter.tsx`, `SettingsDialog.tsx`, `settingsStatusDot`(+test), `ContextChip.tsx`, `viewContextCapture`(+test). Re-path; update `App.tsx` imports. **Gate.** Commit.
+- [x] **`src/renderer/confirm/`** — move `confirmLogic`(+test), `useConfirm.ts` (or fold into `app/` per OQ — pick one and stay consistent). Re-path. **Gate.** Commit.
+- [x] Final renderer sweep: confirm `App.tsx` (the largest renderer importer) compiles with all updated paths; confirm `fileExplorer/` (moved as-is, untouched internals) still resolves.
 
 ### Phase 4 — Verify + Docs
 
-- [ ] Full gate: `npm run typecheck` (node+web), `npm test`, `npm run test:dom`, `npm run test:integration` — all GREEN, **same test counts as the Phase-0 baseline** (SC-002).
-- [ ] `npm run build` succeeds; confirm `out/main/mcp/*.js` emit with their **original filenames** (SC-003) — proves the untouched `src/mcp/` + rollup keys are intact.
-- [ ] `npm run dev`: smoke every surface — terminal, file explorer, Slack, Jira, Confluence, Google Calendar, cosmos panel, settings, open-prompt composer — behaves identically (SC-004). (Reminder: a fresh `npm run dev` is required, not HMR, since preload imports may have re-pathed — CLAUDE.md gotcha.)
-- [ ] `git diff` review: ONLY relocations + import-path/config edits — no logic, no symbol renames, no signature/API changes, no dependency changes (SC-005). Confirm `src/renderer/components/` byte-for-byte unchanged (SC-006).
-- [ ] Regenerate `docs/PROJECT-STRUCTURE.md` to describe the new nested tree (SC-007).
-- [ ] Reconcile `docs/ARCHITECTURE.md` §4.6 tree references to the nested layout (paths like `slackBridge.ts`→`slack/slackBridge.ts`) without changing design meaning (SC-007).
-- [ ] Update this plan's Deviations with any folder/name adjustments made during the move.
+- [x] Full gate: `npm run typecheck` (node+web), `npm test`, `npm run test:dom`, `npm run test:integration` — all GREEN, **same test counts as the Phase-0 baseline** (SC-002).
+- [x] `npm run build` succeeds; confirm `out/main/mcp/*.js` emit with their **original filenames** (SC-003) — proves the untouched `src/mcp/` + rollup keys are intact.
+- [ ] `npm run dev`: smoke every surface — terminal, file explorer, Slack, Jira, Confluence, Google Calendar, cosmos panel, settings, open-prompt composer — behaves identically (SC-004). (Reminder: a fresh `npm run dev` is required, not HMR, since preload imports may have re-pathed — CLAUDE.md gotcha.) **NOT exercised by the implementing session — requires a live GUI run the headless environment can't drive. `npm run build` (prod bundle incl. preload + MCP) succeeds and the full typecheck/test/dom/integration matrix is green, so the move is sound at the bundle/type level; a human should still do the live smoke before final sign-off.**
+- [x] `git diff` review: ONLY relocations + import-path/config edits — no logic, no symbol renames, no signature/API changes, no dependency changes (SC-005). Confirm `src/renderer/components/` byte-for-byte unchanged (SC-006).
+- [x] Regenerate `docs/PROJECT-STRUCTURE.md` to describe the new nested tree (SC-007).
+- [x] Reconcile `docs/ARCHITECTURE.md` §4.6 tree references to the nested layout (paths like `slackBridge.ts`→`slack/slackBridge.ts`) without changing design meaning (SC-007).
+- [x] Update this plan's Deviations with any folder/name adjustments made during the move.
 
 ---
 
