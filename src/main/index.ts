@@ -171,7 +171,7 @@ import { slackAdapterResolver, slackBindOptionsForSource } from './slack/slackAd
 // also serves Confluence's two append-only lists + its refresh-only page detail. The
 // composite resolver branches Confluence-vs-Slack-vs-Jira by dataSource; the lazy
 // re-registration consults this selector in the chain. READ-ONLY (FR-017): no write.
-import { confluenceAdapterResolver, confluenceBindOptionsForSource } from './confluenceAdapter'
+import { confluenceAdapterResolver, confluenceBindOptionsForSource } from './confluence/confluenceAdapter'
 // panel-refresh-v1 (OQ-5 = main-composes): resolve a descriptor → its bound shell + bind
 // options so an agent-composed surface carrying a descriptor renders refreshable.
 import { planAgentSurfaceRegistration } from './descriptorRegistration'
@@ -186,8 +186,8 @@ import {
   SURFACE_ISSUE_DETAIL
 } from './jira/jiraSurfaceBuilder'
 import { JiraClient } from './integrations/jiraClient'
-import { ConfluenceBridge } from './confluenceBridge'
-import { ConfluenceManager } from './confluenceManager'
+import { ConfluenceBridge } from './confluence/confluenceBridge'
+import { ConfluenceManager } from './confluence/confluenceManager'
 import { ConfluenceClient } from './integrations/confluenceClient'
 import {
   refreshAtlassianToken,
@@ -197,7 +197,7 @@ import { CONFLUENCE_OAUTH_SCOPES, JIRA_OAUTH_SCOPES } from './integrations/atlas
 import {
   registerConfluenceImageScheme,
   installConfluenceImageProtocol
-} from './confluenceImageProtocol'
+} from './confluence/confluenceImageProtocol'
 import {
   registerLocalFileScheme,
   installLocalFileProtocol

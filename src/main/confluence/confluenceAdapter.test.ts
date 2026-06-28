@@ -11,7 +11,7 @@ import {
   CONFLUENCE_RESULTS_PATH,
   type ConfluenceAdapterManager
 } from './confluenceAdapter'
-import { ConfluenceAdapterSource } from '../shared/types/confluence'
+import { ConfluenceAdapterSource } from '../../shared/types/confluence'
 import type {
   ConfluenceDefaultFeedParams,
   ConfluenceGetPageParams,
@@ -20,7 +20,7 @@ import type {
   ConfluenceResult,
   ConfluenceSearchParams,
   ConfluenceSearchResult
-} from '../shared/types/confluence'
+} from '../../shared/types/confluence'
 
 /* confluence-generative-adapter-v1 — the Confluence-specific resolver + bind options
  * (FR-005..FR-008). Maps a secret-free descriptor to a ConfluenceManager READ (token +

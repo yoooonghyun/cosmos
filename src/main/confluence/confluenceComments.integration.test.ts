@@ -22,8 +22,8 @@
  */
 
 import { describe, it, expect } from 'vitest'
-import { ConfluenceClient, type ConfluenceHttpResponse, type FetchLike } from './integrations/confluenceClient'
-import { CONFLUENCE_OAUTH_SCOPES } from './integrations/atlassianConfig'
+import { ConfluenceClient, type ConfluenceHttpResponse, type FetchLike } from '../integrations/confluenceClient'
+import { CONFLUENCE_OAUTH_SCOPES } from '../integrations/atlassianConfig'
 
 /** The granular user-read scope the `/wiki/rest/api/user` endpoint requires at runtime. */
 const USER_READ_SCOPE = 'read:user:confluence'

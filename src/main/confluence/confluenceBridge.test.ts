@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from 'vitest'
 import { ConfluenceBridge, type ConfluenceBridgeManager } from './confluenceBridge'
-import { ConfluenceOp, type ConfluenceResult } from '../shared/types/confluence'
+import { ConfluenceOp, type ConfluenceResult } from '../../shared/types/confluence'
 
 function makeManager(overrides?: Partial<ConfluenceBridgeManager>): ConfluenceBridgeManager {
   const ok = async (): Promise<ConfluenceResult<unknown>> => ({ ok: true, data: { items: [] } })

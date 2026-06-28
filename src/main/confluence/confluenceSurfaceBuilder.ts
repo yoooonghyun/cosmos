@@ -20,19 +20,19 @@
  * cross (FR-018).
  */
 
-import type { A2uiSurfaceUpdate, UiDataModelPayload } from '../shared/ipc'
+import type { A2uiSurfaceUpdate, UiDataModelPayload } from '../../shared/ipc'
 import type {
   ConfluencePage,
   ConfluencePageDetail,
   ConfluenceSearchResult
-} from '../shared/types/confluence'
+} from '../../shared/types/confluence'
 import {
   ConfluenceAdapterSource,
   confluenceFeedDescriptor,
   confluencePageDescriptor,
   confluenceSearchDescriptor,
   type ConfluenceAdapterDescriptor
-} from '../shared/types/confluence'
+} from '../../shared/types/confluence'
 import {
   CONFLUENCE_FEED_PATH,
   CONFLUENCE_PAGE_PATH,

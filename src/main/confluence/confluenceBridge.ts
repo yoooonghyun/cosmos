@@ -13,8 +13,8 @@
 
 import { createServer, type Server, type Socket } from 'node:net'
 import { existsSync, unlinkSync } from 'node:fs'
-import { encodeBridgeMessage } from '../shared/bridge'
-import { ConfluenceOp, type ConfluenceResult } from '../shared/types/confluence'
+import { encodeBridgeMessage } from '../../shared/bridge'
+import { ConfluenceOp, type ConfluenceResult } from '../../shared/types/confluence'
 import {
   validateConfluenceBridgeCall,
   validateConfluenceComment,
@@ -22,7 +22,7 @@ import {
   validateConfluenceGetPage,
   validateConfluenceSearch,
   validateConfluenceUpdate
-} from '../shared/validate'
+} from '../../shared/validate'
 
 type WarnFn = (message: string, ...args: unknown[]) => void
 

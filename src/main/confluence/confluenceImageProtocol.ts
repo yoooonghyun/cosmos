@@ -16,7 +16,7 @@
  */
 
 import { protocol, net } from 'electron'
-import type { ConfluenceCallAuth } from './integrations/confluenceClient'
+import type { ConfluenceCallAuth } from '../integrations/confluenceClient'
 import {
   COSMOS_CONFLUENCE_IMG_SCHEME,
   buildAssetUrl,

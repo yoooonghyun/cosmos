@@ -23,7 +23,7 @@
  * `buildDownloadUrl` then append the validated value to the TRUSTED gateway base, fixing origin.
  */
 
-import { confluenceApiBase } from './integrations/atlassianConfig'
+import { confluenceApiBase } from '../integrations/atlassianConfig'
 
 /** The privileged scheme. Kept in sync with the renderer's `COSMOS_CONFLUENCE_IMG_SCHEME`. */
 export const COSMOS_CONFLUENCE_IMG_SCHEME = 'cosmos-confluence-img'

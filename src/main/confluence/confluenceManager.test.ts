@@ -1,10 +1,10 @@
 import { describe, it, expect, vi } from 'vitest'
 import { ConfluenceManager, type ConfluenceManagerDeps } from './confluenceManager'
-import type { ConfluenceClient } from './integrations/confluenceClient'
-import type { AtlassianOAuthResult } from './integrations/atlassianOAuth'
-import type { TokenExchangeResult } from './integrations/oauthPkce'
-import type { StoredTokenSet, TokenStore } from './integrations/tokenStore'
-import type { ConfluenceResult } from '../shared/types/confluence'
+import type { ConfluenceClient } from '../integrations/confluenceClient'
+import type { AtlassianOAuthResult } from '../integrations/atlassianOAuth'
+import type { TokenExchangeResult } from '../integrations/oauthPkce'
+import type { StoredTokenSet, TokenStore } from '../integrations/tokenStore'
+import type { ConfluenceResult } from '../../shared/types/confluence'
 
 function makeFakeStore(initial: StoredTokenSet | null = null, expired = false) {
   let tokens = initial

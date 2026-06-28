@@ -25,7 +25,7 @@ import {
   SURFACE_CONFLUENCE_FEED,
   SURFACE_CONFLUENCE_SEARCH,
   SURFACE_CONFLUENCE_PAGE
-} from './confluenceSurfaceBuilder'
+} from './confluence/confluenceSurfaceBuilder'
 import { SURFACE_DEFAULT_VIEW, SURFACE_ISSUE_DETAIL } from './jira/jiraSurfaceBuilder'
 
 const desc = (dataSource: string) => ({ dataSource, query: {} })
