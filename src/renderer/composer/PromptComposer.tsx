@@ -788,6 +788,22 @@ export function PromptComposer({
     setOpenAnchor(null)
   }, [])
 
+  // cosmos-panel-tab-list-v1 (DOCKED-only): a NEWLY provided context chip must not stay suppressed by
+  // a PRIOR `×` dismiss. The docked Cosmos composer never collapses (the path that resets the
+  // floating dismiss), so once the user dismisses a chip `contextDismiss` would stay 'all' and a
+  // fresh tree-click selection's chip would be gated off (the reported bug: re-clicking a tab after
+  // dismiss didn't register in the composer). Reset the dismiss whenever the chip reference changes —
+  // the Cosmos panel mints a fresh chip object on every tree click (even re-clicking the same tab).
+  // Docked-gated so the floating panels' per-compose dismiss semantics are untouched.
+  const prevChipRef = useRef(contextChip)
+  useEffect(() => {
+    const changed = prevChipRef.current !== contextChip
+    prevChipRef.current = contextChip
+    if (changed && docked) {
+      setContextDismiss('none')
+    }
+  }, [contextChip, docked])
+
   // FR-005/FR-006: send only on a non-empty, non-running submit, then auto-collapse +
   // clear the draft + return focus to the logo. Keys off the composer's OWN accept
   // decision (not an agent:status event), so collapse is immediate and deterministic.

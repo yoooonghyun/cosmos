@@ -120,76 +120,76 @@ fill; the designer owns the exact in-bubble treatment).
 
 ### Phase 0 — Sequencing gate (HARD dependency — do NOT start before this clears)
 
-- [ ] **Confirm `cosmos-panel-tab-list-v1` has MERGED** before editing any file. That feature also
+- [x] **Confirm `cosmos-panel-tab-list-v1` has MERGED** before editing any file. (`src/renderer/panelTabs/` present on disk; `PromptContextChip` already narrows `'terminal'`.) That feature also
   edits `CosmosTimelineEntry.tsx` and `PromptContextChip.tsx` (its Phase 6 adds a panel+tab chip
   kind + ensures the timeline chip still renders panel+tab turns). Landing this feature first would
   force a merge clash on both shared files. **This feature lands AFTER it.** (Spec Edge Case +
   coordinator-confirmed sequencing.)
-- [ ] **Confirm the design step (Step 2.5) is complete** so the in-bubble divider/header treatment +
+- [x] **Confirm the design step (Step 2.5) is complete** so the in-bubble divider/header treatment +
   the breadcrumb-on-`bg-primary` contrast decision are in hand before implementation (see Design step).
 
 ### Phase 1 — Interface / extraction (renderer)
 
-- [ ] In `PromptContextChip.tsx`, extract `PromptContextBreadcrumb({ context })`: move the `!context`
+- [x] In `PromptContextChip.tsx`, extract `PromptContextBreadcrumb({ context })`: move the `!context`
   null-guard, the `PanelGlyph`/`dockTarget`/`dockChip` derivation, the segment JSX
   (`DockSegment`/`TruncLabel`/panel/tab), and `role="note"` + `ariaLabelFor` into it. It renders the
   segments only — NO `flex justify-end`, NO `Badge`. Export it.
-- [ ] Reshape standalone `PromptContextChip` as a thin shell: `flex justify-end` + `Badge
+- [x] Reshape standalone `PromptContextChip` as a thin shell: `flex justify-end` + `Badge
   variant="secondary" max-w-chat-bubble` wrapping `<PromptContextBreadcrumb context />`. Behavior +
   DOM for the standalone path stays equivalent (its dom tests must still pass). [Note: retire the
   shell only if the design step confirms no surface wants the pill — default keep.]
-- [ ] No new types — `PromptContext` is unchanged. Confirm no invented props (FR-008/FR-012).
+- [x] No new types — `PromptContext` is unchanged. Confirm no invented props (FR-008/FR-012).
 
 ### Phase 2 — Combined box (renderer)
 
-- [ ] Add `UserMessageBox({ text, context })` to `CosmosTimelineEntry.tsx`: a right-aligned
+- [x] Add `UserMessageBox({ text, context })` to `CosmosTimelineEntry.tsx`: a right-aligned
   (`flex justify-end`) `bg-primary` / `text-primary-foreground` / `max-w-chat-bubble` box. When
   `context` present: render a static header section `<PromptContextBreadcrumb context />` + a
   horizontal divider (`border-t …`, exact token from the design step), then the always-visible body.
   When `context` absent: render ONLY the body, identical to today's plain bubble (FR-009). NO toggle,
   NO `aria-expanded`, NO collapse (FR-005/FR-006). Body keeps `whitespace-pre-wrap break-words` +
   today's text rendering (FR-011).
-- [ ] Wire BOTH branches to `UserMessageBox` (FR-010):
+- [x] Wire BOTH branches to `UserMessageBox` (FR-010):
   - `live-generating`: `entry.promptText && <UserMessageBox text={entry.promptText}
     context={entry.promptContext} />` (replaces the `<PromptContextChip>` + `<UserBubble>` pair);
     keep the `AssistantRow`/`TypingIndicator` below.
   - `user-prompt`: `<UserMessageBox text={turn.text} context={turn.context} />` (replaces the
     `flex flex-col gap-1` + chip + bubble).
-- [ ] Absorb/replace `UserBubble` (its body styling moves into `UserMessageBox`'s body element; the
+- [x] Absorb/replace `UserBubble` (its body styling moves into `UserMessageBox`'s body element; the
   shared `max-w-chat-bubble` token + rounded-corner treatment preserved per the design step).
-- [ ] Update the in-code comments that currently say "chip ABOVE the user prompt … stable across the
+- [x] Update the in-code comments that currently say "chip ABOVE the user prompt … stable across the
   confirm" to describe the combined in-bubble header.
 
 ### Phase 3 — Tests (jsdom; no node-unit unless a pure helper is extracted)
 
-- [ ] Update `PromptContextChip.dom.test.tsx` `describe('CosmosTimelineEntry — historical
+- [x] Update `PromptContextChip.dom.test.tsx` `describe('CosmosTimelineEntry — historical
   user-prompt turn')`: replace the chip-ABOVE-bubble ordering assertion (+ its `#2 ordering` comment)
   with combined-box assertions — the breadcrumb (`role="note"`) and the body text are in ONE box, the
   breadcrumb precedes the body in DOM order WITHIN that box, and a divider element is present between
   them.
-- [ ] Add: **combined box (context present)** — header + divider + body present in ONE box; body
+- [x] Add: **combined box (context present)** — header + divider + body present in ONE box; body
   visible without interaction; **NO collapse control** (`queryByRole('button')` for a toggle absent /
   no `aria-expanded`) (FR-005/FR-006).
-- [ ] Add: **null context → plain bubble** (FR-009) — for BOTH a `user-prompt` turn with no `context`
+- [x] Add: **null context → plain bubble** (FR-009) — for BOTH a `user-prompt` turn with no `context`
   AND a `live-generating` entry with no `promptContext`: body present, `queryByRole('note')` absent,
   no divider element.
-- [ ] Add: **live + historical parity** (FR-010) — a `live-generating` entry and a `user-prompt`
+- [x] Add: **live + historical parity** (FR-010) — a `live-generating` entry and a `user-prompt`
   turn carrying the SAME context render the same combined-box structure (header + divider + body).
-- [ ] Confirm the REAL-codec round-trip tests (lines ~192-267) still pass unchanged (content +
+- [x] Confirm the REAL-codec round-trip tests (lines ~192-267) still pass unchanged (content +
   clean-prose assertions are structure-agnostic).
-- [ ] Long-content guards (SC-006): a long breadcrumb still truncates (tooltip preserved) and a
+- [x] Long-content guards (SC-006): a long breadcrumb still truncates (tooltip preserved) and a
   long/multi-line body still wraps within `max-w-chat-bubble` — assert the box/segment classes
   rather than measuring pixels (jsdom has no layout).
 
 ### Phase 4 — Docs
 
-- [ ] `docs/ARCHITECTURE.md` (~L761): reword "renders it as the read-only `PromptContextChip`" →
+- [x] `docs/ARCHITECTURE.md` (~L761): reword "renders it as the read-only `PromptContextChip`" →
   the in-bubble context header of the combined user-message box (chip-above placement superseded).
   Land this WITH the code (not before).
-- [ ] Confirm the designer has updated DESIGN.md D-11 (placement superseded), §2 (the "prompt context
+- [x] Confirm the designer has updated DESIGN.md D-11 (placement superseded), §2 (the "prompt context
   chip" token row), and §15 (chat-surface canon) in the design step — this plan does NOT edit
   DESIGN.md. If a wrap-up reconciliation is needed, flag it.
-- [ ] Update this plan's Deviations with anything that differed; `TODO.md` reconciled at wrap-up.
+- [x] Update this plan's Deviations with anything that differed; `TODO.md` reconciled at wrap-up.
 
 ---
 
@@ -231,6 +231,26 @@ The designer owns and MUST decide before Phase 1/2 implementation:
   renderer consumer after the merge, so a variant's "one component, two live uses" premise is moot;
   extraction avoids forking the segment/dock/aria logic and keeps the chrome difference as thin
   wrappers.
+- **2026-06-29 (implemented)**: `PromptContextBreadcrumb` now CARRIES `role="note"` + `aria-label`
+  itself (the breadcrumb IS the meaning), so both consumers are pure chrome and there is exactly one
+  `role="note"`. The standalone `PromptContextChip` nests the breadcrumb inside `Badge
+  variant="secondary"` (NOT `asChild`/Slot — a plain function child doesn't forward Slot's injected
+  props; nesting keeps the standalone DOM/tests stable). Its FR-021 null-guard is kept on the chip
+  too (renders nothing) so no empty pill.
+- **2026-06-29 (deviation from plan Phase 2 wiring)**: the `live-generating` branch renders
+  `UserMessageBox` when `promptText || promptContext` (passing `text={promptText ?? ''}`), NOT only
+  when `promptText` is truthy. RATIONALE: pre-merge, the free-standing chip rendered from
+  `promptContext` independently of `promptText`; the cross-panel live-context flow
+  (`CosmosCrossPanelLiveContext.dom.test.tsx`) seeds context WITHOUT text. Guarding the merged box on
+  `promptText` alone would have dropped the context header in that flow (2 tests went red). The
+  OR-guard preserves the prior "context shows whenever captured" behavior under the merged box and
+  keeps FR-010 parity. No spec change — this restores existing behavior, doesn't add scope.
+- **2026-06-29 (user follow-up, in-scope)**: glyph SIZE moved onto the shared breadcrumb
+  `DECORATION` class (`size-3 shrink-0 opacity-70`). Pre-merge the `Badge`'s `[&>svg]:size-3` sized
+  the icons; once the breadcrumb left the Badge's direct-svg scope (in-bubble header), the lucide/
+  brand SVGs fell back to their 24px/`1em` default and read oversized (user: "tab icon이랑 cosmos
+  icon 크기 너무커"). Baking `size-3` on the glyph itself uniformly sizes panel/cosmos/tab/dock/
+  chevron glyphs on ANY container.
 
 ---
 

@@ -123,6 +123,28 @@ describe('PromptComposer docked mode — DOM behavior (CMP-MODE-01)', () => {
     expect(screen.queryByRole('note')).not.toBeInTheDocument()
   })
 
+  it('a NEW chip after a `×` dismiss RE-REGISTERS in the docked composer (cosmos-panel-tab-list-v1 bugfix)', () => {
+    const chipA: ContextChipData = {
+      kind: 'panel-tab',
+      panel: { id: 'jira', label: 'Jira' },
+      tab: { id: 'j1', label: 'Sprint board' }
+    }
+    const { rerender } = render(<DockedHarness contextChip={chipA} />)
+    expect(screen.getByRole('note')).toBeInTheDocument()
+    // Dismiss the chip (the `×`).
+    fireEvent.click(screen.getByRole('button', { name: /Remove Sprint board/ }))
+    expect(screen.queryByRole('note')).not.toBeInTheDocument()
+    // A fresh selection arrives — the SAME tab re-clicked mints a NEW chip object (same content).
+    // BEFORE the fix the docked `contextDismiss` stayed 'all' and gated this off; now it re-shows.
+    const chipReclick: ContextChipData = {
+      kind: 'panel-tab',
+      panel: { id: 'jira', label: 'Jira' },
+      tab: { id: 'j1', label: 'Sprint board' }
+    }
+    rerender(<DockedHarness contextChip={chipReclick} />)
+    expect(screen.getByRole('note')).toBeInTheDocument()
+  })
+
   it('renders the input ALWAYS-OPEN on mount: a textarea is present, no collapsed logo (FR-001)', () => {
     render(<DockedHarness />)
     // The textarea is immediately present (no click-to-reveal).

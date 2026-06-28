@@ -758,8 +758,10 @@ status — never tokens or transcript).
   (same object) and are INDEPENDENT: channel (a) ALWAYS derives `viewContext` from `ctx.dock` even
   when the marker is dropped, so a marker failure degrades ONLY the timeline display, never grounding.
   The Cosmos timeline parses the marker per user-prompt turn in `parseTranscript` (main), attaching
-  `UserPromptTurn.context` + stripping the marker, and renders it as the read-only `PromptContextChip`
-  (§4.x render); the embedded engine reads the block per the sandbox `CLAUDE.md` (§3).
+  `UserPromptTurn.context` + stripping the marker, and renders it as the read-only context breadcrumb —
+  the static in-bubble HEADER of the combined user-message box (`UserMessageBox`: header → divider →
+  body), per cosmos-context-message-combined-box-v1, NOT a chip above the bubble (§4.x render); the
+  embedded engine reads the block per the sandbox `CLAUDE.md` (§3).
 
 ### 4.11 Panel tabs: VS Code-style tabs within each rail panel (renderer)
 

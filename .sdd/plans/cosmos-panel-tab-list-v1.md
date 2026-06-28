@@ -256,6 +256,17 @@ for confirmation):
   - **One small composer fix:** the docked composer now resets `contextDismiss` to `'none'` after a
     submit (it returns early without the floating-path `collapse()` that used to reset it), so a NEXT
     panel+tab selection's chip is not suppressed by a prior `'all'` dismiss.
+  - **BUG (docked composer never rendered the chip):** the docked `PromptComposer` render branch
+    (the Cosmos composer) previously OMITTED the `ContextChip` entirely — so a tree-click selection
+    had no visible affordance ("context에 들어가는 ui가 전혀 없음"). The docked branch now renders the SAME
+    chip the floating composer does (between textarea + Send). Guarded by a new
+    `PromptComposerDocked.dom.test.tsx` case.
+  - **BUG (re-click after dismiss didn't register):** after the docked chip `×`, the composer-local
+    `contextDismiss` stayed `'all'` (the docked composer never collapses, the floating reset path), so
+    a re-selected tab's fresh chip was gated off. Fix: a DOCKED-only effect resets `contextDismiss`
+    to `'none'` whenever the `contextChip` REFERENCE changes (CosmosPanel mints a fresh chip object on
+    every tree click, even re-clicking the same tab) — floating per-compose dismiss semantics
+    untouched. Regression test added.
 
 ---
 

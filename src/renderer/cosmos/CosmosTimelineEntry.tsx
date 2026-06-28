@@ -25,8 +25,9 @@ import { ActiveTabSurface } from '../generative/ActiveTabSurface'
 import { Avatar } from '../components/ui/avatar'
 import { CosmosGlyphIcon } from '../app/surfaceIcons'
 import { TypingIndicator } from './TypingIndicator'
-import { PromptContextChip } from './PromptContextChip'
+import { PromptContextBreadcrumb } from './PromptContextChip'
 import type { TimelineEntry } from './cosmosConversation'
+import type { PromptContext } from '../../shared/promptContext/promptContext'
 import type { A2uiSurfaceUpdate } from '../../shared/ipc'
 
 /** Mount one generated surface inline via the existing standard-catalog host (FR-110). */
@@ -93,13 +94,15 @@ function ToolCallRow({
 
 export function CosmosTimelineEntry({ entry }: { entry: TimelineEntry }): React.JSX.Element | null {
   if (entry.kind === 'live-generating') {
-    // cosmos-timeline-prompt-context-v1 (design §1): chip → bubble → typing dots. The chip names
-    // the captured context and sits ABOVE the user prompt; the dots are the assistant. Live +
-    // historical use the same component, so the chip is stable across the confirm (FR-024).
+    // cosmos-context-message-combined-box-v1 (design §1): the captured context + the user prompt
+    // are ONE combined `UserMessageBox` (context header → divider → always-visible body), then the
+    // assistant typing dots below. Live + historical render the IDENTICAL box, so it is stable
+    // across the live→confirmed transition (FR-010/FR-024).
     return (
       <div className="flex flex-col gap-1">
-        <PromptContextChip context={entry.promptContext} />
-        {entry.promptText && <UserBubble text={entry.promptText} />}
+        {(entry.promptText || entry.promptContext) && (
+          <UserMessageBox text={entry.promptText ?? ''} context={entry.promptContext} />
+        )}
         <AssistantRow>
           <TypingIndicator />
         </AssistantRow>
@@ -113,15 +116,11 @@ export function CosmosTimelineEntry({ entry }: { entry: TimelineEntry }): React.
   const { turn } = entry
   switch (turn.kind) {
     case 'user-prompt':
-      // cosmos-timeline-prompt-context-v1 (design §1): stack the read-only context chip ABOVE
-      // the bubble in a flex column; with no context the chip returns null and this renders
-      // exactly today's bare bubble (FR-021).
-      return (
-        <div className="flex flex-col gap-1">
-          <PromptContextChip context={turn.context} />
-          <UserBubble text={turn.text} />
-        </div>
-      )
+      // cosmos-context-message-combined-box-v1 (design §1): the read-only context breadcrumb is
+      // the static HEADER of the combined `UserMessageBox`; with no context the box renders exactly
+      // today's plain bubble (no header, no divider — FR-009). Identical to the live branch.
+      return <UserMessageBox text={turn.text} context={turn.context} />
+
     case 'assistant-text':
       return (
         <AssistantRow>
@@ -147,20 +146,53 @@ export function CosmosTimelineEntry({ entry }: { entry: TimelineEntry }): React.
 }
 
 /**
- * A user prompt bubble — right-aligned, filled with the brand `--primary` color
- * (chat-surface canon, DESIGN.md §15 / D-14). `bg-primary` / `text-primary-foreground`
- * is the conventional "my message" accent bubble (a sent message reads as the brand
- * accent, the agent's replies stay plain) — chosen by product over a neutral surface.
- * Width is the SHARED `max-w-chat-bubble` token (the same one the chip uses, so the
- * two never drift). Assistant replies stay BARE on the panel `bg-card` (no bubble) →
- * user-accent-right / assistant-plain-left.
+ * UserMessageBox — the combined user-prompt box (cosmos-context-message-combined-box-v1,
+ * design §1 / DESIGN.md D-11/D-14/D-18). ONE right-aligned brand-accent bubble that, when a
+ * PromptContext is present, carries the submit-time context as a STATIC header section, a hairline
+ * divider, then the always-visible message body — so a prompt and the screen it was sent from read
+ * as ONE self-contained unit. This replaces the prior two-element stack (a `Badge`-pill
+ * `PromptContextChip` ABOVE a separate `UserBubble`); placement superseded by D-11.
+ *
+ * Color/geometry (always): `bg-primary` / `text-primary-foreground`, `rounded-2xl rounded-br-sm`,
+ * `max-w-chat-bubble` (2/3) — the unchanged "my message" accent (D-14). `overflow-hidden` clips the
+ * full-bleed divider to the rounded corners.
+ *
+ * Header (context PRESENT only): the shared, tone-neutral `PromptContextBreadcrumb` in a
+ * `text-primary-foreground/80` container (≈5.4:1 AA; decoration softens to `opacity-70`, ≈3:1) — the
+ * D-18 fix for the breadcrumb now sitting on the pink fill instead of the old `bg-secondary` pill.
+ * The header is STATIC: no toggle, no `aria-expanded`, no click target (FR-005). The body is ALWAYS
+ * visible (FR-006) — the explicit OPPOSITE of the collapsible `ToolCallRow`.
+ *
+ * Null/absent context (FR-009 / SC-004): the box renders ONLY the body — no header, no divider —
+ * visually identical to the prior plain `UserBubble`. The divider never appears alone.
+ *
+ * Body: today's escaped React text with `whitespace-pre-wrap break-words` (multi-line preserved,
+ * marker already stripped upstream — FR-011). Assistant replies stay BARE on the panel `bg-card`
+ * (no bubble) → user-accent-right / assistant-plain-left.
  */
-function UserBubble({ text }: { text: string }): React.JSX.Element {
+function UserMessageBox({
+  text,
+  context
+}: {
+  text: string
+  context?: PromptContext
+}): React.JSX.Element {
   return (
     <div className="flex justify-end">
-      <p className="max-w-chat-bubble whitespace-pre-wrap break-words rounded-2xl rounded-br-sm bg-primary px-3 py-1.5 text-body-sm text-primary-foreground">
-        {text}
-      </p>
+      <div className="max-w-chat-bubble overflow-hidden rounded-2xl rounded-br-sm bg-primary text-body-sm text-primary-foreground">
+        {context && (
+          <div className="px-3 pt-1.5 pb-1 text-caption text-primary-foreground/80">
+            <PromptContextBreadcrumb context={context} />
+          </div>
+        )}
+        <p
+          className={`whitespace-pre-wrap break-words px-3 py-1.5 ${
+            context ? 'border-t border-primary-foreground/20' : ''
+          }`}
+        >
+          {text}
+        </p>
+      </div>
     </div>
   )
 }
