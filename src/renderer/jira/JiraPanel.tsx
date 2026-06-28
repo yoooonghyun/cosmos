@@ -63,9 +63,9 @@ import {
 import { surfaceSpinnerVisible } from '../composer/promptComposerLogic'
 import { shouldAutoLoadDefaultView } from '../tabs/panelTabs'
 import { useTabShortcuts } from '../tabs/useTabShortcuts'
-import { useConfirm } from '../useConfirm'
+import { useConfirm } from '../confirm/useConfirm'
 import { ConfirmDialog } from '@/components/ui/confirm-dialog'
-import { confirmCopy } from '../confirmLogic'
+import { confirmCopy } from '../confirm/confirmLogic'
 import type { UiRenderPayload } from '../../shared/ipc'
 import type { JiraConnectionStatus } from '../../shared/types/jira'
 

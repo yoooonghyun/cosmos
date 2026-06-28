@@ -90,9 +90,9 @@ import { canSubmitSlackMessage } from './slackComposerLogic'
 import { useSlackScrollToLatest } from './useSlackScrollToLatest'
 import { useSlackScrollPaginate } from './useSlackScrollPaginate'
 import { loadAllChannels } from './slackChannelSearchLogic'
-import { useConfirm } from '../useConfirm'
+import { useConfirm } from '../confirm/useConfirm'
 import { ConfirmDialog } from '@/components/ui/confirm-dialog'
-import { confirmCopy } from '../confirmLogic'
+import { confirmCopy } from '../confirm/confirmLogic'
 import type {
   SlackChannel,
   SlackConnectionStatus,

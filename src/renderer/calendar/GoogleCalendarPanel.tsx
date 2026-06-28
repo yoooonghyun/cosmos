@@ -82,9 +82,9 @@ import { useRestoredGenerativePanel } from '../session/SessionProvider'
 import { seedHiddenCalendarIds } from './googleCalendarCatalog/logic'
 import { surfaceSpinnerVisible } from '../composer/promptComposerLogic'
 import { useTabShortcuts } from '../tabs/useTabShortcuts'
-import { useConfirm } from '../useConfirm'
+import { useConfirm } from '../confirm/useConfirm'
 import { ConfirmDialog } from '@/components/ui/confirm-dialog'
-import { confirmCopy } from '../confirmLogic'
+import { confirmCopy } from '../confirm/confirmLogic'
 import type { GoogleCalendarConnectionStatus } from '../../shared/types/googleCalendar'
 
 /* ------------------------------------------------------------------------- *

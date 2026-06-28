@@ -28,9 +28,9 @@ import { Switch } from '@/components/ui/switch'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { cn } from '@/lib/utils'
 import { shouldShowStatusDot, type ConnectionState } from './settingsStatusDot'
-import { useConfirm } from '../useConfirm'
+import { useConfirm } from '../confirm/useConfirm'
 import { ConfirmDialog } from '@/components/ui/confirm-dialog'
-import { confirmCopy } from '../confirmLogic'
+import { confirmCopy } from '../confirm/confirmLogic'
 
 /** A live per-integration connection status (non-secret identity only). */
 interface LiveStatus {
