@@ -31,7 +31,7 @@
 import { spawn as nodeSpawn, type ChildProcess } from 'node:child_process'
 import { isExecutableResolvable } from '../pty/ptyManager'
 import { allowedToolForTarget, groundingPromptForTarget, renderMcpConfigJsonForTarget } from '../mcpConfig'
-import { viewContextGroundingClause } from '../viewContextGrounding'
+import { viewContextGroundingClause } from '../generative/viewContextGrounding'
 import { decideSubmit } from './agentSessionQueue'
 import {
   isAlreadyInUseError,

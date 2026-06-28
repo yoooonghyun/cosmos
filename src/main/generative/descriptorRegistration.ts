@@ -18,8 +18,8 @@
  * Pure: no dispatcher, no IPC, no secrets — only a `{ descriptor, agentSpec }` → plan lookup.
  */
 
-import type { A2uiSurfaceUpdate } from '../shared/ipc'
-import type { AdapterDescriptor } from '../shared/types/adapter'
+import type { A2uiSurfaceUpdate } from '../../shared/ipc'
+import type { AdapterDescriptor } from '../../shared/types/adapter'
 import type { AdapterRegisterOptions } from './adapterDispatcher'
 import { resolveBindOptionsForSource, resolveDescriptorShell } from './descriptorShell'
 

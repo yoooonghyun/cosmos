@@ -14,7 +14,7 @@
  * warn-and-ignore) rather than mis-resolving another call (FR-012, SC-006).
  */
 
-import type { A2uiAction } from '../shared/ipc'
+import type { A2uiAction } from '../../shared/ipc'
 
 /** A pending render_ui call awaiting the user's interaction. */
 interface PendingCall {

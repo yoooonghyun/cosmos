@@ -24,7 +24,7 @@ import type {
   AdapterFetchResult,
   AdapterRegisterOptions,
   AdapterResolver
-} from '../adapterDispatcher'
+} from '../generative/adapterDispatcher'
 import type { AdapterDescriptor } from '../../shared/types/adapter'
 import { JiraAdapterSource } from '../../shared/types/jira'
 import { AdapterSourcePath } from '../../shared/types/adapter'

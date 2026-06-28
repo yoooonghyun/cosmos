@@ -1,7 +1,7 @@
 import { describe, it, expect, vi } from 'vitest'
 import { rebindAgentSurface, planRegions } from './specRebinder'
-import type { A2uiSurfaceUpdate } from '../shared/ipc'
-import type { AdapterBinding } from '../shared/types/adapter'
+import type { A2uiSurfaceUpdate } from '../../shared/ipc'
+import type { AdapterBinding } from '../../shared/types/adapter'
 
 /* refreshable-custom-generative-ui multi-region — main rebinds an agent's LITERAL-prop custom
  * surface into a `{path}`-bound, refreshable one. The kanban case the user hit: the model emits

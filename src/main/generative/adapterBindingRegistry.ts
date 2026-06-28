@@ -22,7 +22,7 @@
 
 import type { AdapterRegisterOptions } from './adapterDispatcher'
 import { resolveBindOptionsForSource } from './descriptorShell'
-import { LIST_SOURCE_DATA_PROP } from '../shared/types/adapter'
+import { LIST_SOURCE_DATA_PROP } from '../../shared/types/adapter'
 
 /**
  * The rows prop each LIST `dataSource`'s container component reads (FR — multi-region). The

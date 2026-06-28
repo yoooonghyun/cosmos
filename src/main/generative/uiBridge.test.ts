@@ -25,8 +25,8 @@ import {
   encodeBridgeMessage,
   type BridgeRenderRequest,
   type BridgeServerMessage
-} from '../shared/bridge'
-import type { A2uiSurfaceUpdate, UiRenderPayload, UiRenderTarget } from '../shared/ipc'
+} from '../../shared/bridge'
+import type { A2uiSurfaceUpdate, UiRenderPayload, UiRenderTarget } from '../../shared/ipc'
 
 /** Open a client socket to the bridge and resolve once connected. */
 function dial(socketPath: string): Promise<Socket> {

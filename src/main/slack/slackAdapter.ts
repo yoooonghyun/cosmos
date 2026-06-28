@@ -30,7 +30,7 @@ import type {
   AdapterFetchResult,
   AdapterRegisterOptions,
   AdapterResolver
-} from '../adapterDispatcher'
+} from '../generative/adapterDispatcher'
 import type { AdapterDescriptor } from '../../shared/types/adapter'
 import { AdapterSourcePath } from '../../shared/types/adapter'
 import { SlackAdapterSource } from '../../shared/types/slack'

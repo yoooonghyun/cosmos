@@ -15,4 +15,4 @@
 export {
   firstUnboundDataContainerId,
   specHasUnboundDataContainer
-} from '../shared/types/dataBearingSpec'
+} from '../../shared/types/dataBearingSpec'

@@ -19,17 +19,17 @@
 import { createServer, type Server, type Socket } from 'node:net'
 import { randomUUID } from 'node:crypto'
 import { existsSync, unlinkSync } from 'node:fs'
-import { bridgeSocketPath, encodeBridgeMessage, type BridgeClientMessage } from '../shared/bridge'
-import { DEFAULT_UI_RENDER_TARGET } from '../shared/ipc'
+import { bridgeSocketPath, encodeBridgeMessage, type BridgeClientMessage } from '../../shared/bridge'
+import { DEFAULT_UI_RENDER_TARGET } from '../../shared/ipc'
 import type {
   A2uiAction,
   A2uiSurfaceUpdate,
   UiDataModelPayload,
   UiRenderPayload,
   UiRenderTarget
-} from '../shared/ipc'
-import type { AdapterBinding, AdapterDescriptor } from '../shared/types/adapter'
-import { validateAdapterBindings, validateAdapterDescriptor } from '../shared/validate'
+} from '../../shared/ipc'
+import type { AdapterBinding, AdapterDescriptor } from '../../shared/types/adapter'
+import { validateAdapterBindings, validateAdapterDescriptor } from '../../shared/validate'
 import { specHasUnboundDataContainer } from './dataBearingWarning'
 
 /** Logger shape (injectable for clarity / future tests). */

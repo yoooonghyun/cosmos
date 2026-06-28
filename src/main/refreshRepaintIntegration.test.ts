@@ -40,7 +40,7 @@ import { setValueByPath, resolveValue } from '@a2ui-sdk/utils/0.9'
 import type { FormBindableValue } from '@a2ui-sdk/types/0.9'
 
 import { applyDataModel, type ProcessMessage } from '../renderer/dataModelApply'
-import { AdapterDispatcher } from './adapterDispatcher'
+import { AdapterDispatcher } from './generative/adapterDispatcher'
 import {
   jiraAdapterResolver,
   jiraIssueRow,
@@ -48,7 +48,7 @@ import {
   JIRA_LIST_PATH,
   type JiraAdapterManager
 } from './jira/jiraAdapter'
-import { planAgentSurfaceRegistration } from './descriptorRegistration'
+import { planAgentSurfaceRegistration } from './generative/descriptorRegistration'
 import type { AdapterDescriptor } from '../shared/types/adapter'
 import type { A2uiSurfaceUpdate, UiDataModelPayload } from '../shared/ipc'
 import type {

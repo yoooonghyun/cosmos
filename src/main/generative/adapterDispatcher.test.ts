@@ -5,8 +5,8 @@ import {
   type AdapterFetchResult,
   type AdapterResolver
 } from './adapterDispatcher'
-import type { AdapterDescriptor } from '../shared/types/adapter'
-import type { UiDataModelPayload } from '../shared/ipc'
+import type { AdapterDescriptor } from '../../shared/types/adapter'
+import type { UiDataModelPayload } from '../../shared/ipc'
 
 /* jira-generative-adapter-v1 — SHARED dispatcher (FR-009..FR-018, FR-021, FR-022).
  * Panel-agnostic: the resolver is injected, so these tests use a fake list source. */

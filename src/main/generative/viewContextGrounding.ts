@@ -16,7 +16,7 @@
  * renderer already displays — never a token, secret, or credential.
  */
 
-import { DEFAULT_UI_RENDER_TARGET, type UiRenderTarget, type ViewContext } from '../shared/ipc'
+import { DEFAULT_UI_RENDER_TARGET, type UiRenderTarget, type ViewContext } from '../../shared/ipc'
 
 function present(value: string | undefined): value is string {
   return typeof value === 'string' && value.trim().length > 0

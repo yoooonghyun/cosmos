@@ -25,15 +25,15 @@
  * FR-015).
  */
 
-import type { A2uiSurfaceUpdate } from '../shared/ipc'
-import type { AdapterDescriptor } from '../shared/types/adapter'
+import type { A2uiSurfaceUpdate } from '../../shared/ipc'
+import type { AdapterDescriptor } from '../../shared/types/adapter'
 import type { AdapterRegisterOptions } from './adapterDispatcher'
-import { buildSlackBoundShell } from './slack/slackSurfaceBuilder'
-import { buildConfluenceBoundShell } from './confluence/confluenceSurfaceBuilder'
-import { buildJiraBoundShell } from './jira/jiraSurfaceBuilder'
-import { slackBindOptionsForSource } from './slack/slackAdapter'
-import { confluenceBindOptionsForSource } from './confluence/confluenceAdapter'
-import { jiraBindOptionsForSource } from './jira/jiraAdapter'
+import { buildSlackBoundShell } from '../slack/slackSurfaceBuilder'
+import { buildConfluenceBoundShell } from '../confluence/confluenceSurfaceBuilder'
+import { buildJiraBoundShell } from '../jira/jiraSurfaceBuilder'
+import { slackBindOptionsForSource } from '../slack/slackAdapter'
+import { confluenceBindOptionsForSource } from '../confluence/confluenceAdapter'
+import { jiraBindOptionsForSource } from '../jira/jiraAdapter'
 
 /** The composed bound SHELL + the bind options for a registerable descriptor. */
 export interface DescriptorShell {

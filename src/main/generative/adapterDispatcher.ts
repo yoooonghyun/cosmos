@@ -32,13 +32,13 @@
  * Pure of Electron: deps are injected so it is unit-testable without a window.
  */
 
-import type { UiDataModelPayload } from '../shared/ipc'
+import type { UiDataModelPayload } from '../../shared/ipc'
 import type {
   AdapterDescriptor,
   AdapterPageDirection,
   AdapterPaginationMode
-} from '../shared/types/adapter'
-import { AdapterDataKey, regionFlagPath, regionListPath } from '../shared/types/adapter'
+} from '../../shared/types/adapter'
+import { AdapterDataKey, regionFlagPath, regionListPath } from '../../shared/types/adapter'
 
 /** Logger shape (injectable for tests). */
 export type WarnFn = (message: string, ...args: unknown[]) => void

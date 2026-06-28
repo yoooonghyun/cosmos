@@ -13,20 +13,20 @@
 
 import { describe, it, expect } from 'vitest'
 import { resolveDescriptorShell } from './descriptorShell'
-import { SlackAdapterSource } from '../shared/types/slack'
-import { ConfluenceAdapterSource } from '../shared/types/confluence'
-import { JiraAdapterSource } from '../shared/types/jira'
+import { SlackAdapterSource } from '../../shared/types/slack'
+import { ConfluenceAdapterSource } from '../../shared/types/confluence'
+import { JiraAdapterSource } from '../../shared/types/jira'
 import {
   SURFACE_SLACK_CHANNELS,
   SURFACE_SLACK_HISTORY,
   SURFACE_SLACK_SEARCH
-} from './slack/slackSurfaceBuilder'
+} from '../slack/slackSurfaceBuilder'
 import {
   SURFACE_CONFLUENCE_FEED,
   SURFACE_CONFLUENCE_SEARCH,
   SURFACE_CONFLUENCE_PAGE
-} from './confluence/confluenceSurfaceBuilder'
-import { SURFACE_DEFAULT_VIEW, SURFACE_ISSUE_DETAIL } from './jira/jiraSurfaceBuilder'
+} from '../confluence/confluenceSurfaceBuilder'
+import { SURFACE_DEFAULT_VIEW, SURFACE_ISSUE_DETAIL } from '../jira/jiraSurfaceBuilder'
 
 const desc = (dataSource: string) => ({ dataSource, query: {} })
 

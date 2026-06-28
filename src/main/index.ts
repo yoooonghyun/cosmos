@@ -138,7 +138,7 @@ import {
   renderUiMcpServerEntry,
   slackRenderUiMcpServerEntry
 } from './mcpConfig'
-import { UiBridge } from './uiBridge'
+import { UiBridge } from './generative/uiBridge'
 import { SlackBridge } from './slack/slackBridge'
 import { SlackManager } from './slack/slackManager'
 import { SlackClient } from './integrations/slackClient'
@@ -160,7 +160,7 @@ import { runSlackOAuth, refreshSlackToken } from './integrations/slackOAuth'
 import { JiraBridge } from './jira/jiraBridge'
 import { JiraManager } from './jira/jiraManager'
 import { JiraActionDispatcher } from './jira/jiraActionDispatcher'
-import { AdapterDispatcher, type AdapterResolver } from './adapterDispatcher'
+import { AdapterDispatcher, type AdapterResolver } from './generative/adapterDispatcher'
 import { jiraAdapterResolver, jiraListBindOptions, jiraDetailBindOptions } from './jira/jiraAdapter'
 // slack-generative-adapter-v1 (FR-005/FR-015): the SAME shared AdapterDispatcher serves
 // Slack's bound lists. A composite resolver branches Slack vs Jira by dataSource (the two
@@ -174,10 +174,10 @@ import { slackAdapterResolver, slackBindOptionsForSource } from './slack/slackAd
 import { confluenceAdapterResolver, confluenceBindOptionsForSource } from './confluence/confluenceAdapter'
 // panel-refresh-v1 (OQ-5 = main-composes): resolve a descriptor → its bound shell + bind
 // options so an agent-composed surface carrying a descriptor renders refreshable.
-import { planAgentSurfaceRegistration } from './descriptorRegistration'
+import { planAgentSurfaceRegistration } from './generative/descriptorRegistration'
 // refreshable-custom-generative-ui (multi-region): rebind an agent's per-container literal
 // props to region-scoped `{path}` bindings + plan the regions to register/refresh.
-import { planRegions, rebindAgentSurface } from './specRebinder'
+import { planRegions, rebindAgentSurface } from './generative/specRebinder'
 import {
   buildBoundIssueListSurface,
   buildBoundIssueDetailSurface,
