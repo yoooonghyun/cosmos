@@ -32,7 +32,7 @@ import {
 // slack-generative-adapter-v1 (design §6): the bound lists' tail load-more reuses the
 // SHARED adapter control verbatim. Slack is append-only, so it registers LoadMoreButton
 // ONLY — never PaginationBar. Refresh moved to the panel chrome (panel-refresh-v1, FR-006).
-import { LoadMoreButton } from '../catalogShared/controls'
+import { LoadMoreButton } from '../../catalogShared/controls'
 // bug slack-generative-wrap-v1: the agent-emitted Column/Row are registered through these
 // width-clamped wrappers (not the raw SDK ones) so a long message line wraps to the panel
 // width instead of expanding the unclamped SDK flex container and overflowing horizontally.

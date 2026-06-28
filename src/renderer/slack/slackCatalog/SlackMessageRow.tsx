@@ -23,7 +23,7 @@ import { authorName, countLabel, formatTs, initials, shouldOpenThreadOnRowClick 
 import { parseMessageRuns } from './messageContent'
 import { SlackImageViewer } from './SlackImageViewer'
 import { SlackMessageImage } from './SlackMessageImage'
-import type { SlackImageRef } from '../../shared/types/slack'
+import type { SlackImageRef } from '../../../shared/types/slack'
 
 /**
  * The shared-row presentation contract (design §2.2) — a plain props object, NOT a

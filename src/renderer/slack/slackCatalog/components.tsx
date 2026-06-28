@@ -28,17 +28,17 @@ import { Alert, AlertDescription } from '@/components/ui/alert'
 import { cn } from '@/lib/utils'
 import { useSlackScrollToLatest } from '../useSlackScrollToLatest'
 import { useSlackScrollPaginate } from '../useSlackScrollPaginate'
-import { AdapterAction } from '../../shared/types/adapter'
+import { AdapterAction } from '../../../shared/types/adapter'
 // slack-generative-adapter-v1 (design §6): the bound Slack lists reuse the SHARED adapter
 // controls + binding helpers VERBATIM (the single definition the Jira catalog also uses).
 // Slack registers LoadMoreButton only — never PaginationBar (append-only). Refresh moved to
 // the panel chrome (panel-refresh-v1, FR-006) — no in-surface RefreshButton.
-import { LoadMoreButton, useBound, type Bound } from '../catalogShared/controls'
+import { LoadMoreButton, useBound, type Bound } from '../../catalogShared/controls'
 // slack-generative-message-parity-v1 (OQ-3 = full unification): the ONE canonical row,
 // shared with the native panel; the catalog list skeleton (design §5).
 import { SlackMessageRow } from './SlackMessageRow'
 import { MessageSkeleton } from './MessageSkeleton'
-import type { SlackImageRef } from '../../shared/types/slack'
+import type { SlackImageRef } from '../../../shared/types/slack'
 import {
   boundRows,
   buildOpenThreadContext,

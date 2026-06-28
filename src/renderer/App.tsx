@@ -8,7 +8,7 @@ import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/comp
 import { cn } from '@/lib/utils'
 import { TerminalPanel } from './terminal/TerminalPanel'
 import { CosmosPanel } from './CosmosPanel'
-import { SlackPanel } from './SlackPanel'
+import { SlackPanel } from './slack/SlackPanel'
 import { JiraPanel } from './JiraPanel'
 import { ConfluencePanel } from './ConfluencePanel'
 import { GoogleCalendarPanel } from './GoogleCalendarPanel'

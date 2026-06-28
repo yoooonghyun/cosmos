@@ -21,7 +21,7 @@
  * only data crossing the boundary is the non-secret channel id/name already carried today.
  */
 
-import type { SlackChannel, SlackPage, SlackResult } from '../shared/types/slack'
+import type { SlackChannel, SlackPage, SlackResult } from '../../shared/types/slack'
 
 /** A single page-fetch over the EXISTING `listChannels` IPC, threaded by cursor. */
 export type ListChannelsPage = (

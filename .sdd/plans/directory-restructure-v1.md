@@ -189,3 +189,10 @@ the user commits current work first, so the restructure lands on an otherwise-em
   confluence bullet omitted `confluenceManager.ts`(+test), but it is on disk and is plainly a
   confluence-domain file (mirrors slackManager/jiraManager). Moved it into
   `src/main/confluence/` with the rest of the cluster for consistency. Pure move + re-path.
+- **2026-06-28 — catalog `logic.test.ts` `import.meta.url` SDK paths (Phase 3).** The
+  `slackCatalog/jiraCatalog/confluenceCatalog` `logic.test.ts` files read SDK source via
+  `readFileSync(new URL('../../../node_modules/@a2ui-sdk/...', import.meta.url))`. These
+  depth-sensitive runtime paths are NOT covered by typecheck and break silently (ENOENT) when
+  the catalog nests one level deeper. Re-pathed the traversal by one `../` per nesting
+  (`../../../` → `../../../../`) as part of the move. Pure path re-target, no logic change.
+  (Also why every catalog-nesting group runs `npm test`, not just typecheck.)

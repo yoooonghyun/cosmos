@@ -25,7 +25,7 @@ import {
   DialogContent,
   DialogTitle
 } from '@/components/ui/dialog'
-import type { SlackImageRef } from '../../shared/types/slack'
+import type { SlackImageRef } from '../../../shared/types/slack'
 
 /**
  * The image viewer. `img` is the clicked thumbnail's opaque ref (+ optional alt); `null`

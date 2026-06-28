@@ -72,27 +72,27 @@ import {
   isOpenableThreadPermalink,
   messageListWrapClass
 } from './slackThreadPanelLogic'
-import { PanelTabStrip, type PanelTab } from './PanelTabStrip'
-import { PanelRefreshButton } from './PanelRefreshButton'
-import { panelRefreshInputsFor } from './panelRefreshLogic'
-import { PanelFooter } from './PanelFooter'
-import { ActiveTabSurface } from './ActiveTabSurface'
-import { usePublishComposer } from './ActiveComposerProvider'
-import { SurfaceSpinner } from './SurfaceSpinner'
-import { GlassDock } from './glassDock/GlassDock'
-import { useGenerativePanelTabs } from './useGenerativePanelTabs'
-import { contextChipFor, slackViewContext } from './viewContextCapture'
-import { useRestoredGenerativePanel } from './SessionProvider'
-import { surfaceSpinnerVisible } from './promptComposerLogic'
-import { usePerTabNav } from './usePerTabNav'
-import { useTabShortcuts } from './useTabShortcuts'
+import { PanelTabStrip, type PanelTab } from '../PanelTabStrip'
+import { PanelRefreshButton } from '../PanelRefreshButton'
+import { panelRefreshInputsFor } from '../panelRefreshLogic'
+import { PanelFooter } from '../PanelFooter'
+import { ActiveTabSurface } from '../ActiveTabSurface'
+import { usePublishComposer } from '../ActiveComposerProvider'
+import { SurfaceSpinner } from '../SurfaceSpinner'
+import { GlassDock } from '../glassDock/GlassDock'
+import { useGenerativePanelTabs } from '../useGenerativePanelTabs'
+import { contextChipFor, slackViewContext } from '../viewContextCapture'
+import { useRestoredGenerativePanel } from '../SessionProvider'
+import { surfaceSpinnerVisible } from '../promptComposerLogic'
+import { usePerTabNav } from '../usePerTabNav'
+import { useTabShortcuts } from '../useTabShortcuts'
 import { canSubmitSlackMessage } from './slackComposerLogic'
 import { useSlackScrollToLatest } from './useSlackScrollToLatest'
 import { useSlackScrollPaginate } from './useSlackScrollPaginate'
 import { loadAllChannels } from './slackChannelSearchLogic'
-import { useConfirm } from './useConfirm'
+import { useConfirm } from '../useConfirm'
 import { ConfirmDialog } from '@/components/ui/confirm-dialog'
-import { confirmCopy } from './confirmLogic'
+import { confirmCopy } from '../confirmLogic'
 import type {
   SlackChannel,
   SlackConnectionStatus,
@@ -103,7 +103,7 @@ import type {
   SlackSearchMatch,
   SlackSendResult,
   SlackUser
-} from '../shared/types/slack'
+} from '../../shared/types/slack'
 
 /* ------------------------------------------------------------------------- *
  * Helpers
