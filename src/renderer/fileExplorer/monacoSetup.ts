@@ -43,6 +43,17 @@ export function setupMonaco(): typeof monaco {
     return monaco
   }
   initialized = true
+  // Monaco rejects in-flight async work (tokenization / worker requests) with a `CancellationError`
+  // — `{ name: 'Canceled', message: 'Canceled' }` — whenever an editor or model is disposed mid-op
+  // (fast file-switching, or the FileViewer unmounting). It is benign by design, but surfaces as an
+  // "Uncaught (in promise) Canceled: Canceled" in the renderer console. Swallow ONLY that exact
+  // shape (everything else propagates untouched) so the console stays clean. Registered once.
+  window.addEventListener('unhandledrejection', (event) => {
+    const reason = event.reason as { name?: unknown; message?: unknown } | null
+    if (reason && (reason.name === 'Canceled' || reason.message === 'Canceled')) {
+      event.preventDefault()
+    }
+  })
   // The base editor worker covers read-only display for every language (no per-language worker).
   self.MonacoEnvironment = {
     getWorker: () => new EditorWorker()

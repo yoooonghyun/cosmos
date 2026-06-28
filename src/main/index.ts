@@ -61,6 +61,7 @@ import { matchShortcut } from './shortcutMatch'
 import { resolvePaneSpawn, type ResolvedPaneSpawn } from './paneSpawn'
 import {
   planResumeRetry,
+  recoverSessionLock,
   RESUME_RETRY_BACKOFF_MS,
   IN_USE_RETRY_CLEAR_SEQUENCE,
   type SessionLockEnv
@@ -463,6 +464,27 @@ function paneSpawnFor(
     overrideCwd,
     dirExistsOnDisk
   )
+}
+
+/**
+ * session-resume-relaunch-v5: proactively free a STALE/orphaned holder of a resumed pane's id
+ * BEFORE its first `--resume`. The common case after a dev-mode hard restart (Ctrl-C / HMR, which
+ * skip the `will-quit` reaper) is a dead-pid `~/.claude/sessions/<pid>.json` left behind: claude
+ * then rejects the resume "already in use", and the REACTIVE {@link onSessionInUseForPane} path
+ * recovers it on a 250ms backoff — but logs a scary `[session] in-use resume retry` warn for EVERY
+ * pane on EVERY launch. Sweeping the holder up front (reusing the SAME tested `recoverSessionLock`,
+ * with identical safety — never kills THIS process or its own live children via `isOwnProcess`)
+ * lets the resume succeed first try, removing both the noise and the backoff latency. No-op for a
+ * fresh (`--session-id`) spawn or a pane already running.
+ */
+function presweepResumeLock(paneId: string, spawn: ResolvedPaneSpawn): void {
+  if (!spawn.resume || ptyManager?.isRunning(paneId)) {
+    return
+  }
+  const id = spawn.args[0] === '--resume' ? spawn.args[1] : undefined
+  if (typeof id === 'string' && id !== '') {
+    recoverSessionLock(id, claudeSessionLockEnv)
+  }
 }
 
 /**
@@ -1099,7 +1121,9 @@ function registerIpcHandlers(): void {
     // session-resume-relaunch-v2: a renderer-driven start begins a FRESH recovery sequence, so
     // reset the in-use retry counter (a stale count from a prior pane lifecycle must not shorten it).
     terminalResumeAttempts.delete(payload.paneId)
-    ptyManager?.start(payload.paneId, paneSpawnFor(payload.paneId, sandboxDirCached, payload.cwd))
+    const spawn = paneSpawnFor(payload.paneId, sandboxDirCached, payload.cwd)
+    presweepResumeLock(payload.paneId, spawn)
+    ptyManager?.start(payload.paneId, spawn)
   })
 
   // terminal-open-directory-picker-v1 (FR-002/FR-003/FR-006): open the native OS
@@ -1171,7 +1195,9 @@ function registerIpcHandlers(): void {
     }
     // session-resume-relaunch-v2: a manual restart begins a fresh recovery sequence.
     terminalResumeAttempts.delete(payload.paneId)
-    ptyManager?.start(payload.paneId, paneSpawnFor(payload.paneId, sandboxDirCached))
+    const spawn = paneSpawnFor(payload.paneId, sandboxDirCached)
+    presweepResumeLock(payload.paneId, spawn)
+    ptyManager?.start(payload.paneId, spawn)
   })
 
   // panel-tabs v1 FR-023: dispose/kill the addressed pane's PTY on tab close. No
