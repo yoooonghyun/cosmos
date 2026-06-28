@@ -22,7 +22,7 @@ Use `./bug_report_template.md` (this skill directory) as base. Increment `N` if 
 
 Prime context from two code-intelligence systems before touching anything:
 
-- **agentmemory (canonical memory).** Call `memory_recall` / `memory_smart_search` with bug keywords AND symptom. Past bugs saved here as `bug` memories — recurring/previously-"fixed" defect, known gotcha, or prior decision explaining behavior often already recorded. Can short-circuit whole investigation.
+- **LLM wiki (canonical memory).** Call `wiki_query` (`mcp__plugin_oh-my-claudecode_t__wiki_query`) with bug keywords AND symptom (try the `debugging` category). Past bugs live as wiki `debugging` pages — recurring/previously-"fixed" defect, known gotcha, or prior decision explaining behavior often already recorded. Can short-circuit whole investigation. (**agentmemory is DEPRECATED** — its `bug` memories were migrated into the wiki `debugging` pages 2026-06-28; do NOT call `memory_*`.)
 - **codegraph (code structure).** Run `codegraph_explore` on symbols/area named in report to see current structure before forming hypothesis. If reports no project loaded, run `codegraph init .` once.
 
 As with sdd, this primes *orchestrator's* triage judgement. Does **not** replace routed agent's own grounding — `developer`/`designer`/`architect` each re-investigate with same tools when they own analysis. Delegate the *investigation*, not just the edit.
@@ -62,7 +62,7 @@ Decide which **layer** defect lives in — picks owning agent. Record classifica
 | The **intended behavior itself** is wrong, missing, contradictory, or underspecified — fixing it requires changing the contract (spec/architecture), not just the code | **Spec/architecture defect** | `architect` (then `developer` to implement) |
 
 Routing rules:
-- **Delegate to owning agent via Agent tool.** Hand it bug report path + reproduction; instruct it to ground itself with codegraph + agentmemory (don't pre-paste your findings as substitute for its own investigation), own Steps 3–4 for its layer.
+- **Delegate to owning agent via Agent tool.** Hand it bug report path + reproduction; instruct it to ground itself with codegraph + the LLM wiki (`wiki_query`; don't pre-paste your findings as substitute for its own investigation), own Steps 3–4 for its layer.
 - **Design defects still need code.** `designer` has no Bash, writes no feature code: revises design (tokens / `components/ui/` / design spec), then hands build to `developer`. Design fix = `designer` → `developer` handoff, not designer-only.
 - **Spec defects loop back.** If behavior specified wrong, `architect` corrects spec/`docs/ARCHITECTURE.md` first, then `developer` implements corrected contract. Don't let developer silently redefine intended behavior.
 - **When fix reveals different class, re-route.** Defect first read as "implementation" may be design/spec gap (or vice-versa). Escalate rather than forcing fix into wrong layer — as `developer` escalates scope to `architect`.
@@ -131,7 +131,7 @@ If verification fails, return to Step 3 — root cause was wrong or incomplete.
 
 Finalize cycle:
 - Update bug report with final root cause, fix, test, verification result; set status to Fixed.
-- **Save a `bug` memory** with `memory_save` (agentmemory): symptom, real root cause, fix — so defect recalled in Step 0 of future cycles. Highest-value output; bug not remembered = bug that recurs.
+- **Save the bug to the LLM wiki** with `wiki_ingest` (`category: "debugging"`): symptom, real root cause, fix — so the defect is recalled in Step 0 of future cycles (merges into the existing `cosmos debugging: …` pages). Highest-value output; bug not remembered = bug that recurs. (agentmemory `memory_save` is DEPRECATED — do NOT use it.)
 - If bug exposed gotcha, missing invariant, or pattern worth enforcing, reflect in `docs/ARCHITECTURE.md` and/or `CLAUDE.md` (owned by `architect` for arch-level facts).
 
 Then invoke **`wrap-up`** skill to propagate cycle's durable learnings into living documents and reconcile `TODO.md`:

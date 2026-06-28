@@ -23,10 +23,12 @@ Use WebFetch tool to get raw content, write to correct path before proceeding.
 Before writing spec, prime context from two code-intelligence systems so cycle builds on
 what exists instead of rediscovering:
 
-- **agentmemory (canonical memory).** Call `memory_recall` / `memory_smart_search` (agentmemory
-  MCP) with feature keywords to surface prior decisions, preferences, patterns, past bugs
-  relevant to work. agentmemory = canonical cross-session memory for SDD workflow — consult
-  at start of every cycle, let results inform spec/plan.
+- **LLM wiki (canonical memory).** Call `wiki_query` (`mcp__plugin_oh-my-claudecode_t__wiki_query`)
+  with feature keywords/tags to surface prior decisions, preferences, patterns, past bugs relevant
+  to work. The LLM wiki = canonical cross-session memory for the SDD workflow — consult at start of
+  every cycle, let results inform spec/plan; persist new durable knowledge with `wiki_ingest`.
+  (**agentmemory is DEPRECATED** — its memories were migrated into the wiki 2026-06-28; do NOT call
+  `memory_*`.)
 - **codegraph (code structure).** Run `codegraph_explore` (or `codegraph_search`) on symbols
   and areas feature touches to learn current structure before proposing changes. codegraph
   indexes every symbol/edge/file, sub-millisecond — prefer one `codegraph_explore` call over
@@ -34,7 +36,7 @@ what exists instead of rediscovering:
 
 Primes orchestrator's own understanding so it frames delegation and judges ambiguity. Does
 **not** replace each agent's own grounding: `architect`, `developer`, `designer` themselves
-equipped with codegraph + agentmemory and MUST investigate directly when owning a step.
+equipped with codegraph + the LLM wiki and MUST investigate directly when owning a step.
 Delegate the *investigation*, not just writing — do not pre-gather findings here and paste
 into subagent's prompt as substitute for it grounding itself (subagent's fresh context
 rebuilt with same tools, sub-millisecond).

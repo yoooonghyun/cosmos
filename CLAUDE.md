@@ -26,7 +26,7 @@ cosmos = Conductor-style Electron app embed Claude Code as engine: show real Cla
 ## Behavioral rules
 
 - **Read before writing.** `docs/ARCHITECTURE.md` = ground truth for design; `docs/DEVELOPMENT.md`
-  for conventions. Ground self w/ codegraph + agentmemory, not guess.
+  for conventions. Ground self w/ codegraph + LLM wiki (`wiki_query`), not guess.
 - **One typed IPC contract** in `src/shared/ipc.ts`; never define channel strings ad hoc. Every
   cross-process payload validated at main-process boundary — invalid payloads warn + ignored,
   never crash.
@@ -54,9 +54,11 @@ cosmos = Conductor-style Electron app embed Claude Code as engine: show real Cla
   step). SDD steps are sequential (spec→plan→implement), so reserve true parallelism (multiple
   background agents at once, or team mode) for independent multi-track work.
 - **SDD agents (`architect`/`developer`/`designer`) equipped w/ codegraph +
-  agentmemory, must ground own investigation w/ them** — `codegraph_explore` for
-  code structure, `memory_recall`/`memory_smart_search` for prior decisions, `memory_save` to
-  persist new. Do NOT have orchestrator pre-gather findings + embed into subagent prompt;
+  LLM wiki, must ground own investigation w/ them** — `codegraph_explore` for
+  code structure, `wiki_query` for prior decisions/bugs/patterns, `wiki_ingest` to
+  persist new. **agentmemory is DEPRECATED** (its 306 memories were migrated into the LLM wiki
+  2026-06-28); use `wiki_query`/`wiki_ingest` (`mcp__plugin_oh-my-claudecode_t__wiki_*`), NOT
+  `memory_*`. Do NOT have orchestrator pre-gather findings + embed into subagent prompt;
   delegate investigation, not just writing. (Subagent starts fresh context, but has tools to
   rebuild grounding it needs.)
 - **UI-bearing features add design step** (**`design`** skill, owned by
