@@ -24,8 +24,8 @@ import {
   type SessionSnapshot,
   type TerminalPanelSnapshot,
   type TerminalTabSnapshot
-} from '../shared/ipc'
-import { validateAdapterBindings, validateAdapterDescriptor } from '../shared/validate'
+} from '../../shared/ipc'
+import { validateAdapterBindings, validateAdapterDescriptor } from '../../shared/validate'
 
 /** Optional structured warning sink (defaults to console.warn) — mirrors validate.ts. */
 export type WarnFn = (message: string, ...rest: unknown[]) => void

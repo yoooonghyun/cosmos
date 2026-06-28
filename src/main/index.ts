@@ -119,8 +119,8 @@ import {
   validateConversationResult
 } from '../shared/validate'
 import { PtyManager } from './pty/ptyManager'
-import { SessionStore } from './sessionStore'
-import { validateSnapshot } from './sessionSnapshot'
+import { SessionStore } from './session/sessionStore'
+import { validateSnapshot } from './session/sessionSnapshot'
 import { AgentRunner } from './agent/agentRunner'
 import { AgentSessionStore } from './agent/agentSessionStore'
 import { TranscriptReader } from './transcriptReader'

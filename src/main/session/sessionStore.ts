@@ -16,7 +16,7 @@
  * Electron, and the on-disk bytes can be asserted to contain no secret (SC-004).
  */
 
-import type { SessionSnapshot } from '../shared/ipc'
+import type { SessionSnapshot } from '../../shared/ipc'
 import { validateSnapshot, type WarnFn } from './sessionSnapshot'
 
 /** The slice of `fs` the store needs (injectable for tests). Adds atomic rename. */

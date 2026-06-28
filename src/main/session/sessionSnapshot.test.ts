@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest'
-import { SESSION_SCHEMA_VERSION, type SessionSnapshot } from '../shared/ipc'
+import { SESSION_SCHEMA_VERSION, type SessionSnapshot } from '../../shared/ipc'
 import {
   emptyEnabledIntegrations,
   emptySnapshot,

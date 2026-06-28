@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest'
-import { SESSION_SCHEMA_VERSION, type SessionSnapshot } from '../shared/ipc'
+import { SESSION_SCHEMA_VERSION, type SessionSnapshot } from '../../shared/ipc'
 import { SessionStore, type SessionFsLike } from './sessionStore'
 
 /** An in-memory fs that records writes and supports atomic rename. */
