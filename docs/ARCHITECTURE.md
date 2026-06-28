@@ -260,7 +260,15 @@ env var (`COSMOS_BRIDGE_SOCKET` for both render entry scripts, which share the o
   landing, not the agent `completed` status. The Send control uses the `cosmos` Button
   variant; the cosmos brand pink→purple identity is single-sourced as the `--brand-pink` /
   `--brand-purple` / `--brand-foreground` theme tokens (index.css), consumed by both the variant and
-  `CosmosMark`'s gradient.
+  `CosmosMark`'s gradient. **Per-surface mode** (`cosmos-open-prompt-pinned-v1`, planned): the one
+  shared composer takes a `mode: 'docked' | 'floating'` decided from the active rail surface
+  (`composerModeForSurface` in `activeComposer.ts`). **`floating`** (default — Slack / Jira /
+  Confluence / Google Calendar) is the draggable, collapse-on-submit/Esc/click-outside logo described
+  above. **`docked`** (Cosmos) pins the composer always-open at the bottom of the panel: it never
+  collapses (submit / Esc / click-outside are inert), the timeline scrolls above it, it is NOT hidden
+  by `busy` (the in-flight feedback is the timeline spinner only), and it auto-focuses when Cosmos
+  becomes the active surface (without stealing focus from the Terminal or another panel). The "busy
+  hides BOTH states" rule above therefore applies to `floating` only.
 - An unknown/invalid component degrades to that tab's surface error boundary (a safe
   fallback), never a white-screen, and never affects sibling tabs.
 

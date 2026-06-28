@@ -41,6 +41,46 @@ export function nextStateOnLogoClick(_state: ComposerState): ComposerState {
   return 'expanded'
 }
 
+/**
+ * The per-surface render mode of the single shared composer (cosmos-open-prompt-pinned-v1,
+ * OQ-1 Option A). Re-exported here so the `PromptComposer.tsx` shell reads ONLY booleans from
+ * this module (the `.ts`/`.test.ts` split) — the mode itself is decided in `activeComposer.ts`.
+ */
+export type ComposerMode = 'docked' | 'floating'
+
+/**
+ * Whether the composer is ALWAYS OPEN (never collapses to a logo) in this mode
+ * (cosmos-open-prompt-pinned-v1, FR-001/FR-003). `'docked'` ⇒ true (the Cosmos chat input is
+ * permanently visible/expanded); `'floating'` ⇒ false (default-collapsed draggable logo,
+ * unchanged). Pure; any non-`'docked'` value (incl. a bad input) safely yields the floating
+ * behavior so a misuse never docks a non-Cosmos panel.
+ */
+export function isAlwaysOpen(mode: ComposerMode): boolean {
+  return mode === 'docked'
+}
+
+/**
+ * Whether the composer MAY collapse (on submit, Esc, or click-outside) in this mode
+ * (cosmos-open-prompt-pinned-v1, FR-003/FR-007). `'docked'` ⇒ false (Esc + click-outside are
+ * inert, submit stays open); `'floating'` ⇒ true (the existing collapse-on-exit behavior,
+ * unchanged). Pure. The dual of {@link isAlwaysOpen}: a docked composer is always-open, so it
+ * never collapses.
+ */
+export function allowsCollapse(mode: ComposerMode): boolean {
+  return mode !== 'docked'
+}
+
+/**
+ * Whether the `busy`/in-flight state HIDES the composer in this mode
+ * (cosmos-open-prompt-pinned-v1, FR-005 — the "busy hides BOTH states" rule is now
+ * FLOATING-ONLY). `'docked'` ⇒ false (the Cosmos input stays visible/typeable during a run;
+ * the in-flight affordance is the timeline spinner); `'floating'` ⇒ true (busy hides the
+ * floating logo + card, unchanged). Pure.
+ */
+export function hidesOnBusy(mode: ComposerMode): boolean {
+  return mode !== 'docked'
+}
+
 /** The inputs to the submit-accept decision (FR-005). */
 export interface SubmitDecisionInput {
   /** The raw textarea value (may have surrounding whitespace). */

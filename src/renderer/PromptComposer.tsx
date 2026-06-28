@@ -56,6 +56,7 @@ import {
   escDecision,
   sentHintAfterSubmit,
   composerInteractiveAfterSubmit,
+  isAlwaysOpen,
   SENT_HINT_DURATION_MS
 } from './promptComposerLogic'
 import {
@@ -139,6 +140,24 @@ export interface PromptComposerProps {
    * tests are unaffected.
    */
   panelRef?: React.RefObject<HTMLElement | null>
+  /**
+   * cosmos-open-prompt-pinned-v1 (OQ-1 Option A): the per-surface render mode.
+   *  - `'floating'` (DEFAULT) — today's draggable, collapse-on-exit logo overlay; existing
+   *    callers/tests are unaffected because the default preserves the current behavior.
+   *  - `'docked'` — the Cosmos always-open, bottom-pinned chat input: forced expanded, never
+   *    collapses on submit/Esc/outside-click, not hidden by `busy`, no drag/logo/scrim/glass
+   *    layer. `SharedComposer` passes this only for the Cosmos surface (via
+   *    `composerModeForSurface`); the docked WRAPPER (the `shrink-0 border-t` band) lives in
+   *    `SharedComposer`, this prop only switches the composer body.
+   */
+  mode?: 'docked' | 'floating'
+  /**
+   * cosmos-open-prompt-pinned-v1 (OQ-2): true while the Cosmos panel is the ACTIVE surface.
+   * Drives auto-focus of the docked textarea on the activation EDGE (becomes-active), so the
+   * user can type immediately without stealing focus from the Terminal / another panel. Only
+   * meaningful in `'docked'` mode; ignored when floating. Default false.
+   */
+  autoFocusActive?: boolean
 }
 
 /** Shared hint copy under the textarea (design §3.5). */
@@ -151,9 +170,17 @@ export function PromptComposer({
   collapsedAriaLabel = 'Open prompt',
   contextChip,
   busy = false,
-  panelRef
+  panelRef,
+  mode = 'floating',
+  autoFocusActive = false
 }: PromptComposerProps): React.JSX.Element {
-  // Collapsed/expanded is session-only, default collapsed (FR-001/FR-016).
+  // cosmos-open-prompt-pinned-v1 (OQ-1 Option A): the docked Cosmos chat input vs the floating
+  // collapsible logo. The `.tsx` reads ONLY these booleans (the pure decisions live in
+  // promptComposerLogic). `docked` ⇒ always-open, never collapses, not hidden by busy.
+  const docked = isAlwaysOpen(mode)
+  // Collapsed/expanded is session-only, default collapsed (FR-001/FR-016). In docked mode the
+  // composer is FORCED expanded — `expanded` (the floating state) is irrelevant; `isOpen` is
+  // the value every render branch reads so docked is permanently open (cosmos-..-pinned FR-001).
   const [expanded, setExpanded] = useState(false)
   // The draft is preserved across collapse; cleared only on a successful submit (FR-018/OQ-2).
   const [value, setValue] = useState('')
@@ -727,6 +754,18 @@ export function PromptComposer({
     }
   }, [expanded])
 
+  // cosmos-open-prompt-pinned-v1 (OQ-2 / §5): auto-focus the DOCKED textarea on the Cosmos
+  // ACTIVATION EDGE (`autoFocusActive` false→true) so the user can type immediately, WITHOUT
+  // stealing focus from the Terminal/another panel. Gate on the activation transition (a ref
+  // tracks the previous value) — never on every render — and only in docked mode.
+  const prevAutoFocusActive = useRef(false)
+  useLayoutEffect(() => {
+    if (docked && autoFocusActive && !prevAutoFocusActive.current) {
+      textareaRef.current?.focus()
+    }
+    prevAutoFocusActive.current = autoFocusActive
+  }, [docked, autoFocusActive])
+
   // FR-012: on an explicit collapse, return focus to the logo button it collapsed into.
   useLayoutEffect(() => {
     if (!expanded && pendingLogoFocus.current) {
@@ -764,13 +803,20 @@ export function PromptComposer({
     // renders in the surface area (via `ui:render`) without ever blocking the composer.
     setHasError(false)
     setValue(draftAfterSubmit()) // clear only on success (FR-005)
+    // cosmos-open-prompt-pinned-v1 (FR-004 / §4.6): the docked Cosmos composer STAYS OPEN after
+    // submit — no launch grow-to-fill, no collapse, no "Sent" hint (the timeline's new prompt
+    // bubble + generating affordance is the feedback). Just clear + keep focus, chat-style.
+    if (docked) {
+      textareaRef.current?.focus()
+      return
+    }
     setLaunching(true) // submit collapse = grow-to-fill + vanish (the "launch")
     // open-prompt-spinner-gating-v1 (OQ-3): acknowledge the accepted submit with the transient
     // "Sent" hint. Non-blocking — if this run turns out to generate a surface, `busy` engages
     // and the render below hides the hint in favour of the surface spinner.
     setSentHint(sentHintAfterSubmit(true).visible)
     collapse(true) // auto-collapse to the logo (FR-006/FR-012)
-  }, [value, composerLocked, onSubmit, contextDismiss, collapse])
+  }, [value, composerLocked, onSubmit, contextDismiss, collapse, docked])
 
   const handleSubmit = useCallback(
     (event: FormEvent<HTMLFormElement>): void => {
@@ -783,8 +829,10 @@ export function PromptComposer({
   const handleKeyDown = useCallback(
     (event: KeyboardEvent<HTMLTextAreaElement>): void => {
       // Esc collapses while the composer is open + focused (FR-007); takes precedence.
+      // cosmos-open-prompt-pinned-v1 (FR-007 / §5): in DOCKED mode Esc is INERT — it never
+      // collapses/removes the always-open Cosmos input (it stays a no-op, keeping focus).
       if (event.key === 'Escape') {
-        if (escDecision({ open: expanded, focused: true })) {
+        if (!docked && escDecision({ open: expanded, focused: true })) {
           event.preventDefault()
           event.stopPropagation()
           setValue(draftAfterDismiss(value)) // preserve the draft (FR-018/OQ-2)
@@ -799,13 +847,15 @@ export function PromptComposer({
         submit()
       }
     },
-    [expanded, value, submit, collapse]
+    [expanded, value, submit, collapse, docked]
   )
 
   // FR-008: collapse on a click outside the composer root (scoped to the panel region).
   // The DOM hit-test lives here; only the decision is the pure helper.
+  // cosmos-open-prompt-pinned-v1 (FR-003/FR-007 / §5): DOCKED mode never collapses on
+  // click-outside — the always-open Cosmos input stays docked, so the effect is inert.
   useEffect(() => {
-    if (!expanded) {
+    if (docked || !expanded) {
       return
     }
     const onPointerDown = (event: MouseEvent): void => {
@@ -821,7 +871,7 @@ export function PromptComposer({
     // `mousedown` (not click) so the collapse fires before focus shifts elsewhere.
     document.addEventListener('mousedown', onPointerDown, true)
     return () => document.removeEventListener('mousedown', onPointerDown, true)
-  }, [expanded, collapse])
+  }, [docked, expanded, collapse])
 
   // open-prompt-spinner-gating-v1 (OQ-3): auto-dismiss the transient "Sent" hint. The pure
   // when/duration decision lives in promptComposerLogic; only the timer binding is here.
@@ -841,6 +891,59 @@ export function PromptComposer({
   // The "Sent" hint shows only while NOT busy: a UI-generation run engages `busy` (the surface
   // spinner is the feedback), so the hint is for plain commands only and never co-shows.
   const showSentHint = sentHint && !busy
+
+  // cosmos-open-prompt-pinned-v1 (OQ-1 Option A / design §2, INSET refinement): the DOCKED
+  // Cosmos chat input. A flat in-flow `<form>` — NO `fixed z-50` drag/logo layer, NO centered
+  // glass overlay card, NO scrim/"Sent" hint/position/glass machinery (all floating-only). It
+  // is ALWAYS open and ALWAYS interactive (FR-001/FR-003): not hidden by `busy` (FR-005).
+  //
+  // VISUAL (per the user's refinement): the body is an INSET, ROUNDED card — NOT a full-bleed
+  // bottom band. It reuses the floating card's contained shape AND its WIDTH (`w-full max-w-2xl`,
+  // the same cap the floating card uses) so the docked input is sized identically to the composer
+  // on the other panels — just pinned at the bottom. It stays FLAT (`bg-popover`, no glass
+  // material) since it is docked chrome, not a floating overlay. Horizontal centering + the
+  // side/bottom margin live on `SharedComposer`'s docked wrapper (`flex justify-center px-3 pb-3`).
+  // Returned EARLY so the floating render path below stays byte-for-byte unchanged (FR-011 / SC-006).
+  if (docked) {
+    return (
+      <form
+        ref={formRef}
+        aria-label={ariaLabel}
+        onSubmit={handleSubmit}
+        className="w-full max-w-2xl rounded-lg border border-border bg-popover p-2 shadow-sm"
+      >
+        <div className="flex flex-col gap-2">
+          <Textarea
+            ref={textareaRef}
+            value={value}
+            onChange={(e) => setValue(e.target.value)}
+            onKeyDown={handleKeyDown}
+            // Never disabled merely because a run is in flight (`composerLocked` is constant
+            // false) — the docked input stays typeable during a run (FR-005).
+            disabled={composerLocked}
+            placeholder={placeholder}
+            aria-label={ariaLabel}
+            // Multi-line growth bounds (FR-010 / design §3): grows to ~6–7 lines then scrolls
+            // internally; same bounds as the floating card so both composers feel identical.
+            className="max-h-[9rem] min-h-[2.5rem] resize-none"
+          />
+          <div className="flex items-center justify-between gap-2">
+            <span className="min-w-0 truncate text-[11px] text-muted-foreground">{HINT_COPY}</span>
+            <Button
+              type="submit"
+              variant="cosmos"
+              size="sm"
+              disabled={!canSubmit}
+              aria-label="Send"
+              className="shrink-0"
+            >
+              Send
+            </Button>
+          </div>
+        </div>
+      </form>
+    )
+  }
 
   // BOTH states are ALWAYS mounted so the open/close CSS transition fires in both
   // directions (FR-004): conditional mount/unmount would skip enter/exit animation.

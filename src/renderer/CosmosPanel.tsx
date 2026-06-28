@@ -24,8 +24,6 @@
 
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { PanelTabStrip, type PanelTab } from './PanelTabStrip'
-import { PanelFooter } from './PanelFooter'
-import { CosmosMark } from './CosmosMark'
 import { usePublishComposer } from './ActiveComposerProvider'
 import { CosmosTimelineEntry } from './CosmosTimelineEntry'
 import { reconcileTimeline, type LiveInFlight } from './cosmosConversation'
@@ -224,7 +222,12 @@ export function CosmosPanel({ active }: { active: boolean }): React.JSX.Element 
         ))}
       </div>
 
-      <PanelFooter surfaceName="Cosmos" icon={CosmosMark} activeTab={null} />
+      {/* cosmos-open-prompt-pinned-v1 (design §1.3): the bottom chrome of the Cosmos panel is
+          now the DOCKED Open-Prompt composer band (hosted in `SharedComposer` as the last flex
+          child of the surface column, below this `<section>`). It supersedes the `PanelFooter`
+          slot here, so the panel does not show a status strip ABOVE the docked input — the
+          timeline `overflow-auto` region flexes to fill all remaining height, the docked
+          composer is `shrink-0` directly beneath it. The other four panels keep `PanelFooter`. */}
     </section>
   )
 }

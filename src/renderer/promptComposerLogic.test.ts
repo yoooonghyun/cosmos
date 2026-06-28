@@ -11,8 +11,12 @@ import {
   sentHintAfterSubmit,
   inFlightOnSubmit,
   composerInteractiveAfterSubmit,
+  isAlwaysOpen,
+  allowsCollapse,
+  hidesOnBusy,
   SENT_HINT_DURATION_MS,
-  type ComposerState
+  type ComposerState,
+  type ComposerMode
 } from './promptComposerLogic'
 
 /*
@@ -129,6 +133,63 @@ describe('escDecision (FR-007 / Edge Cases — Esc precedence)', () => {
     expect(
       escDecision(undefined as unknown as { open: boolean; focused: boolean })
     ).toBe(false)
+  })
+})
+
+/*
+ * cosmos-open-prompt-pinned-v1 — the per-surface MODE predicates the `.tsx` reads. These are
+ * the node-unit half of scenario CMP-MODE-01; they are NECESSARY but NOT SUFFICIENT — the
+ * rendered docked-DOM behavior (always-rendered input, auto-focus, inert Esc, stay-open submit)
+ * is covered by PromptComposerDocked.dom.test.tsx. CRITICAL: the `'floating'` rows below are a
+ * REGRESSION GUARD proving the four floating panels' composer behavior is unchanged (collapse
+ * permitted, hide-on-busy) — they must stay green.
+ */
+describe('composer mode predicates (cosmos-open-prompt-pinned-v1 FR-001/FR-003/FR-005)', () => {
+  const modes: ComposerMode[] = ['docked', 'floating']
+
+  describe('isAlwaysOpen (FR-001 — docked is permanently open)', () => {
+    it('is true for docked (the Cosmos chat input never collapses to a logo)', () => {
+      expect(isAlwaysOpen('docked')).toBe(true)
+    })
+    it('is false for floating (the default-collapsed draggable logo — UNCHANGED)', () => {
+      expect(isAlwaysOpen('floating')).toBe(false)
+    })
+  })
+
+  describe('allowsCollapse (FR-003/FR-007 — docked never collapses on submit/Esc/outside-click)', () => {
+    it('is false for docked (Esc + click-outside inert, submit stays open)', () => {
+      expect(allowsCollapse('docked')).toBe(false)
+    })
+    it('is true for floating (collapse-on-exit preserved — UNCHANGED)', () => {
+      expect(allowsCollapse('floating')).toBe(true)
+    })
+  })
+
+  describe('hidesOnBusy (FR-005 — "busy hides both states" is now FLOATING-ONLY)', () => {
+    it('is false for docked (the Cosmos input stays visible/typeable during a run)', () => {
+      expect(hidesOnBusy('docked')).toBe(false)
+    })
+    it('is true for floating (busy hides the logo + card — UNCHANGED)', () => {
+      expect(hidesOnBusy('floating')).toBe(true)
+    })
+  })
+
+  it('docked is always-open AND never-collapses AND not-hidden-on-busy (the three docked invariants together)', () => {
+    expect(isAlwaysOpen('docked')).toBe(true)
+    expect(allowsCollapse('docked')).toBe(false)
+    expect(hidesOnBusy('docked')).toBe(false)
+  })
+
+  it('floating keeps every existing behavior (the regression guard for Slack/Jira/Confluence/Calendar)', () => {
+    expect(isAlwaysOpen('floating')).toBe(false)
+    expect(allowsCollapse('floating')).toBe(true)
+    expect(hidesOnBusy('floating')).toBe(true)
+  })
+
+  it('always-open and allows-collapse are exact duals across every mode (no mode is both)', () => {
+    for (const mode of modes) {
+      expect(isAlwaysOpen(mode)).toBe(!allowsCollapse(mode))
+    }
   })
 })
 

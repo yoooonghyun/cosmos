@@ -21,6 +21,7 @@ import {
   useActiveComposerConfig
 } from './ActiveComposerProvider'
 import { PromptComposer } from './PromptComposer'
+import { composerModeForSurface } from './activeComposer'
 import { resolveFallbackSurface, visibleSurfaceIds, type SurfaceId } from './railVisibility'
 import './App.css'
 
@@ -386,23 +387,55 @@ function SharedComposer({
   surfaceRef: React.RefObject<HTMLDivElement | null>
 }): React.JSX.Element | null {
   const config = useActiveComposerConfig(surface)
+  // cosmos-open-prompt-pinned-v1 (OQ-1 Option A): the per-surface render mode is a pure
+  // function of the ACTIVE surface — Cosmos ⇒ docked, everything else ⇒ floating. The mode is
+  // computed BEFORE the early return so the hook order is identical to the old version; the
+  // single `PromptComposer` instance stays mounted (no `key={surface}`) so its draft never
+  // resets on a panel switch.
+  const mode = composerModeForSurface(surface)
   if (!config) {
     return null
   }
+  const composer = (
+    <PromptComposer
+      // NO `key={surface}`: the single instance MUST stay mounted across panel switches
+      // so it never re-measures (the whole point of the hoist — no flicker). The draft +
+      // collapsed/expanded + drag state are therefore genuinely shared across surfaces;
+      // the submit routes to the active surface via the published `onSubmit` (open-prompt-hoist-v1).
+      panelRef={surfaceRef}
+      mode={mode}
+      // OQ-2: auto-focus the docked Cosmos input on activation (only relevant when docked).
+      autoFocusActive={mode === 'docked' && surface === 'cosmos'}
+      onSubmit={config.onSubmit}
+      placeholder={config.placeholder}
+      ariaLabel={config.ariaLabel}
+      {...(config.contextChip ? { contextChip: config.contextChip } : {})}
+      busy={config.busy ?? false}
+    />
+  )
+  // cosmos-open-prompt-pinned-v1 (design §1.2, INSET refinement): branch ONLY the WRAPPER on mode.
+  //  - docked (Cosmos): an in-flow, `shrink-0` bottom slot — the LAST flex child of the
+  //    `surfaceRef` column, sitting below the active panel content. The composer body inside is an
+  //    INSET, rounded card CONSTRAINED to the SAME width as the floating composer (`max-w-2xl`) and
+  //    CENTERED, so the docked input reads identically sized to the composer on the other panels —
+  //    just pinned at the bottom with a comfortable bottom margin. The wrapper centers
+  //    (`flex justify-center` + side/bottom padding); the width cap (`max-w-2xl`) lives on the body.
+  //    COLOR-SEAM FIX: this band is a SIBLING below the Cosmos `<section>` (which is `bg-card border-l`),
+  //    so without a surface of its own it would expose the app `bg-background` underneath — a visible
+  //    seam where the panel's bottom area differs from its top. Carry the SAME `bg-card` + `border-l
+  //    border-border` so the panel surface reads as ONE continuous color from tab strip to the bottom
+  //    edge. `pt-3` gives breathing room above the card; `pb-6` is the bottom margin the user wants
+  //    (a clearly larger gap below the card and the panel's bottom edge).
+  //  - floating (every other surface): today's `pointer-events-none absolute inset-0` overlay,
+  //    left byte-for-byte unchanged so the other four panels' composer is untouched (FR-011).
+  if (mode === 'docked') {
+    return (
+      <div className="flex shrink-0 justify-center border-l border-border bg-card px-3 pb-6 pt-3">
+        {composer}
+      </div>
+    )
+  }
   return (
-    <div className="pointer-events-none absolute inset-0 flex flex-col justify-end">
-      <PromptComposer
-        // NO `key={surface}`: the single instance MUST stay mounted across panel switches
-        // so it never re-measures (the whole point of the hoist — no flicker). The draft +
-        // collapsed/expanded + drag state are therefore genuinely shared across surfaces;
-        // the submit routes to the active surface via the published `onSubmit` (open-prompt-hoist-v1).
-        panelRef={surfaceRef}
-        onSubmit={config.onSubmit}
-        placeholder={config.placeholder}
-        ariaLabel={config.ariaLabel}
-        {...(config.contextChip ? { contextChip: config.contextChip } : {})}
-        busy={config.busy ?? false}
-      />
-    </div>
+    <div className="pointer-events-none absolute inset-0 flex flex-col justify-end">{composer}</div>
   )
 }

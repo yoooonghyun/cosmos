@@ -39,6 +39,40 @@ export interface ComposerConfig {
 export type ComposerRegistry = Partial<Record<SurfaceId, ComposerConfig | null>>
 
 /**
+ * The two render modes of the single shared composer (cosmos-open-prompt-pinned-v1, OQ-1
+ * Option A). The composer is ONE App-level hoisted instance; this per-surface flag picks
+ * how it presents on the ACTIVE surface:
+ *   - `'docked'`   — Cosmos: an always-open, bottom-pinned chat input that never collapses,
+ *                    is not hidden by `busy`, and ignores Esc / click-outside (FR-001..FR-010).
+ *   - `'floating'` — every other surface (Slack/Jira/Confluence/Google Calendar): today's
+ *                    draggable, collapse-on-submit/Esc/outside-click logo overlay (unchanged,
+ *                    FR-011 / SC-006).
+ */
+export type ComposerMode = 'docked' | 'floating'
+
+/**
+ * Pick the composer MODE for a surface (cosmos-open-prompt-pinned-v1, OQ-1 Option A). The
+ * Cosmos panel (rail id `'cosmos'`) gets the always-open, bottom-docked input; every other
+ * surface keeps the floating collapsible logo. This is the SINGLE place the per-surface
+ * rule lives, so the four other panels' `usePublishComposer` calls never carry a `mode`.
+ *
+ * Pure + node-testable (no React/DOM). Invalid/missing input never throws: a non-string
+ * surface warns and falls back to the SAFE `'floating'` mode (the existing behavior — a bad
+ * input must never accidentally dock a non-Cosmos panel), matching this module's
+ * "invalid required arg → warn + safe fallback" convention.
+ */
+export function composerModeForSurface(
+  surface: SurfaceId | null | undefined,
+  warn: (msg: string) => void = console.warn
+): ComposerMode {
+  if (typeof surface !== 'string') {
+    warn('[activeComposer] composerModeForSurface: invalid surface; defaulting to floating')
+    return 'floating'
+  }
+  return surface === 'cosmos' ? 'docked' : 'floating'
+}
+
+/**
  * Pick the composer config for the ACTIVE surface, or `null` when that surface has not
  * published one (Terminal, or a disconnected integration panel). A `null`/missing entry
  * means "no composer here" so the shared App-level composer is not rendered.

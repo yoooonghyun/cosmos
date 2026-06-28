@@ -8,7 +8,12 @@
  */
 
 import { describe, expect, it, vi } from 'vitest'
-import { selectActiveComposerConfig, type ComposerRegistry } from './activeComposer'
+import {
+  selectActiveComposerConfig,
+  composerModeForSurface,
+  type ComposerRegistry
+} from './activeComposer'
+import { ALL_SURFACE_IDS } from './railVisibility'
 
 const jiraConfig = {
   onSubmit: () => {},
@@ -65,5 +70,43 @@ describe('selectActiveComposerConfig', () => {
     // @ts-expect-error — deliberately passing a non-string to exercise the guard.
     expect(selectActiveComposerConfig({ jira: jiraConfig }, 42, warn)).toBeNull()
     expect(warn).toHaveBeenCalledTimes(2)
+  })
+})
+
+/*
+ * cosmos-open-prompt-pinned-v1 (OQ-1 Option A) — the per-surface composer MODE. Cosmos ⇒
+ * 'docked' (always-open bottom input); every OTHER surface ⇒ 'floating' (the unchanged
+ * draggable collapsible logo). Invalid input ⇒ 'floating' (safe fallback, no throw).
+ * This is the node-unit half of scenario CMP-MODE-01; the rendered docked-DOM behavior is
+ * covered by PromptComposerDocked.dom.test.tsx.
+ */
+describe('composerModeForSurface (cosmos-open-prompt-pinned-v1)', () => {
+  it('returns "docked" for the cosmos surface (happy path)', () => {
+    expect(composerModeForSurface('cosmos')).toBe('docked')
+  })
+
+  it('returns "floating" for EVERY other rail surface (regression guard for the four panels + terminal)', () => {
+    // The four floating panels + terminal must NEVER dock — only Cosmos is docked.
+    for (const id of ALL_SURFACE_IDS) {
+      if (id === 'cosmos') {
+        continue
+      }
+      expect(composerModeForSurface(id)).toBe('floating')
+    }
+    // Spot-check the named floating panels explicitly so the intent is readable.
+    expect(composerModeForSurface('slack')).toBe('floating')
+    expect(composerModeForSurface('jira')).toBe('floating')
+    expect(composerModeForSurface('confluence')).toBe('floating')
+    expect(composerModeForSurface('google-calendar')).toBe('floating')
+    expect(composerModeForSurface('terminal')).toBe('floating')
+  })
+
+  it('warns and falls back to "floating" for invalid input (no throw)', () => {
+    const warn = vi.fn()
+    expect(composerModeForSurface(undefined, warn)).toBe('floating')
+    expect(composerModeForSurface(null, warn)).toBe('floating')
+    // @ts-expect-error — deliberately passing a non-string to exercise the guard.
+    expect(composerModeForSurface(42, warn)).toBe('floating')
+    expect(warn).toHaveBeenCalledTimes(3)
   })
 })

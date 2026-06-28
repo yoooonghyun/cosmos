@@ -773,6 +773,19 @@ single new `window.cosmos.session` namespace in `src/shared/ipc.ts` (`session:lo
   `components.tsx` + `logic.ts` + `logic.test.ts` + `index.ts`. The same split is why pure tab
   logic lives in `panelTabs.ts` (node-testable) separate from `PanelTabStrip.tsx`.
 
+- **jsdom component tests live in `*.dom.test.tsx` (`npm run test:dom`, `vitest.dom.config.ts`).**
+  Two gotchas when a dom test renders a REAL renderer component (not just a hook):
+  - **`@/...` alias must be present in `vitest.dom.config.ts`.** The node config doesn't need it
+    (pure `.ts` modules avoid `@/`), but a component importing `@/components/ui/*` fails to resolve
+    under the dom config unless its `resolve.alias['@'] = src/renderer` mirrors `electron.vite.config.ts`.
+    Symptom: `Failed to resolve import "@/components/ui/button"`. (Added for `PromptComposerDocked.dom.test.tsx`.)
+  - **jest-dom matcher TYPES.** The runtime matchers load via the `src/test-setup.dom.ts` setupFile,
+    but `tsconfig.web.json` (which typechecks `.dom.test.tsx`) does NOT include the jest-dom type
+    augmentation by default, so `toBeInTheDocument`/`toBeVisible`/`toHaveFocus`/`toBeDisabled` are
+    a typecheck error. Add `import '@testing-library/jest-dom/vitest'` at the top of the test file
+    to register the `Assertion` type augmentation. (Most existing dom tests sidestep this by using
+    plain `expect(...).toBe(...)`/DOM-property assertions; only use the jest-dom matchers with the import.)
+
 ## Terminal key bindings (macOS readline chords)
 
 xterm.js forwards raw arrow keys to the PTY but does NOT translate the macOS Cmd/Option arrow
