@@ -22,7 +22,7 @@
  */
 
 import { randomUUID } from 'node:crypto'
-import type { UiRenderPayload } from '../shared/ipc'
+import type { UiRenderPayload } from '../../shared/ipc'
 import type {
   JiraAddCommentResult,
   JiraCommentParams,
@@ -35,18 +35,18 @@ import type {
   JiraTransitionResult,
   JiraUpdateParams,
   JiraUpdateResult
-} from '../shared/types/jira'
+} from '../../shared/types/jira'
 import {
   JIRA_WRITE_NOT_AUTHORIZED_MESSAGE,
   JiraBoundAction,
   isJiraBoundActionId,
   type JiraBoundActionName
-} from '../shared/types/jira'
+} from '../../shared/types/jira'
 import {
   buildIssueDetailSurface,
   type JiraSurfaceNotice
 } from './jiraSurfaceBuilder'
-import { validateJiraBoundAction, type WarnFn } from '../shared/validate'
+import { validateJiraBoundAction, type WarnFn } from '../../shared/validate'
 
 /** The success notice copy per bound action (FR-007; create/update — Jira write-extend v1). */
 const SUCCESS_MESSAGE: Record<JiraBoundActionName, string> = {

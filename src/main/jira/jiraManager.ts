@@ -42,13 +42,13 @@ import type {
   JiraTransitionResult,
   JiraUpdateParams,
   JiraUpdateResult
-} from '../shared/types/jira'
-import { JIRA_WRITE_NOT_AUTHORIZED_MESSAGE, JIRA_WRITE_SCOPE } from '../shared/types/jira'
-import type { JiraCallAuth, JiraClient } from './integrations/jiraClient'
-import type { StoredTokenSet, TokenStore } from './integrations/tokenStore'
-import type { AtlassianOAuthResult } from './integrations/atlassianOAuth'
-import type { TokenExchangeResult } from './integrations/oauthPkce'
-import { expiryFromSeconds } from './integrations/tokenStore'
+} from '../../shared/types/jira'
+import { JIRA_WRITE_NOT_AUTHORIZED_MESSAGE, JIRA_WRITE_SCOPE } from '../../shared/types/jira'
+import type { JiraCallAuth, JiraClient } from '../integrations/jiraClient'
+import type { StoredTokenSet, TokenStore } from '../integrations/tokenStore'
+import type { AtlassianOAuthResult } from '../integrations/atlassianOAuth'
+import type { TokenExchangeResult } from '../integrations/oauthPkce'
+import { expiryFromSeconds } from '../integrations/tokenStore'
 
 /** A refresh callback the manager invokes when the access token is expired/rejected. */
 export type RefreshFn = (refreshToken: string) => Promise<TokenExchangeResult>

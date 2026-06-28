@@ -157,11 +157,11 @@ import {
 } from './clientConfigResolver'
 import { mergeClientConfigSave, clearClientConfigField } from './clientConfigMutate'
 import { runSlackOAuth, refreshSlackToken } from './integrations/slackOAuth'
-import { JiraBridge } from './jiraBridge'
-import { JiraManager } from './jiraManager'
-import { JiraActionDispatcher } from './jiraActionDispatcher'
+import { JiraBridge } from './jira/jiraBridge'
+import { JiraManager } from './jira/jiraManager'
+import { JiraActionDispatcher } from './jira/jiraActionDispatcher'
 import { AdapterDispatcher, type AdapterResolver } from './adapterDispatcher'
-import { jiraAdapterResolver, jiraListBindOptions, jiraDetailBindOptions } from './jiraAdapter'
+import { jiraAdapterResolver, jiraListBindOptions, jiraDetailBindOptions } from './jira/jiraAdapter'
 // slack-generative-adapter-v1 (FR-005/FR-015): the SAME shared AdapterDispatcher serves
 // Slack's bound lists. A composite resolver branches Slack vs Jira by dataSource (the two
 // source namespaces don't collide), and the lazy re-registration consults Slack's
@@ -184,7 +184,7 @@ import {
   buildNoticeSurface,
   SURFACE_DEFAULT_VIEW,
   SURFACE_ISSUE_DETAIL
-} from './jiraSurfaceBuilder'
+} from './jira/jiraSurfaceBuilder'
 import { JiraClient } from './integrations/jiraClient'
 import { ConfluenceBridge } from './confluenceBridge'
 import { ConfluenceManager } from './confluenceManager'

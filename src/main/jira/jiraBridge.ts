@@ -14,13 +14,13 @@
 
 import { createServer, type Server, type Socket } from 'node:net'
 import { existsSync, unlinkSync } from 'node:fs'
-import { encodeBridgeMessage } from '../shared/bridge'
+import { encodeBridgeMessage } from '../../shared/bridge'
 import {
   JiraOp,
   type JiraCreateParams,
   type JiraResult,
   type JiraUpdateParams
-} from '../shared/types/jira'
+} from '../../shared/types/jira'
 import {
   validateJiraBridgeCall,
   validateJiraComment,
@@ -29,7 +29,7 @@ import {
   validateJiraSearch,
   validateJiraTransition,
   validateJiraUpdate
-} from '../shared/validate'
+} from '../../shared/validate'
 
 type WarnFn = (message: string, ...args: unknown[]) => void
 

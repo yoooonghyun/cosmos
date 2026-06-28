@@ -30,10 +30,10 @@ import type { AdapterDescriptor } from '../shared/types/adapter'
 import type { AdapterRegisterOptions } from './adapterDispatcher'
 import { buildSlackBoundShell } from './slack/slackSurfaceBuilder'
 import { buildConfluenceBoundShell } from './confluenceSurfaceBuilder'
-import { buildJiraBoundShell } from './jiraSurfaceBuilder'
+import { buildJiraBoundShell } from './jira/jiraSurfaceBuilder'
 import { slackBindOptionsForSource } from './slack/slackAdapter'
 import { confluenceBindOptionsForSource } from './confluenceAdapter'
-import { jiraBindOptionsForSource } from './jiraAdapter'
+import { jiraBindOptionsForSource } from './jira/jiraAdapter'
 
 /** The composed bound SHELL + the bind options for a registerable descriptor. */
 export interface DescriptorShell {

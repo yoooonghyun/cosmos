@@ -8,14 +8,14 @@ import {
   JIRA_DETAIL_PATH,
   type JiraAdapterManager
 } from './jiraAdapter'
-import { JiraAdapterSource } from '../shared/types/jira'
+import { JiraAdapterSource } from '../../shared/types/jira'
 import type {
   JiraGetIssueParams,
   JiraIssueDetail,
   JiraIssueSummary,
   JiraResult,
   JiraSearchParams
-} from '../shared/types/jira'
+} from '../../shared/types/jira'
 
 /* jira-generative-adapter-v1 — the Jira-specific resolver + bind options (FR-008/FR-009).
  * Maps a secret-free descriptor to a JiraManager read and normalizes the DTO into the

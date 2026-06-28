@@ -4,8 +4,8 @@ import {
   type JiraActionDispatcherDeps,
   type JiraActionManager
 } from './jiraActionDispatcher'
-import type { JiraIssueDetail, JiraResult } from '../shared/types/jira'
-import type { UiRenderPayload } from '../shared/ipc'
+import type { JiraIssueDetail, JiraResult } from '../../shared/types/jira'
+import type { UiRenderPayload } from '../../shared/ipc'
 
 /* Jira generative-UI v1/v2 — deterministic dispatcher (FR-004/006/007/016/017/019).
  * v2 (D1): the re-pushed surface is composed via the JIRA CUSTOM catalog, so the

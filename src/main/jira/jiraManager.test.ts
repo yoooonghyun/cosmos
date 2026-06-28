@@ -1,10 +1,10 @@
 import { describe, it, expect, vi } from 'vitest'
 import { JiraManager, type JiraManagerDeps } from './jiraManager'
-import type { JiraClient } from './integrations/jiraClient'
-import type { AtlassianOAuthResult } from './integrations/atlassianOAuth'
-import type { TokenExchangeResult } from './integrations/oauthPkce'
-import type { StoredTokenSet, TokenStore } from './integrations/tokenStore'
-import type { JiraResult } from '../shared/types/jira'
+import type { JiraClient } from '../integrations/jiraClient'
+import type { AtlassianOAuthResult } from '../integrations/atlassianOAuth'
+import type { TokenExchangeResult } from '../integrations/oauthPkce'
+import type { StoredTokenSet, TokenStore } from '../integrations/tokenStore'
+import type { JiraResult } from '../../shared/types/jira'
 
 /** An in-memory TokenStore stand-in covering the methods JiraManager uses. */
 function makeFakeStore(initial: StoredTokenSet | null = null, expired = false) {

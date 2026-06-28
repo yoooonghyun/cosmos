@@ -47,7 +47,7 @@ import {
   jiraListBindOptions,
   JIRA_LIST_PATH,
   type JiraAdapterManager
-} from './jiraAdapter'
+} from './jira/jiraAdapter'
 import { planAgentSurfaceRegistration } from './descriptorRegistration'
 import type { AdapterDescriptor } from '../shared/types/adapter'
 import type { A2uiSurfaceUpdate, UiDataModelPayload } from '../shared/ipc'

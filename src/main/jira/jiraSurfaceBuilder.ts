@@ -17,19 +17,19 @@
  * token (FR-015/FR-017).
  */
 
-import type { A2uiSurfaceUpdate, UiDataModelPayload } from '../shared/ipc'
+import type { A2uiSurfaceUpdate, UiDataModelPayload } from '../../shared/ipc'
 import type {
   JiraComment,
   JiraIssueDetail,
   JiraIssueSummary,
   JiraPage
-} from '../shared/types/jira'
+} from '../../shared/types/jira'
 import {
   JiraAdapterSource,
   jiraSearchDescriptor,
   jiraGetIssueDescriptor,
   type JiraAdapterDescriptor
-} from '../shared/types/jira'
+} from '../../shared/types/jira'
 import { JIRA_DETAIL_PATH, JIRA_LIST_PATH, jiraIssueRow } from './jiraAdapter'
 
 /** An A2UI 0.9 component definition: an id + a `component` discriminator + props. */
