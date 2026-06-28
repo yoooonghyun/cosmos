@@ -14,7 +14,7 @@
  * shows on screen. NEVER a token, OAuth secret, or credential.
  */
 
-import type { UiRenderTarget, ViewContext } from '../shared/ipc'
+import type { UiRenderTarget, ViewContext } from '../../shared/ipc'
 
 /** True for a string that has at least one non-whitespace character. */
 function present(value: string | undefined | null): value is string {

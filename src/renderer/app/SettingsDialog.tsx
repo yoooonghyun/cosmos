@@ -8,7 +8,7 @@ import type {
   ClientConfigStatus,
   EnabledIntegrations,
   GateableIntegration
-} from '../shared/ipc'
+} from '../../shared/ipc'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -28,9 +28,9 @@ import { Switch } from '@/components/ui/switch'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { cn } from '@/lib/utils'
 import { shouldShowStatusDot, type ConnectionState } from './settingsStatusDot'
-import { useConfirm } from './useConfirm'
+import { useConfirm } from '../useConfirm'
 import { ConfirmDialog } from '@/components/ui/confirm-dialog'
-import { confirmCopy } from './confirmLogic'
+import { confirmCopy } from '../confirmLogic'
 
 /** A live per-integration connection status (non-secret identity only). */
 interface LiveStatus {

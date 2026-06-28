@@ -12,8 +12,8 @@ import { SlackPanel } from './slack/SlackPanel'
 import { JiraPanel } from './jira/JiraPanel'
 import { ConfluencePanel } from './confluence/ConfluencePanel'
 import { GoogleCalendarPanel } from './calendar/GoogleCalendarPanel'
-import { SettingsDialog } from './SettingsDialog'
-import { CosmosSpinner } from './CosmosSpinner'
+import { SettingsDialog } from './app/SettingsDialog'
+import { CosmosSpinner } from './app/CosmosSpinner'
 import { SessionProvider, useEnabledIntegrations, useLoadSession } from './session/SessionProvider'
 import { OpenPromptPositionProvider } from './composer/OpenPromptPositionProvider'
 import {
@@ -22,7 +22,7 @@ import {
 } from './composer/ActiveComposerProvider'
 import { PromptComposer } from './composer/PromptComposer'
 import { composerModeForSurface } from './composer/activeComposer'
-import { resolveFallbackSurface, visibleSurfaceIds, type SurfaceId } from './railVisibility'
+import { resolveFallbackSurface, visibleSurfaceIds, type SurfaceId } from './app/railVisibility'
 import './App.css'
 
 /**

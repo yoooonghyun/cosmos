@@ -7,7 +7,7 @@
  * these rules (railVisibility.test.ts exercises them without a renderer).
  */
 
-import type { EnabledIntegrations, GateableIntegration } from '../shared/ipc'
+import type { EnabledIntegrations, GateableIntegration } from '../../shared/ipc'
 
 /**
  * Every rail surface id (Terminal + Cosmos are NOT integrations — FR-005).

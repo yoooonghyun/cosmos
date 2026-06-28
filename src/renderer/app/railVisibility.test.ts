@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import type { EnabledIntegrations } from '../shared/ipc'
+import type { EnabledIntegrations } from '../../shared/ipc'
 import {
   ALL_SURFACE_IDS,
   resolveFallbackSurface,

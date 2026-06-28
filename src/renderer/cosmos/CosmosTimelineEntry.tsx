@@ -22,7 +22,7 @@ import { useState } from 'react'
 import { A2UIProvider } from '@a2ui-sdk/react/0.9'
 import { ChevronRight, Wrench } from 'lucide-react'
 import { ActiveTabSurface } from '../generative/ActiveTabSurface'
-import { SurfaceSpinner } from '../SurfaceSpinner'
+import { SurfaceSpinner } from '../app/SurfaceSpinner'
 import type { TimelineEntry } from './cosmosConversation'
 import type { A2uiSurfaceUpdate } from '../../shared/ipc'
 

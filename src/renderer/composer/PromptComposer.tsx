@@ -45,9 +45,9 @@ import type { AgentStatusPayload } from '../../shared/ipc'
 import { Button } from '@/components/ui/button'
 import { Textarea } from '@/components/ui/textarea'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
-import { CosmosMark } from '../CosmosMark'
-import { ContextChip } from '../ContextChip'
-import type { ContextChipData } from '../viewContextCapture'
+import { CosmosMark } from '../app/CosmosMark'
+import { ContextChip } from '../app/ContextChip'
+import type { ContextChipData } from '../app/viewContextCapture'
 import {
   submitDecision,
   draftAfterDismiss,
