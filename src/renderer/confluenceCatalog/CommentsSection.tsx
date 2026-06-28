@@ -26,7 +26,7 @@ import { Button } from '@/components/ui/button'
 import { Textarea } from '@/components/ui/textarea'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Skeleton } from '@/components/ui/skeleton'
-import type { ConfluenceComment, ConfluenceError } from '../../shared/confluence'
+import type { ConfluenceComment, ConfluenceError } from '../../shared/types/confluence'
 import { ErrorState, ReconnectState, formatTs, initials } from '../atlassianPanelBits'
 import { PageDetailBody } from './components'
 

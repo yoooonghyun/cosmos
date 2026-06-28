@@ -52,4 +52,4 @@ export const SLACK_SEARCH_SCOPE = 'search:read'
  * FR-007/FR-008). Re-exported from the shared module so the manager's capability
  * gate and the OAuth scope set never disagree on the literal.
  */
-export { SLACK_WRITE_SCOPE } from '../../shared/slack'
+export { SLACK_WRITE_SCOPE } from '../../shared/types/slack'

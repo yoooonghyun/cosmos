@@ -36,11 +36,11 @@ import type {
   ConfluenceSearchResult,
   ConfluenceUpdateParams,
   ConfluenceUpdateResult
-} from '../../shared/confluence'
+} from '../../shared/types/confluence'
 import {
   CONFLUENCE_VERSION_CONFLICT_MESSAGE,
   decodeUnicodeEscapes
-} from '../../shared/confluence'
+} from '../../shared/types/confluence'
 import { confluenceApiBase } from './atlassianConfig'
 import { confluenceWebUrl } from './confluenceWebUrl'
 import { plainTextToStorage } from './atlassianText'

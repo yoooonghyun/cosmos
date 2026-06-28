@@ -12,11 +12,11 @@
 import { describe, it, expect } from 'vitest'
 import { planAgentSurfaceRegistration } from './descriptorRegistration'
 import { resolveBindOptionsForSource } from './descriptorShell'
-import { JiraAdapterSource } from '../shared/jira'
-import { SlackAdapterSource } from '../shared/slack'
-import { ConfluenceAdapterSource } from '../shared/confluence'
+import { JiraAdapterSource } from '../shared/types/jira'
+import { SlackAdapterSource } from '../shared/types/slack'
+import { ConfluenceAdapterSource } from '../shared/types/confluence'
 import { SURFACE_DEFAULT_VIEW, SURFACE_ISSUE_DETAIL } from './jiraSurfaceBuilder'
-import { AdapterSourcePath } from '../shared/adapter'
+import { AdapterSourcePath } from '../shared/types/adapter'
 import type { A2uiSurfaceUpdate } from '../shared/ipc'
 
 const desc = (dataSource: string) => ({ dataSource, query: {} })

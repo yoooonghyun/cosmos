@@ -12,7 +12,7 @@ import {
   MAX_CHANNEL_PAGES,
   type ListChannelsPage
 } from './slackChannelSearchLogic'
-import type { SlackChannel, SlackPage, SlackResult } from '../shared/slack'
+import type { SlackChannel, SlackPage, SlackResult } from '../shared/types/slack'
 
 function ch(name: string): SlackChannel {
   return { id: `C-${name}`, name, isMember: false }

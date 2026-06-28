@@ -8,7 +8,7 @@
  *   R->M  renderer sends to main process (ipcRenderer.send / invoke)
  */
 
-import type { AdapterBinding, AdapterDescriptor } from '../adapter'
+import type { AdapterBinding, AdapterDescriptor } from '../types/adapter'
 import type { A2uiSurfaceUpdate } from './ui'
 
 /**

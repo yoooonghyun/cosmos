@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from 'vitest'
 import { JiraBridge, type JiraBridgeManager } from './jiraBridge'
-import { JiraOp, type JiraResult } from '../shared/jira'
+import { JiraOp, type JiraResult } from '../shared/types/jira'
 
 function makeManager(overrides?: Partial<JiraBridgeManager>): JiraBridgeManager {
   const ok = async (): Promise<JiraResult<unknown>> => ({ ok: true, data: { items: [] } })

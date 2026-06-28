@@ -41,7 +41,7 @@ import { buildGenerativePanel, hydrateGenerativeTabs } from './sessionSnapshot'
 import { inFlightOnSubmit, shouldReleaseInFlightOnCompleted } from './promptComposerLogic'
 import { useReportPanel } from './SessionProvider'
 import type { GenerativePanelKey } from '../shared/ipc'
-import type { AdapterBinding, AdapterDescriptor } from '../shared/adapter'
+import type { AdapterBinding, AdapterDescriptor } from '../shared/types/adapter'
 
 /** A rendered surface stored on a tab: the spec to (re)process + its requestId. */
 export interface TabSurface {

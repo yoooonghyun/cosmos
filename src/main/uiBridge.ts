@@ -28,7 +28,7 @@ import type {
   UiRenderPayload,
   UiRenderTarget
 } from '../shared/ipc'
-import type { AdapterBinding, AdapterDescriptor } from '../shared/adapter'
+import type { AdapterBinding, AdapterDescriptor } from '../shared/types/adapter'
 import { validateAdapterBindings, validateAdapterDescriptor } from '../shared/validate'
 import { specHasUnboundDataContainer } from './dataBearingWarning'
 

@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { parseTranscript, previewArgs, RENDER_UI_TOOL_NAME } from './transcriptParse'
-import { PREVIEW_MAX_LEN } from '../shared/conversation'
+import { PREVIEW_MAX_LEN } from '../shared/types/conversation'
 
 /** Build one transcript jsonl line (object → stringified). */
 function line(obj: Record<string, unknown>): string {

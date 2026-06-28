@@ -9,7 +9,7 @@
  */
 
 import type { UpdateComponentsPayload, UpdateDataModelPayload } from '@a2ui-sdk/types/0.9'
-import type { AdapterBinding, AdapterDescriptor } from '../adapter'
+import type { AdapterBinding, AdapterDescriptor } from '../types/adapter'
 import type { UiRenderTarget } from './common'
 
 /**

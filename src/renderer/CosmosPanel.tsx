@@ -28,7 +28,7 @@ import { usePublishComposer } from './ActiveComposerProvider'
 import { CosmosTimelineEntry } from './CosmosTimelineEntry'
 import { reconcileTimeline, type LiveInFlight } from './cosmosConversation'
 import { initialCosmosTabs, setActiveCosmosTab, closeCosmosTab } from './cosmosTabs'
-import type { Conversation } from '../shared/conversation'
+import type { Conversation } from '../shared/types/conversation'
 import type {
   ConversationResult,
   UiRenderPayload,

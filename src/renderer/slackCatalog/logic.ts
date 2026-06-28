@@ -9,7 +9,7 @@
  * total functions — a missing/odd value yields a safe display string, never a throw.
  */
 
-import type { SlackImageRef, SlackSearchMatch } from '../../shared/slack'
+import type { SlackImageRef, SlackSearchMatch } from '../../shared/types/slack'
 import type { SlackMessageRowProps } from './SlackMessageRow'
 
 /** Author display name with raw-id fallback (FR-004 / native `authorName`). */

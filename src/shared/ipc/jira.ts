@@ -16,7 +16,7 @@ import type {
   JiraPage,
   JiraResult,
   JiraSearchParams
-} from '../jira'
+} from '../types/jira'
 
 /**
  * Jira IPC channel name constants (FR-X06). Reads are request/response via

@@ -11,9 +11,9 @@
 import type {
   GoogleCalendarListEventsParams,
   GoogleCalendarOpName
-} from '../googleCalendar'
+} from '../types/googleCalendar'
 import type { GoogleCalendarRequestDefaultViewPayload } from './googleCalendar'
-import { GoogleCalendarOp } from '../googleCalendar'
+import { GoogleCalendarOp } from '../types/googleCalendar'
 import {
   defaultWarn,
   isNonEmptyString,

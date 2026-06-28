@@ -26,7 +26,7 @@ import { ImageOff } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { Skeleton } from '@/components/ui/skeleton'
 import { nextImageLoadStatus, reservedImageBox, type ImageLoadStatus } from './imageLoadState'
-import type { SlackImageRef } from '../../shared/slack'
+import type { SlackImageRef } from '../../shared/types/slack'
 
 /**
  * One attachment thumbnail. `img` is the opaque ref (+ optional alt/dims). `className`

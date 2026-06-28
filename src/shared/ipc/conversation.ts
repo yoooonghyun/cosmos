@@ -13,7 +13,7 @@
  * location (FR-104/FR-106). All `~/.claude` access stays in main (FR-105).
  */
 
-import type { Conversation } from '../conversation'
+import type { Conversation } from '../types/conversation'
 
 /**
  * Conversation channel name constants (FR-106).

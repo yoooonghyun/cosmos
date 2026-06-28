@@ -31,9 +31,9 @@ import type {
   AdapterRegisterOptions,
   AdapterResolver
 } from './adapterDispatcher'
-import type { AdapterDescriptor } from '../shared/adapter'
-import { AdapterSourcePath } from '../shared/adapter'
-import { SlackAdapterSource } from '../shared/slack'
+import type { AdapterDescriptor } from '../shared/types/adapter'
+import { AdapterSourcePath } from '../shared/types/adapter'
+import { SlackAdapterSource } from '../shared/types/slack'
 import type {
   SlackChannel,
   SlackHistoryParams,
@@ -44,7 +44,7 @@ import type {
   SlackSearchMatch,
   SlackSearchParams,
   SlackUser
-} from '../shared/slack'
+} from '../shared/types/slack'
 
 /** The bound data-model path the channel-list reads its rows from. Single-sourced from the
  * shared {@link AdapterSourcePath} so the tool-description text + the dispatcher agree. */

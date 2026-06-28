@@ -66,12 +66,12 @@ import type {
   SlackRepliesParams,
   SlackSearchParams,
   SlackSendParams
-} from '../shared/slack'
+} from '../shared/types/slack'
 import type {
   JiraConnectionStatus,
   JiraGetIssueParams,
   JiraSearchParams
-} from '../shared/jira'
+} from '../shared/types/jira'
 import type {
   ConfluenceCommentParams,
   ConfluenceConnectionStatus,
@@ -79,11 +79,11 @@ import type {
   ConfluenceGetCommentsParams,
   ConfluenceGetPageParams,
   ConfluenceSearchParams
-} from '../shared/confluence'
+} from '../shared/types/confluence'
 import type {
   GoogleCalendarConnectionStatus,
   GoogleCalendarListEventsParams
-} from '../shared/googleCalendar'
+} from '../shared/types/googleCalendar'
 
 const ptyApi: PtyApi = {
   // panel-tabs v1 FR-021/FR-022: spawn a new pane's PTY session (renderer mints

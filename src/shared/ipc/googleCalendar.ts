@@ -14,7 +14,7 @@ import type {
   GoogleCalendarEventsPage,
   GoogleCalendarListEventsParams,
   GoogleCalendarResult
-} from '../googleCalendar'
+} from '../types/googleCalendar'
 
 /**
  * Google Calendar IPC channel name constants. Same request/response + status-event

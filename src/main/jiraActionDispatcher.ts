@@ -35,13 +35,13 @@ import type {
   JiraTransitionResult,
   JiraUpdateParams,
   JiraUpdateResult
-} from '../shared/jira'
+} from '../shared/types/jira'
 import {
   JIRA_WRITE_NOT_AUTHORIZED_MESSAGE,
   JiraBoundAction,
   isJiraBoundActionId,
   type JiraBoundActionName
-} from '../shared/jira'
+} from '../shared/types/jira'
 import {
   buildIssueDetailSurface,
   type JiraSurfaceNotice

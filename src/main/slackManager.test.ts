@@ -4,7 +4,7 @@ import type { SlackClient } from './integrations/slackClient'
 import { runSlackOAuth, type SlackOAuthResult } from './integrations/slackOAuth'
 import type { StoredTokenSet, TokenStore } from './integrations/tokenStore'
 import type { TokenExchangeResult } from './integrations/oauthPkce'
-import type { SlackResult } from '../shared/slack'
+import type { SlackResult } from '../shared/types/slack'
 
 /**
  * An in-memory TokenStore stand-in covering the methods SlackManager uses. `expired`

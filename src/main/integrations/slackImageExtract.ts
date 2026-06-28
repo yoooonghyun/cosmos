@@ -15,7 +15,7 @@
  * returns `[]` for a non-object / no-image input.
  */
 
-import type { SlackImageRef } from '../../shared/slack'
+import type { SlackImageRef } from '../../shared/types/slack'
 import { encodeImageRef } from '../slackImageRef'
 
 function isRecord(v: unknown): v is Record<string, unknown> {

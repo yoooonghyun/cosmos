@@ -31,7 +31,7 @@ import type {
   GoogleCalendarEventsPage,
   GoogleCalendarListEventsParams,
   GoogleCalendarResult
-} from '../shared/googleCalendar'
+} from '../shared/types/googleCalendar'
 import type { GoogleCalendarCallAuth, GoogleCalendarClient } from './integrations/googleCalendarClient'
 import {
   GOOGLE_CALENDAR_FANOUT_CONCURRENCY,

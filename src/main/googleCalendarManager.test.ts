@@ -8,7 +8,7 @@ import type { GoogleCalendarClient } from './integrations/googleCalendarClient'
 import type { GoogleOAuthResult } from './integrations/googleOAuth'
 import type { TokenExchangeResult } from './integrations/oauthPkce'
 import type { StoredTokenSet, TokenStore } from './integrations/tokenStore'
-import type { GoogleCalendar, GoogleCalendarResult } from '../shared/googleCalendar'
+import type { GoogleCalendar, GoogleCalendarResult } from '../shared/types/googleCalendar'
 
 /** An in-memory TokenStore stand-in covering the methods the manager uses. */
 function makeFakeStore(initial: StoredTokenSet | null = null, expired = false) {

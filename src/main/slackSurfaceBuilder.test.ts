@@ -15,13 +15,13 @@ import {
   slackMessageRow,
   slackSearchRow
 } from './slackAdapter'
-import { SlackAdapterSource } from '../shared/slack'
+import { SlackAdapterSource } from '../shared/types/slack'
 import type {
   SlackChannel,
   SlackMessage,
   SlackPage,
   SlackSearchMatch
-} from '../shared/slack'
+} from '../shared/types/slack'
 
 /* slack-generative-adapter-v1 — BOUND Slack surfaces: a `{path}`-bound (data-free) spec +
  * an initial data-model seed + a secret-free descriptor. APPEND-ONLY: every list seeds

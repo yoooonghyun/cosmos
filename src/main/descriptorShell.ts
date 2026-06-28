@@ -26,7 +26,7 @@
  */
 
 import type { A2uiSurfaceUpdate } from '../shared/ipc'
-import type { AdapterDescriptor } from '../shared/adapter'
+import type { AdapterDescriptor } from '../shared/types/adapter'
 import type { AdapterRegisterOptions } from './adapterDispatcher'
 import { buildSlackBoundShell } from './slackSurfaceBuilder'
 import { buildConfluenceBoundShell } from './confluenceSurfaceBuilder'

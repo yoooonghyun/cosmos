@@ -31,7 +31,7 @@ import type {
   ConfluenceSearchResult,
   ConfluenceUpdateParams,
   ConfluenceUpdateResult
-} from '../shared/confluence'
+} from '../shared/types/confluence'
 import {
   CONFLUENCE_COMMENT_NOT_AUTHORIZED_MESSAGE,
   CONFLUENCE_COMMENT_READ_NOT_AUTHORIZED_MESSAGE,
@@ -40,7 +40,7 @@ import {
   CONFLUENCE_USER_READ_SCOPE,
   CONFLUENCE_WRITE_NOT_AUTHORIZED_MESSAGE,
   CONFLUENCE_WRITE_SCOPE
-} from '../shared/confluence'
+} from '../shared/types/confluence'
 import type { ConfluenceCallAuth, ConfluenceClient } from './integrations/confluenceClient'
 import type { StoredTokenSet, TokenStore } from './integrations/tokenStore'
 import type { AtlassianOAuthResult } from './integrations/atlassianOAuth'

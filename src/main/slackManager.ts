@@ -38,8 +38,8 @@ import type {
   SlackSendParams,
   SlackSendResult,
   SlackUser
-} from '../shared/slack'
-import { SLACK_WRITE_NOT_AUTHORIZED_MESSAGE, SLACK_WRITE_SCOPE } from '../shared/slack'
+} from '../shared/types/slack'
+import { SLACK_WRITE_NOT_AUTHORIZED_MESSAGE, SLACK_WRITE_SCOPE } from '../shared/types/slack'
 import type { MessageResolvers, SlackCallAuth, SlackClient } from './integrations/slackClient'
 import type { StoredTokenSet, TokenStore } from './integrations/tokenStore'
 import { expiryFromSeconds } from './integrations/tokenStore'

@@ -37,8 +37,8 @@ import type {
   AdapterDescriptor,
   AdapterPageDirection,
   AdapterPaginationMode
-} from '../shared/adapter'
-import { AdapterDataKey, regionFlagPath, regionListPath } from '../shared/adapter'
+} from '../shared/types/adapter'
+import { AdapterDataKey, regionFlagPath, regionListPath } from '../shared/types/adapter'
 
 /** Logger shape (injectable for tests). */
 export type WarnFn = (message: string, ...args: unknown[]) => void

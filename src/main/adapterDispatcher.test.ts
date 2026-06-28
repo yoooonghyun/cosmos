@@ -5,7 +5,7 @@ import {
   type AdapterFetchResult,
   type AdapterResolver
 } from './adapterDispatcher'
-import type { AdapterDescriptor } from '../shared/adapter'
+import type { AdapterDescriptor } from '../shared/types/adapter'
 import type { UiDataModelPayload } from '../shared/ipc'
 
 /* jira-generative-adapter-v1 — SHARED dispatcher (FR-009..FR-018, FR-021, FR-022).

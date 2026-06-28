@@ -23,10 +23,10 @@ import {
   slackBridgeSocketPath
 } from '../shared/bridge'
 import { DEFAULT_UI_RENDER_TARGET, type UiRenderTarget } from '../shared/ipc'
-import { JiraTool } from '../shared/jira'
-import { SlackTool } from '../shared/slack'
-import { ConfluenceTool } from '../shared/confluence'
-import { GoogleCalendarTool } from '../shared/googleCalendar'
+import { JiraTool } from '../shared/types/jira'
+import { SlackTool } from '../shared/types/slack'
+import { ConfluenceTool } from '../shared/types/confluence'
+import { GoogleCalendarTool } from '../shared/types/googleCalendar'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 

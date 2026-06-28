@@ -17,7 +17,7 @@
 import { createServer, type Server, type Socket } from 'node:net'
 import { existsSync, unlinkSync } from 'node:fs'
 import { encodeBridgeMessage } from '../shared/bridge'
-import { SlackOp, type SlackResult } from '../shared/slack'
+import { SlackOp, type SlackResult } from '../shared/types/slack'
 import { validateSlackBridgeCall } from '../shared/validate'
 import {
   validateSlackGetUser,

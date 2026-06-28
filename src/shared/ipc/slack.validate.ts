@@ -17,8 +17,8 @@ import type {
   SlackRepliesParams,
   SlackSearchParams,
   SlackSendParams
-} from '../slack'
-import { SlackOp } from '../slack'
+} from '../types/slack'
+import { SlackOp } from '../types/slack'
 import {
   defaultWarn,
   isNonEmptyString,

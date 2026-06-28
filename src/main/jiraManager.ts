@@ -42,8 +42,8 @@ import type {
   JiraTransitionResult,
   JiraUpdateParams,
   JiraUpdateResult
-} from '../shared/jira'
-import { JIRA_WRITE_NOT_AUTHORIZED_MESSAGE, JIRA_WRITE_SCOPE } from '../shared/jira'
+} from '../shared/types/jira'
+import { JIRA_WRITE_NOT_AUTHORIZED_MESSAGE, JIRA_WRITE_SCOPE } from '../shared/types/jira'
 import type { JiraCallAuth, JiraClient } from './integrations/jiraClient'
 import type { StoredTokenSet, TokenStore } from './integrations/tokenStore'
 import type { AtlassianOAuthResult } from './integrations/atlassianOAuth'

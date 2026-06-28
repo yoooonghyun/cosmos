@@ -25,9 +25,9 @@ import type {
   AdapterRegisterOptions,
   AdapterResolver
 } from './adapterDispatcher'
-import type { AdapterDescriptor } from '../shared/adapter'
-import { JiraAdapterSource } from '../shared/jira'
-import { AdapterSourcePath } from '../shared/adapter'
+import type { AdapterDescriptor } from '../shared/types/adapter'
+import { JiraAdapterSource } from '../shared/types/jira'
+import { AdapterSourcePath } from '../shared/types/adapter'
 import type {
   JiraGetIssueParams,
   JiraIssueDetail,
@@ -35,7 +35,7 @@ import type {
   JiraPage,
   JiraResult,
   JiraSearchParams
-} from '../shared/jira'
+} from '../shared/types/jira'
 
 /** The bound data-model path the issue list reads its rows from (FR-017). Single-sourced from
  * the shared {@link AdapterSourcePath} so the tool-description text + the dispatcher agree. */

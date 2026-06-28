@@ -70,7 +70,7 @@ import type {
   ConfluencePageDetail,
   ConfluenceResult,
   ConfluenceSearchResult
-} from '../shared/confluence'
+} from '../shared/types/confluence'
 
 /* ------------------------------------------------------------------------- *
  * Loading skeletons (design §5.2 / §5.3)

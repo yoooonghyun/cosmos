@@ -30,7 +30,7 @@ import {
   ConfluenceTool,
   type ConfluenceOpName,
   type ConfluenceResult
-} from '../shared/confluence'
+} from '../shared/types/confluence'
 
 function projectDir(): string {
   return process.env['CLAUDE_PROJECT_DIR'] || process.cwd()

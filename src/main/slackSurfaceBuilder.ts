@@ -22,14 +22,14 @@ import type {
   SlackMessage,
   SlackPage,
   SlackSearchMatch
-} from '../shared/slack'
+} from '../shared/types/slack'
 import {
   SlackAdapterSource,
   slackChannelsDescriptor,
   slackHistoryDescriptor,
   slackSearchDescriptor,
   type SlackAdapterDescriptor
-} from '../shared/slack'
+} from '../shared/types/slack'
 import {
   SLACK_CHANNELS_PATH,
   SLACK_MATCHES_PATH,

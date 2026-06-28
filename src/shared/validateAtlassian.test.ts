@@ -10,8 +10,8 @@ import {
   validateJiraGetIssue,
   validateJiraSearch
 } from './validate'
-import { JiraOp } from './jira'
-import { ConfluenceOp } from './confluence'
+import { JiraOp } from './types/jira'
+import { ConfluenceOp } from './types/confluence'
 
 describe('Jira IPC validators (FR-J04, FR-X04, SC-009)', () => {
   describe('validateJiraSearch', () => {

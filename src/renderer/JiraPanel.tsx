@@ -67,7 +67,7 @@ import { useConfirm } from './useConfirm'
 import { ConfirmDialog } from '@/components/ui/confirm-dialog'
 import { confirmCopy } from './confirmLogic'
 import type { UiRenderPayload } from '../shared/ipc'
-import type { JiraConnectionStatus } from '../shared/jira'
+import type { JiraConnectionStatus } from '../shared/types/jira'
 
 /**
  * The my-tickets JQL — the native search box's placeholder AND the empty-submit fallback

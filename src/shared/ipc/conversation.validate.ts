@@ -11,8 +11,8 @@
  * never sent; the renderer keeps its prior state (no crash, FR-118).
  */
 
-import type { Conversation, ConversationTurn, SurfaceTurn } from '../conversation'
-import { PREVIEW_MAX_LEN } from '../conversation'
+import type { Conversation, ConversationTurn, SurfaceTurn } from '../types/conversation'
+import { PREVIEW_MAX_LEN } from '../types/conversation'
 import type { ConversationResult } from './conversation'
 import { defaultWarn, isObject, type WarnFn } from './common.validate'
 

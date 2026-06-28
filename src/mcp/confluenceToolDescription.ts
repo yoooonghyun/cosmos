@@ -12,7 +12,7 @@
  * id (confluence-detail-rich-render-v1, FR-001/FR-002/FR-003).
  */
 
-import { AdapterFlagPath } from '../shared/adapter'
+import { AdapterFlagPath } from '../shared/types/adapter'
 
 export const CONFLUENCE_TOOL_DESCRIPTION = [
   'Render a Confluence UI surface in the cosmos Confluence panel using the Confluence',

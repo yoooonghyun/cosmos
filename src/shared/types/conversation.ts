@@ -12,7 +12,7 @@
  * renderer and unit-tested in node.
  */
 
-import type { A2uiSurfaceUpdate } from './ipc/ui'
+import type { A2uiSurfaceUpdate } from '../ipc/ui'
 
 /**
  * One ordered item in the conversation timeline (FR-101). A discriminated union keyed

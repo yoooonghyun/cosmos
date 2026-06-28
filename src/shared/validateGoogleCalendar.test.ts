@@ -4,7 +4,7 @@ import {
   validateGoogleCalendarListEvents,
   validateGoogleCalendarRequestDefaultView
 } from './validate'
-import { GoogleCalendarOp } from './googleCalendar'
+import { GoogleCalendarOp } from './types/googleCalendar'
 
 /**
  * Google Calendar boundary validators (google-calendar-v1, FR-015). Every Google IPC +

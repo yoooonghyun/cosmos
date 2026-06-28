@@ -6,7 +6,7 @@ import {
   validateJiraTransition,
   validateJiraUpdate
 } from './validate'
-import { JiraBoundAction, isJiraBoundActionId } from './jira'
+import { JiraBoundAction, isJiraBoundActionId } from './types/jira'
 
 /* Jira generative-UI v1 — write boundary validators (FR-005, FR-006, FR-020). */
 

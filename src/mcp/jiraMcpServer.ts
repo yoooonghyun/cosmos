@@ -25,7 +25,7 @@ import {
   type JiraBridgeCallRequest,
   type JiraBridgeServerMessage
 } from '../shared/bridge'
-import { JiraOp, JiraTool, type JiraOpName, type JiraResult } from '../shared/jira'
+import { JiraOp, JiraTool, type JiraOpName, type JiraResult } from '../shared/types/jira'
 
 function projectDir(): string {
   return process.env['CLAUDE_PROJECT_DIR'] || process.cwd()

@@ -24,7 +24,7 @@ import {
   type SlackBridgeCallRequest,
   type SlackBridgeServerMessage
 } from '../shared/bridge'
-import { SlackOp, SlackTool, type SlackOpName, type SlackResult } from '../shared/slack'
+import { SlackOp, SlackTool, type SlackOpName, type SlackResult } from '../shared/types/slack'
 
 function projectDir(): string {
   return process.env['CLAUDE_PROJECT_DIR'] || process.cwd()

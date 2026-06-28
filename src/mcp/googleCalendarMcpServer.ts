@@ -30,7 +30,7 @@ import {
   GoogleCalendarTool,
   type GoogleCalendarOpName,
   type GoogleCalendarResult
-} from '../shared/googleCalendar'
+} from '../shared/types/googleCalendar'
 
 function projectDir(): string {
   return process.env['CLAUDE_PROJECT_DIR'] || process.cwd()

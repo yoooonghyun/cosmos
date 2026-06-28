@@ -26,8 +26,8 @@
  */
 
 import type { A2uiSurfaceUpdate, UiDataModelPayload } from '../shared/ipc'
-import type { AdapterBinding, AdapterDescriptor } from '../shared/adapter'
-import { AdapterDataKey, regionFlagPath, regionListPath } from '../shared/adapter'
+import type { AdapterBinding, AdapterDescriptor } from '../shared/types/adapter'
+import { AdapterDataKey, regionFlagPath, regionListPath } from '../shared/types/adapter'
 import type { AdapterRegisterOptions } from './adapterDispatcher'
 import { listSourceBinding } from './adapterBindingRegistry'
 

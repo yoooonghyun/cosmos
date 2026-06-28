@@ -33,8 +33,8 @@ import {
 import { validateSurfaceUpdate } from '../shared/validate'
 import { CONFLUENCE_TOOL_DESCRIPTION } from './confluenceToolDescription'
 import { registerGetUiCatalogTool } from './uiCatalog'
-import { BindingsFirstEnforcer } from '../shared/dataBearingSpec'
-import { ConfluenceAdapterSource } from '../shared/confluence'
+import { BindingsFirstEnforcer } from '../shared/types/dataBearingSpec'
+import { ConfluenceAdapterSource } from '../shared/types/confluence'
 import type { A2uiAction } from '../shared/ipc'
 
 /** Where the bridge socket lives. Claude Code sets CLAUDE_PROJECT_DIR. */

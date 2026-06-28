@@ -24,8 +24,8 @@ import type {
   JiraTransitionParams,
   JiraUpdateFields,
   JiraUpdateParams
-} from '../jira'
-import { JiraBoundAction, JiraOp } from '../jira'
+} from '../types/jira'
+import { JiraBoundAction, JiraOp } from '../types/jira'
 import {
   defaultWarn,
   isNonEmptyString,

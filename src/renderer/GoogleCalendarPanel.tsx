@@ -85,7 +85,7 @@ import { useTabShortcuts } from './useTabShortcuts'
 import { useConfirm } from './useConfirm'
 import { ConfirmDialog } from '@/components/ui/confirm-dialog'
 import { confirmCopy } from './confirmLogic'
-import type { GoogleCalendarConnectionStatus } from '../shared/googleCalendar'
+import type { GoogleCalendarConnectionStatus } from '../shared/types/googleCalendar'
 
 /* ------------------------------------------------------------------------- *
  * Connect call-to-action (desktop OAuth browser flow) — Google-specific copy.

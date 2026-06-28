@@ -103,7 +103,7 @@ import type {
   SlackSearchMatch,
   SlackSendResult,
   SlackUser
-} from '../shared/slack'
+} from '../shared/types/slack'
 
 /* ------------------------------------------------------------------------- *
  * Helpers

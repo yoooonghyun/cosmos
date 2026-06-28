@@ -13,9 +13,9 @@
 
 import { describe, it, expect } from 'vitest'
 import { resolveDescriptorShell } from './descriptorShell'
-import { SlackAdapterSource } from '../shared/slack'
-import { ConfluenceAdapterSource } from '../shared/confluence'
-import { JiraAdapterSource } from '../shared/jira'
+import { SlackAdapterSource } from '../shared/types/slack'
+import { ConfluenceAdapterSource } from '../shared/types/confluence'
+import { JiraAdapterSource } from '../shared/types/jira'
 import {
   SURFACE_SLACK_CHANNELS,
   SURFACE_SLACK_HISTORY,

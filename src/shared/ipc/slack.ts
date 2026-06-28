@@ -23,7 +23,7 @@ import type {
   SlackSendParams,
   SlackSendResult,
   SlackUser
-} from '../slack'
+} from '../types/slack'
 
 /**
  * Slack IPC channel name constants (FR-025). The reads are request/response via

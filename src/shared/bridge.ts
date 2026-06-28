@@ -16,11 +16,11 @@
  */
 
 import type { A2uiAction, A2uiSurfaceUpdate, UiRenderTarget } from './ipc'
-import type { AdapterBinding, AdapterDescriptor } from './adapter'
-import type { SlackOpName, SlackResult } from './slack'
-import type { JiraOpName, JiraResult } from './jira'
-import type { ConfluenceOpName, ConfluenceResult } from './confluence'
-import type { GoogleCalendarOpName, GoogleCalendarResult } from './googleCalendar'
+import type { AdapterBinding, AdapterDescriptor } from './types/adapter'
+import type { SlackOpName, SlackResult } from './types/slack'
+import type { JiraOpName, JiraResult } from './types/jira'
+import type { ConfluenceOpName, ConfluenceResult } from './types/confluence'
+import type { GoogleCalendarOpName, GoogleCalendarResult } from './types/googleCalendar'
 
 /**
  * Resolve the render_ui bridge socket path. Derived from the project dir so the

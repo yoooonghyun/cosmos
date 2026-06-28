@@ -14,7 +14,7 @@
 import { createServer, type Server, type Socket } from 'node:net'
 import { existsSync, unlinkSync } from 'node:fs'
 import { encodeBridgeMessage } from '../shared/bridge'
-import { ConfluenceOp, type ConfluenceResult } from '../shared/confluence'
+import { ConfluenceOp, type ConfluenceResult } from '../shared/types/confluence'
 import {
   validateConfluenceBridgeCall,
   validateConfluenceComment,

@@ -18,7 +18,7 @@
  * imports only the MCP SDK types + the pure shared adapter flag-path constants.
  */
 
-import { AdapterFlagPath } from '../shared/adapter'
+import { AdapterFlagPath } from '../shared/types/adapter'
 
 /**
  * The A2UI 0.9 component catalog + authoring rules returned by `get_ui_catalog`.

@@ -49,14 +49,14 @@ import {
   type JiraAdapterManager
 } from './jiraAdapter'
 import { planAgentSurfaceRegistration } from './descriptorRegistration'
-import type { AdapterDescriptor } from '../shared/adapter'
+import type { AdapterDescriptor } from '../shared/types/adapter'
 import type { A2uiSurfaceUpdate, UiDataModelPayload } from '../shared/ipc'
 import type {
   JiraIssueSummary,
   JiraPage,
   JiraResult,
   JiraIssueDetail
-} from '../shared/jira'
+} from '../shared/types/jira'
 
 /* ----------------------------------------------------------------------------- *
  * Fixtures: two DIFFERENT issue sets + a recoverable failure, controlled per call.

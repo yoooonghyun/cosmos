@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { reconcileTimeline, type LiveInFlight } from './cosmosConversation'
-import type { ConversationTurn } from '../shared/conversation'
+import type { ConversationTurn } from '../shared/types/conversation'
 
 const userTurn: ConversationTurn = { kind: 'user-prompt', id: 'u1', ts: '1', text: 'hi' }
 const surfaceTurn: ConversationTurn = {

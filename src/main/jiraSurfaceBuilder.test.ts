@@ -11,8 +11,8 @@ import {
   formatCommentTime
 } from './jiraSurfaceBuilder'
 import { JIRA_DETAIL_PATH, JIRA_LIST_PATH, jiraIssueRow } from './jiraAdapter'
-import { JiraAdapterSource } from '../shared/jira'
-import type { JiraIssueDetail, JiraIssueSummary, JiraPage } from '../shared/jira'
+import { JiraAdapterSource } from '../shared/types/jira'
+import type { JiraIssueDetail, JiraIssueSummary, JiraPage } from '../shared/types/jira'
 
 /* Jira generative-UI v2 — pure surface builder emitting the JIRA CUSTOM catalog. */
 

@@ -12,13 +12,13 @@
  * along into the snapshot (FR-007/FR-021).
  */
 
-import type { AdapterActionRequest, AdapterBinding, AdapterDescriptor, AdapterQuery } from '../adapter'
-import { AdapterAction, isAdapterActionId } from '../adapter'
+import type { AdapterActionRequest, AdapterBinding, AdapterDescriptor, AdapterQuery } from '../types/adapter'
+import { AdapterAction, isAdapterActionId } from '../types/adapter'
 import type { UiRenderTarget } from './common'
-import { JiraAdapterSource } from '../jira'
-import { SlackAdapterSource } from '../slack'
-import { ConfluenceAdapterSource } from '../confluence'
-import { GoogleCalendarAdapterSource } from '../googleCalendar'
+import { JiraAdapterSource } from '../types/jira'
+import { SlackAdapterSource } from '../types/slack'
+import { ConfluenceAdapterSource } from '../types/confluence'
+import { GoogleCalendarAdapterSource } from '../types/googleCalendar'
 import { defaultWarn, isNonEmptyString, isObject, type WarnFn } from './common.validate'
 
 /**

@@ -35,9 +35,9 @@ import type {
   AdapterRegisterOptions,
   AdapterResolver
 } from './adapterDispatcher'
-import type { AdapterDescriptor } from '../shared/adapter'
-import { AdapterSourcePath } from '../shared/adapter'
-import { ConfluenceAdapterSource } from '../shared/confluence'
+import type { AdapterDescriptor } from '../shared/types/adapter'
+import { AdapterSourcePath } from '../shared/types/adapter'
+import { ConfluenceAdapterSource } from '../shared/types/confluence'
 import type {
   ConfluenceDefaultFeedParams,
   ConfluenceGetPageParams,
@@ -46,7 +46,7 @@ import type {
   ConfluenceResult,
   ConfluenceSearchParams,
   ConfluenceSearchResult
-} from '../shared/confluence'
+} from '../shared/types/confluence'
 
 /** The bound data-model path the default activity feed reads its rows from. Single-sourced
  * from the shared {@link AdapterSourcePath} so the tool-description text + the dispatcher agree. */

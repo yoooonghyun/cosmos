@@ -23,13 +23,13 @@ import type {
   JiraIssueDetail,
   JiraIssueSummary,
   JiraPage
-} from '../shared/jira'
+} from '../shared/types/jira'
 import {
   JiraAdapterSource,
   jiraSearchDescriptor,
   jiraGetIssueDescriptor,
   type JiraAdapterDescriptor
-} from '../shared/jira'
+} from '../shared/types/jira'
 import { JIRA_DETAIL_PATH, JIRA_LIST_PATH, jiraIssueRow } from './jiraAdapter'
 
 /** An A2UI 0.9 component definition: an id + a `component` discriminator + props. */

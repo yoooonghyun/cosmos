@@ -25,7 +25,7 @@ import type {
   GoogleCalendarEvent,
   GoogleCalendarEventsPage,
   GoogleCalendarResult
-} from '../../shared/googleCalendar'
+} from '../../shared/types/googleCalendar'
 import {
   GOOGLE_CALENDAR_API_BASE,
   GOOGLE_CALENDAR_LIST_PATH,

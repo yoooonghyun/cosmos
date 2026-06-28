@@ -17,7 +17,7 @@
  * transcript turns + the current live state and renders the returned timeline.
  */
 
-import type { ConversationTurn } from '../shared/conversation'
+import type { ConversationTurn } from '../shared/types/conversation'
 
 /**
  * The current LIVE in-flight turn, derived by the panel from the `ui:render` /

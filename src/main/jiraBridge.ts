@@ -20,7 +20,7 @@ import {
   type JiraCreateParams,
   type JiraResult,
   type JiraUpdateParams
-} from '../shared/jira'
+} from '../shared/types/jira'
 import {
   validateJiraBridgeCall,
   validateJiraComment,

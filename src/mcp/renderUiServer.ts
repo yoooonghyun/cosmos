@@ -28,11 +28,11 @@ import {
   type BridgeServerMessage
 } from '../shared/bridge'
 import { validateSurfaceUpdate } from '../shared/validate'
-import { BindingsFirstEnforcer } from '../shared/dataBearingSpec'
+import { BindingsFirstEnforcer } from '../shared/types/dataBearingSpec'
 import { registerGetUiCatalogTool } from './uiCatalog'
-import { JiraAdapterSource } from '../shared/jira'
-import { SlackAdapterSource } from '../shared/slack'
-import { ConfluenceAdapterSource } from '../shared/confluence'
+import { JiraAdapterSource } from '../shared/types/jira'
+import { SlackAdapterSource } from '../shared/types/slack'
+import { ConfluenceAdapterSource } from '../shared/types/confluence'
 import type { A2uiAction } from '../shared/ipc'
 
 /** Where the bridge socket lives. Claude Code sets CLAUDE_PROJECT_DIR. */

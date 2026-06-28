@@ -8,7 +8,7 @@ import {
   validateSlackSearch,
   validateSlackSend
 } from './validate'
-import { SlackOp } from './slack'
+import { SlackOp } from './types/slack'
 
 describe('Slack IPC validators (FR-023, SC-007)', () => {
   describe('validateSlackListChannels', () => {

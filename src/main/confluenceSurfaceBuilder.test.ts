@@ -13,12 +13,12 @@ import {
   CONFLUENCE_RESULTS_PATH,
   confluenceResultRow
 } from './confluenceAdapter'
-import { ConfluenceAdapterSource } from '../shared/confluence'
+import { ConfluenceAdapterSource } from '../shared/types/confluence'
 import type {
   ConfluencePage,
   ConfluencePageDetail,
   ConfluenceSearchResult
-} from '../shared/confluence'
+} from '../shared/types/confluence'
 
 /* confluence-generative-adapter-v1 — the bound surface builders (FR-002/FR-003). Each
  * re-expresses a surface with `{path}` bindings + an initial updateDataModel seed + a

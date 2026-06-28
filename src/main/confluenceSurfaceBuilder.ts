@@ -25,14 +25,14 @@ import type {
   ConfluencePage,
   ConfluencePageDetail,
   ConfluenceSearchResult
-} from '../shared/confluence'
+} from '../shared/types/confluence'
 import {
   ConfluenceAdapterSource,
   confluenceFeedDescriptor,
   confluencePageDescriptor,
   confluenceSearchDescriptor,
   type ConfluenceAdapterDescriptor
-} from '../shared/confluence'
+} from '../shared/types/confluence'
 import {
   CONFLUENCE_FEED_PATH,
   CONFLUENCE_PAGE_PATH,

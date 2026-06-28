@@ -29,9 +29,9 @@ import {
   type BridgeServerMessage
 } from '../shared/bridge'
 import { validateSurfaceUpdate } from '../shared/validate'
-import { AdapterFlagPath } from '../shared/adapter'
-import { BindingsFirstEnforcer } from '../shared/dataBearingSpec'
-import { JiraAdapterSource } from '../shared/jira'
+import { AdapterFlagPath } from '../shared/types/adapter'
+import { BindingsFirstEnforcer } from '../shared/types/dataBearingSpec'
+import { JiraAdapterSource } from '../shared/types/jira'
 import { registerGetUiCatalogTool } from './uiCatalog'
 import type { A2uiAction } from '../shared/ipc'
 

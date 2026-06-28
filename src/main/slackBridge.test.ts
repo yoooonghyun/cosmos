@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from 'vitest'
 import { SlackBridge, type SlackBridgeManager } from './slackBridge'
-import { SlackOp, type SlackResult } from '../shared/slack'
+import { SlackOp, type SlackResult } from '../shared/types/slack'
 
 function makeManager(overrides?: Partial<SlackBridgeManager>): SlackBridgeManager {
   const ok = async (): Promise<SlackResult<unknown>> => ({ ok: true, data: { items: [] } })

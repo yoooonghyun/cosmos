@@ -29,8 +29,8 @@
  * one-line preview (`previewArgs`), and anything pattern-matching a secret is redacted.
  */
 
-import type { ConversationTurn, ToolCallTurn } from '../shared/conversation'
-import { PREVIEW_MAX_LEN } from '../shared/conversation'
+import type { ConversationTurn, ToolCallTurn } from '../shared/types/conversation'
+import { PREVIEW_MAX_LEN } from '../shared/types/conversation'
 import type { A2uiSurfaceUpdate } from '../shared/ipc/ui'
 
 /** The transcript tool name the render_ui MCP server records (FR-102, pinned from a real transcript). */

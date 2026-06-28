@@ -14,7 +14,7 @@
  * §6 (TransitionPicker), §8 (AddCommentControl guard).
  */
 
-import type { JiraStatusCategory, JiraUpdateFields } from '../../shared/jira'
+import type { JiraStatusCategory, JiraUpdateFields } from '../../shared/types/jira'
 
 /**
  * The renderer-local nav action a clickable `TicketCard` emits to open its detail

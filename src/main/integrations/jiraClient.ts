@@ -36,7 +36,7 @@ import type {
   JiraUpdateParams,
   JiraUpdateResult,
   JiraUserRef
-} from '../../shared/jira'
+} from '../../shared/types/jira'
 import { jiraApiBase } from './atlassianConfig'
 import { adfToPlainText, plainTextToAdf } from './atlassianText'
 import { jiraWebUrl } from './jiraWebUrl'

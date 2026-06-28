@@ -32,9 +32,9 @@ import {
 } from '../shared/bridge'
 import { registerGetUiCatalogTool } from './uiCatalog'
 import { validateSurfaceUpdate } from '../shared/validate'
-import { AdapterFlagPath } from '../shared/adapter'
-import { BindingsFirstEnforcer } from '../shared/dataBearingSpec'
-import { SlackAdapterSource } from '../shared/slack'
+import { AdapterFlagPath } from '../shared/types/adapter'
+import { BindingsFirstEnforcer } from '../shared/types/dataBearingSpec'
+import { SlackAdapterSource } from '../shared/types/slack'
 import type { A2uiAction } from '../shared/ipc'
 
 /** Where the bridge socket lives. Claude Code sets CLAUDE_PROJECT_DIR. */

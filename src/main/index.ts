@@ -72,11 +72,11 @@ import {
   type CosmosMcpSignature,
   type ProcSnapshotRow
 } from './orphanReaper'
-import type { SlackConnectionStatus } from '../shared/slack'
-import type { JiraConnectionStatus } from '../shared/jira'
-import { JiraAdapterSource } from '../shared/jira'
-import type { ConfluenceConnectionStatus } from '../shared/confluence'
-import type { GoogleCalendarConnectionStatus } from '../shared/googleCalendar'
+import type { SlackConnectionStatus } from '../shared/types/slack'
+import type { JiraConnectionStatus } from '../shared/types/jira'
+import { JiraAdapterSource } from '../shared/types/jira'
+import type { ConfluenceConnectionStatus } from '../shared/types/confluence'
+import type { GoogleCalendarConnectionStatus } from '../shared/types/googleCalendar'
 import {
   confluenceBridgeSocketPath,
   googleCalendarBridgeSocketPath,

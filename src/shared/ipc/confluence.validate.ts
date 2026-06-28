@@ -14,8 +14,8 @@ import type {
   ConfluencePageDetail,
   ConfluenceSearchParams,
   ConfluenceUpdateParams
-} from '../confluence'
-import { ConfluenceOp } from '../confluence'
+} from '../types/confluence'
+import { ConfluenceOp } from '../types/confluence'
 import {
   defaultWarn,
   isNonEmptyString,

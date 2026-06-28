@@ -21,7 +21,7 @@ import type {
   ConfluenceResult,
   ConfluenceSearchParams,
   ConfluenceSearchResult
-} from '../confluence'
+} from '../types/confluence'
 
 /**
  * Confluence IPC channel name constants (FR-X06). Same request/response +

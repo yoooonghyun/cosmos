@@ -45,7 +45,7 @@ import {
   SelectValue
 } from '@/components/ui/select'
 import { cn } from '@/lib/utils'
-import { JiraBoundAction } from '../../shared/jira'
+import { JiraBoundAction } from '../../shared/types/jira'
 // jira-generative-adapter-v1 → slack-generative-adapter-v1 (design §6.1): the adapter
 // controls + the {path}-binding helpers now live in the SHARED catalog module so Jira
 // and Slack reuse ONE definition each (no copy). Re-exported below for backward compat.
@@ -61,7 +61,7 @@ import type {
   JiraTransition,
   JiraUpdateFields,
   JiraUserRef
-} from '../../shared/jira'
+} from '../../shared/types/jira'
 import { formatTs, initials } from '../atlassianPanelBits'
 import {
   diffUpdateFields,

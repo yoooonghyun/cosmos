@@ -33,9 +33,9 @@ import {
   type BridgeServerMessage
 } from '../shared/bridge'
 import { validateSurfaceUpdate } from '../shared/validate'
-import { AdapterFlagPath } from '../shared/adapter'
-import { BindingsFirstEnforcer } from '../shared/dataBearingSpec'
-import { GoogleCalendarAdapterSource } from '../shared/googleCalendar'
+import { AdapterFlagPath } from '../shared/types/adapter'
+import { BindingsFirstEnforcer } from '../shared/types/dataBearingSpec'
+import { GoogleCalendarAdapterSource } from '../shared/types/googleCalendar'
 import { registerGetUiCatalogTool } from './uiCatalog'
 import type { A2uiAction } from '../shared/ipc'
 

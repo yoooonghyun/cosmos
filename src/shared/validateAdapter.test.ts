@@ -5,7 +5,7 @@ import {
   validateAdapterDescriptor,
   adapterSourceMatchesTarget
 } from './validate'
-import { AdapterAction } from './adapter'
+import { AdapterAction } from './types/adapter'
 
 /* jira-generative-adapter-v1 — SHARED boundary validators (FR-007/009/010/019/022/023).
  * Pattern per FR: happy path; missing optional (no error); invalid/missing required

@@ -4,7 +4,7 @@ import {
   type JiraActionDispatcherDeps,
   type JiraActionManager
 } from './jiraActionDispatcher'
-import type { JiraIssueDetail, JiraResult } from '../shared/jira'
+import type { JiraIssueDetail, JiraResult } from '../shared/types/jira'
 import type { UiRenderPayload } from '../shared/ipc'
 
 /* Jira generative-UI v1/v2 — deterministic dispatcher (FR-004/006/007/016/017/019).
