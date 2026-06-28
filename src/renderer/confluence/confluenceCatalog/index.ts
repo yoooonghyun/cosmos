@@ -33,7 +33,7 @@ import { Column, Row } from './layout'
 // the SHARED adapter control verbatim. Confluence is append-only, so it registers
 // LoadMoreButton ONLY — never PaginationBar. Refresh moved to the panel chrome
 // (panel-refresh-v1, FR-006).
-import { LoadMoreButton } from '../catalogShared/controls'
+import { LoadMoreButton } from '../../catalogShared/controls'
 
 /** The `catalogId` the Confluence panel's `<A2UIProvider>` registers. */
 export const CONFLUENCE_CATALOG_ID = 'confluence'

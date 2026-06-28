@@ -18,7 +18,7 @@
  */
 
 import DOMPurify, { type WindowLike } from 'dompurify'
-import { decodeUnicodeEscapes } from '../../shared/types/confluence'
+import { decodeUnicodeEscapes } from '../../../shared/types/confluence'
 import {
   attachmentIdOf,
   confluenceRelativePath,

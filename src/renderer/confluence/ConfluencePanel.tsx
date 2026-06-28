@@ -34,7 +34,7 @@ import {
   EmptyLine,
   ErrorState,
   ReconnectState
-} from './atlassianPanelBits'
+} from '../atlassianPanelBits'
 import { confluenceCatalog, CONFLUENCE_CATALOG_ID } from './confluenceCatalog'
 import { CONFLUENCE_OPEN_DETAIL_ACTION } from './confluenceCatalog/logic'
 // Shared page-detail body + title — native panel + gen-UI overlay render IDENTICALLY (SC-002/SC-005).
@@ -46,23 +46,23 @@ import {
   PageDetailTitle
 } from './confluenceCatalog/components'
 import { CommentsSection } from './confluenceCatalog/CommentsSection'
-import { PanelTabStrip, type PanelTab } from './PanelTabStrip'
-import { PanelRefreshButton } from './PanelRefreshButton'
-import { panelRefreshInputsFor } from './panelRefreshLogic'
-import { PanelFooter } from './PanelFooter'
-import { ActiveTabSurface } from './ActiveTabSurface'
-import { usePublishComposer } from './ActiveComposerProvider'
-import { SurfaceSpinner } from './SurfaceSpinner'
-import { GlassDock } from './glassDock/GlassDock'
-import { useGenerativePanelTabs } from './useGenerativePanelTabs'
-import { confluenceViewContext, contextChipFor } from './viewContextCapture'
-import { useRestoredGenerativePanel } from './SessionProvider'
-import { surfaceSpinnerVisible } from './promptComposerLogic'
-import { usePerTabNav } from './usePerTabNav'
-import { useTabShortcuts } from './useTabShortcuts'
-import { useConfirm } from './useConfirm'
+import { PanelTabStrip, type PanelTab } from '../PanelTabStrip'
+import { PanelRefreshButton } from '../PanelRefreshButton'
+import { panelRefreshInputsFor } from '../panelRefreshLogic'
+import { PanelFooter } from '../PanelFooter'
+import { ActiveTabSurface } from '../ActiveTabSurface'
+import { usePublishComposer } from '../ActiveComposerProvider'
+import { SurfaceSpinner } from '../SurfaceSpinner'
+import { GlassDock } from '../glassDock/GlassDock'
+import { useGenerativePanelTabs } from '../useGenerativePanelTabs'
+import { confluenceViewContext, contextChipFor } from '../viewContextCapture'
+import { useRestoredGenerativePanel } from '../SessionProvider'
+import { surfaceSpinnerVisible } from '../promptComposerLogic'
+import { usePerTabNav } from '../usePerTabNav'
+import { useTabShortcuts } from '../useTabShortcuts'
+import { useConfirm } from '../useConfirm'
 import { ConfirmDialog } from '@/components/ui/confirm-dialog'
-import { confirmCopy } from './confirmLogic'
+import { confirmCopy } from '../confirmLogic'
 import type {
   ConfluenceConnectionStatus,
   ConfluenceError,
@@ -70,7 +70,7 @@ import type {
   ConfluencePageDetail,
   ConfluenceResult,
   ConfluenceSearchResult
-} from '../shared/types/confluence'
+} from '../../shared/types/confluence'
 
 /* ------------------------------------------------------------------------- *
  * Loading skeletons (design §5.2 / §5.3)
