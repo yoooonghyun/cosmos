@@ -14,7 +14,7 @@
  * surface before forwarding so a payload can only ever touch the surface it belongs to.
  */
 
-import type { UiDataModelPayload } from '../shared/ipc'
+import type { UiDataModelPayload } from '../../shared/ipc'
 
 /** A function that processes one A2UI message (the SDK's `processMessage`). */
 export type ProcessMessage = (message: { updateDataModel: UiDataModelPayload }) => void

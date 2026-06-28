@@ -16,7 +16,7 @@
  * re-executing. NO token crosses — the descriptor is secret-free by contract.
  */
 
-import type { AdapterBinding, AdapterDescriptor } from '../shared/types/adapter'
+import type { AdapterBinding, AdapterDescriptor } from '../../shared/types/adapter'
 
 /** The active tab's surface slice the refresh derivation needs (no React types). */
 export interface ActiveSurfaceForRefresh {

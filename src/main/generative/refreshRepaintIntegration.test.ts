@@ -39,24 +39,24 @@ import { describe, it, expect } from 'vitest'
 import { setValueByPath, resolveValue } from '@a2ui-sdk/utils/0.9'
 import type { FormBindableValue } from '@a2ui-sdk/types/0.9'
 
-import { applyDataModel, type ProcessMessage } from '../renderer/dataModelApply'
-import { AdapterDispatcher } from './generative/adapterDispatcher'
+import { applyDataModel, type ProcessMessage } from '../../renderer/generative/dataModelApply'
+import { AdapterDispatcher } from './adapterDispatcher'
 import {
   jiraAdapterResolver,
   jiraIssueRow,
   jiraListBindOptions,
   JIRA_LIST_PATH,
   type JiraAdapterManager
-} from './jira/jiraAdapter'
-import { planAgentSurfaceRegistration } from './generative/descriptorRegistration'
-import type { AdapterDescriptor } from '../shared/types/adapter'
-import type { A2uiSurfaceUpdate, UiDataModelPayload } from '../shared/ipc'
+} from '../jira/jiraAdapter'
+import { planAgentSurfaceRegistration } from './descriptorRegistration'
+import type { AdapterDescriptor } from '../../shared/types/adapter'
+import type { A2uiSurfaceUpdate, UiDataModelPayload } from '../../shared/ipc'
 import type {
   JiraIssueSummary,
   JiraPage,
   JiraResult,
   JiraIssueDetail
-} from '../shared/types/jira'
+} from '../../shared/types/jira'
 
 /* ----------------------------------------------------------------------------- *
  * Fixtures: two DIFFERENT issue sets + a recoverable failure, controlled per call.

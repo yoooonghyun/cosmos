@@ -30,7 +30,7 @@
  * already-secret-free `descriptor`/`bindings` the manual refresh already sends (FR-013).
  */
 
-import type { AdapterBinding, AdapterDescriptor } from '../shared/types/adapter'
+import type { AdapterBinding, AdapterDescriptor } from '../../shared/types/adapter'
 
 /** The minimal surface slice the auto-refresh decision reads (no React types). */
 export interface SurfaceForAutoRefresh {

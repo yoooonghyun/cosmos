@@ -45,10 +45,10 @@ import {
   isDetailSurfaceSpec
 } from './jiraCatalog'
 import { PanelTabStrip, type PanelTab } from '../tabs/PanelTabStrip'
-import { PanelRefreshButton } from '../PanelRefreshButton'
-import { panelRefreshInputsFor } from '../panelRefreshLogic'
+import { PanelRefreshButton } from '../generative/PanelRefreshButton'
+import { panelRefreshInputsFor } from '../generative/panelRefreshLogic'
 import { PanelFooter } from '../PanelFooter'
-import { ActiveTabSurface } from '../ActiveTabSurface'
+import { ActiveTabSurface } from '../generative/ActiveTabSurface'
 import { usePublishComposer } from '../composer/ActiveComposerProvider'
 import { SurfaceSpinner } from '../SurfaceSpinner'
 import { GlassDock } from '../glassDock/GlassDock'
@@ -59,7 +59,7 @@ import { usePerTabNav } from '../tabs/usePerTabNav'
 import {
   shouldAutoRefreshOnActivation,
   autoRefreshValues
-} from '../activeTabSurfaceRefresh'
+} from '../generative/activeTabSurfaceRefresh'
 import { surfaceSpinnerVisible } from '../composer/promptComposerLogic'
 import { shouldAutoLoadDefaultView } from '../tabs/panelTabs'
 import { useTabShortcuts } from '../tabs/useTabShortcuts'

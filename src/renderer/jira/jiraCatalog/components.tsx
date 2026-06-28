@@ -54,7 +54,7 @@ import {
   PaginationBar,
   useBound,
   type Bound
-} from '../../catalogShared/controls'
+} from '../../generative/catalogShared/controls'
 import type {
   JiraComment,
   JiraStatusCategory,

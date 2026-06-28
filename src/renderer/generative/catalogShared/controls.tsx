@@ -24,7 +24,7 @@ import { useDataBinding, useDispatchAction } from '@a2ui-sdk/react/0.9'
 import type { DynamicValue } from '@a2ui-sdk/types/0.9'
 import { ChevronLeft, ChevronRight, Loader2 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
-import { AdapterAction } from '../../shared/types/adapter'
+import { AdapterAction } from '../../../shared/types/adapter'
 
 /**
  * A `{path}` binding source — what a bound prop carries instead of a literal value

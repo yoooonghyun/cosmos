@@ -33,7 +33,7 @@ import { cn } from '@/lib/utils'
 // the SHARED adapter controls + binding helpers VERBATIM (the single definition the Jira
 // and Slack catalogs also use). Confluence registers LoadMoreButton only — never
 // PaginationBar (append-only). Refresh moved to the panel chrome (panel-refresh-v1, FR-006).
-import { LoadMoreButton, useBound, type Bound } from '../../catalogShared/controls'
+import { LoadMoreButton, useBound, type Bound } from '../../generative/catalogShared/controls'
 import {
   boundRows,
   CONFLUENCE_OPEN_DETAIL_ACTION,
