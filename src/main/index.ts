@@ -123,7 +123,7 @@ import { SessionStore } from './session/sessionStore'
 import { validateSnapshot } from './session/sessionSnapshot'
 import { AgentRunner } from './agent/agentRunner'
 import { AgentSessionStore } from './agent/agentSessionStore'
-import { TranscriptReader } from './transcriptReader'
+import { TranscriptReader } from './fs/transcriptReader'
 import { selectDefaultSessionId } from './agent/agentSessionQueue'
 import {
   CONFLUENCE_RENDER_UI_SERVER_NAME,
@@ -201,8 +201,8 @@ import {
 import {
   registerLocalFileScheme,
   installLocalFileProtocol
-} from './localFileProtocol'
-import { createFsExplorer, type ExplorerFs, type FsExplorer } from './fsExplorer'
+} from './fs/localFileProtocol'
+import { createFsExplorer, type ExplorerFs, type FsExplorer } from './fs/fsExplorer'
 import {
   registerSlackImageScheme,
   installSlackImageProtocol

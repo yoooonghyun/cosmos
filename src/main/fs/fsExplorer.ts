@@ -27,7 +27,7 @@ import { confine, type ConfineFs } from './pathConfine'
 import { looksLikeText } from './fileKind'
 import { resolveViewerKind } from './viewerKind'
 import { isTooLarge } from './viewerCaps'
-import type { FsEntry, FsListResult, FsReadResult, FsReadBytesResult } from '../shared/ipc'
+import type { FsEntry, FsListResult, FsReadResult, FsReadBytesResult } from '../../shared/ipc'
 
 /**
  * Deterministic list order (FR-005): directories first, then files, each alphabetical

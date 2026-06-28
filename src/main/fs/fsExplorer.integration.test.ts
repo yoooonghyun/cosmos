@@ -34,7 +34,7 @@ import {
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { createFsExplorer, type ExplorerFs, type FsWatcher } from './fsExplorer'
-import type { FsPathPayload } from '../shared/ipc'
+import type { FsPathPayload } from '../../shared/ipc'
 
 let tmpRoot: string
 let outsideDir: string

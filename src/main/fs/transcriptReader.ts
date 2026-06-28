@@ -21,8 +21,8 @@
  * the thin fs shell (path derivation + read + delegate).
  */
 
-import type { ConversationResult } from '../shared/ipc/conversation'
-import type { Conversation } from '../shared/types/conversation'
+import type { ConversationResult } from '../../shared/ipc/conversation'
+import type { Conversation } from '../../shared/types/conversation'
 import { parseTranscript } from './transcriptParse'
 
 /** The slice of `fs` the reader needs (injectable for tests; no write surface). */
