@@ -15,9 +15,9 @@
 
 import { createServer, type Server, type Socket } from 'node:net'
 import { existsSync, unlinkSync } from 'node:fs'
-import { encodeBridgeMessage } from '../shared/bridge'
-import { GoogleCalendarOp, type GoogleCalendarResult } from '../shared/types/googleCalendar'
-import { validateGoogleCalendarBridgeCall, validateGoogleCalendarListEvents } from '../shared/validate'
+import { encodeBridgeMessage } from '../../shared/bridge'
+import { GoogleCalendarOp, type GoogleCalendarResult } from '../../shared/types/googleCalendar'
+import { validateGoogleCalendarBridgeCall, validateGoogleCalendarListEvents } from '../../shared/validate'
 
 type WarnFn = (message: string, ...args: unknown[]) => void
 

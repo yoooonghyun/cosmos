@@ -17,7 +17,7 @@
  * than a hardcoded 24h offset.
  */
 
-import type { GoogleCalendarDefaultView } from '../shared/ipc'
+import type { GoogleCalendarDefaultView } from '../../shared/ipc'
 
 /** A resolved RFC-3339 read window (the events fan-out's `timeMin`/`timeMax`). */
 export interface GoogleCalendarWindow {

@@ -31,16 +31,16 @@ import type {
   GoogleCalendarEventsPage,
   GoogleCalendarListEventsParams,
   GoogleCalendarResult
-} from '../shared/types/googleCalendar'
-import type { GoogleCalendarCallAuth, GoogleCalendarClient } from './integrations/googleCalendarClient'
+} from '../../shared/types/googleCalendar'
+import type { GoogleCalendarCallAuth, GoogleCalendarClient } from '../integrations/googleCalendarClient'
 import {
   GOOGLE_CALENDAR_FANOUT_CONCURRENCY,
   GOOGLE_CALENDAR_MAX_CALENDARS
-} from './integrations/googleConfig'
-import type { GoogleOAuthResult } from './integrations/googleOAuth'
-import type { StoredTokenSet, TokenStore } from './integrations/tokenStore'
-import type { TokenExchangeResult } from './integrations/oauthPkce'
-import { expiryFromSeconds } from './integrations/tokenStore'
+} from '../integrations/googleConfig'
+import type { GoogleOAuthResult } from '../integrations/googleOAuth'
+import type { StoredTokenSet, TokenStore } from '../integrations/tokenStore'
+import type { TokenExchangeResult } from '../integrations/oauthPkce'
+import { expiryFromSeconds } from '../integrations/tokenStore'
 
 /** A refresh callback the manager invokes when the access token is expired/rejected. */
 export type GoogleRefreshFn = (refreshToken: string) => Promise<TokenExchangeResult>

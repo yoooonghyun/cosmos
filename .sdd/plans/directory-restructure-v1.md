@@ -185,3 +185,7 @@ the user commits current work first, so the restructure lands on an otherwise-em
   flat files (4) AND any nested files, so the gate stays green through every transition state and
   in the final nested layout. This satisfies the plan's intent (never silently drop an
   integration test) more robustly than the literal single-glob instruction.
+- **2026-06-28 — `confluenceManager` included in confluence group (Phase 2).** The plan's
+  confluence bullet omitted `confluenceManager.ts`(+test), but it is on disk and is plainly a
+  confluence-domain file (mirrors slackManager/jiraManager). Moved it into
+  `src/main/confluence/` with the rest of the cluster for consistency. Pure move + re-path.

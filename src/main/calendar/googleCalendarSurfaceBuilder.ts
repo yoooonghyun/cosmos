@@ -12,14 +12,14 @@
  * content/identifiers (event id/summary/start/end) — never a token.
  */
 
-import type { A2uiSurfaceUpdate, GoogleCalendarDefaultView } from '../shared/ipc'
+import type { A2uiSurfaceUpdate, GoogleCalendarDefaultView } from '../../shared/ipc'
 import type {
   GoogleCalendar,
   GoogleCalendarEvent,
   GoogleCalendarEventsPage,
   GoogleCalendarLegendEntry
-} from '../shared/types/googleCalendar'
-import { calendarColorToken } from '../shared/types/googleCalendarColor'
+} from '../../shared/types/googleCalendar'
+import { calendarColorToken } from '../../shared/types/googleCalendarColor'
 
 /** An A2UI 0.9 component definition: an id + a `component` discriminator + props. */
 type Component = { id: string; component: string } & Record<string, unknown>

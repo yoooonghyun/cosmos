@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from 'vitest'
 import { GoogleCalendarBridge, type GoogleCalendarBridgeManager } from './googleCalendarBridge'
-import { GoogleCalendarOp, type GoogleCalendarResult } from '../shared/types/googleCalendar'
+import { GoogleCalendarOp, type GoogleCalendarResult } from '../../shared/types/googleCalendar'
 
 function makeManager(overrides?: Partial<GoogleCalendarBridgeManager>): GoogleCalendarBridgeManager {
   const ok = async (): Promise<GoogleCalendarResult<unknown>> => ({ ok: true, data: { items: [] } })

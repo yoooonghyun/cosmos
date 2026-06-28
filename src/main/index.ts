@@ -207,19 +207,19 @@ import {
   registerSlackImageScheme,
   installSlackImageProtocol
 } from './slack/slackImageProtocol'
-import { GoogleCalendarBridge } from './googleCalendarBridge'
-import { GoogleCalendarManager } from './googleCalendarManager'
+import { GoogleCalendarBridge } from './calendar/googleCalendarBridge'
+import { GoogleCalendarManager } from './calendar/googleCalendarManager'
 import { GoogleCalendarClient } from './integrations/googleCalendarClient'
 import { runGoogleOAuth, refreshGoogleToken } from './integrations/googleOAuth'
 import { GOOGLE_CALENDAR_OAUTH_SCOPES } from './integrations/googleConfig'
 import {
   buildNoticeSurface as buildGoogleCalendarNoticeSurface,
   buildSharedViewSurface as buildGoogleCalendarSharedViewSurface
-} from './googleCalendarSurfaceBuilder'
+} from './calendar/googleCalendarSurfaceBuilder'
 import {
   googleCalendarDefaultWindow,
   type GoogleCalendarDefaultViewAnchor
-} from './googleCalendarWindow'
+} from './calendar/googleCalendarWindow'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 

@@ -10,7 +10,7 @@ import type {
   GoogleCalendar,
   GoogleCalendarEvent,
   GoogleCalendarEventsPage
-} from '../shared/types/googleCalendar'
+} from '../../shared/types/googleCalendar'
 
 const timed: GoogleCalendarEvent = {
   id: 'e1',
