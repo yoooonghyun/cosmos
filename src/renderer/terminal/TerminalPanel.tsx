@@ -37,6 +37,7 @@ import { usePanelTabs } from '../tabs/usePanelTabs'
 import { useTabShortcuts } from '../tabs/useTabShortcuts'
 import { resolveCloseTarget, resolveTabNavTarget } from '../tabs/closeTabRouting'
 import { mapTerminalKey } from './terminalKeymap'
+import { exitRecoveryHint, formatExit } from './terminalExit'
 import {
   isFolderOpen,
   nextTerminalIndex,
@@ -64,19 +65,6 @@ interface TerminalTab {
   renamed?: boolean
 }
 
-function formatExit(payload: PtyExitPayload): string {
-  if (payload.error) {
-    return payload.error
-  }
-  const parts: string[] = []
-  if (typeof payload.exitCode === 'number') {
-    parts.push(`exit code ${payload.exitCode}`)
-  }
-  if (typeof payload.signal === 'number') {
-    parts.push(`signal ${payload.signal}`)
-  }
-  return parts.length > 0 ? `claude exited (${parts.join(', ')})` : 'claude exited'
-}
 
 /**
  * One terminal tab's view: a single xterm bound to its `paneId`. Mounted once and
@@ -519,7 +507,14 @@ function TerminalView({
         ) : (
           exitState.kind === 'exited' && (
             <div className="terminal-panel__exit" role="status">
-              <span className="terminal-panel__exit-msg">{formatExit(exitState.payload)}</span>
+              <div className="terminal-panel__exit-text">
+                <span className="terminal-panel__exit-msg">{formatExit(exitState.payload)}</span>
+                {exitRecoveryHint(exitState.payload) && (
+                  <span className="terminal-panel__exit-hint">
+                    {exitRecoveryHint(exitState.payload)}
+                  </span>
+                )}
+              </div>
               <button type="button" className="terminal-panel__restart" onClick={handleRestart}>
                 Restart claude
               </button>

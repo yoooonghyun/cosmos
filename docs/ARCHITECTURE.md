@@ -176,6 +176,53 @@ to it. It carries only the pinned non-secret field shape (no token/secret/path).
 - Owns process lifecycle: spawn, restart, kill, exit handling — per pane, plus `killAll()` on
   teardown. Keeps the missing-binary pre-check per pane.
 
+#### Session-lifecycle policy (continue-don't-restart)
+
+A terminal `claude` is a long-lived TUI process; cosmos treats it like a normal terminal session —
+**an open session CONTINUES across the app's lifecycle; it is never respawned for a lifecycle
+event.** This is a behavior contract, not an optimization:
+
+- **No respawn on lock / sleep / wake / focus / app-switch.** `powerMonitor` `suspend` deliberately
+  does NOT kill PTYs (the user wants the same live `claude` on wake). A live session keeps running
+  across these events. cosmos must not introduce a wake/online/visibility respawn — it would
+  needlessly destroy in-session state (context + the in-TUI auto-accept toggle).
+- **A renderer FULL RELOAD does intentionally `killAll()` the PTYs** (`did-start-navigation`
+  non-same-document → `killAll`), then the reloaded renderer re-mints tabs and `pty:start`s each
+  (FR-023 teardown, part of `session-resume-relaunch` orphan avoidance). This is correct for a
+  GENUINE user-driven reload (Cmd+R) — without it a reload orphans every `claude` + its MCP-server
+  children. **A reload is the ONLY navigation that may tear down live sessions, and only a genuine
+  one should.** Dev-only caveat (`terminal-session-unnecessary-restart-v1`): in `npm run dev` the
+  `@vite/client` HMR client issues a SPURIOUS full `location.reload()` when its dev-server WebSocket
+  reconnects after the host sleeps; that wake-reload wrongly triggers the same `killAll()`+respawn,
+  resetting the session and stacking startup banners (the restored scrollback's prior banner +
+  the fresh `--resume` claude's new banner). A packaged build (`loadFile`, no HMR client) never does
+  this — it is a **DEV-ONLY annoyance; the shipped app is unaffected.** A renderer-side guard that
+  overrode `location.reload` to swallow the reconnect-reload was tried and ROLLED BACK: in a real
+  Chromium/Electron renderer `window.location.reload` is non-configurable, so the override THROWS at
+  startup and white-screens the app (jsdom let it pass — a jsdom-green/runtime-broken trap). Vite
+  hard-codes the reload with no cancel hook and main cannot distinguish it from a genuine Cmd+R, so
+  there is no clean suppression seam. A real fix is **direction B** — make sessions SURVIVE a renderer
+  reload (stable paneIds across reload + a reattach handshake) instead of `killAll`+respawn — which is
+  feature-sized and DEFERRED to its own sdd; the genuine-reload teardown stays intact in both builds.
+- **Respawn happens ONLY for: a genuine user-driven reload's re-spawn, an explicit user restart, or
+  first launch / relaunch resume.** No automatic respawn on a lifecycle event.
+- **A respawn is always a NEW process, so in-session-only TUI state is unavoidably lost.** Auto-accept
+  mode (the shift+tab toggle) lives in the running `claude` process and is exposed on no IPC/stream
+  surface; per the two-channels invariant (§1) cosmos never scrapes or injects TUI state. So the
+  policy is to AVOID unnecessary respawns (above), and when a respawn IS genuinely required, make it
+  **continue the same session** rather than start fresh.
+- **Manual exit-banner Restart resumes the SAME id, never mints fresh.** When a live `claude` dies on
+  its own, cosmos surfaces an exit banner and **Restart re-`--resume`s the pane's recorded session
+  id** in its recorded cwd, preserving the transcript/context. cosmos never replaces a recorded id
+  with a fresh one on a recovery path (that would orphan the conversation). The transcript is restored
+  by `--resume`; auto-accept mode is NOT (it is process-local).
+- **Orphan recovery is the one place a holder is touched** (`onSessionInUse` / `sessionLockRecovery`,
+  `session-resume-relaunch-v1..v4`): at relaunch, an "already in use" rejection on a recorded id means
+  a genuinely-dead prior launch left a live orphan or stale `~/.claude/sessions/<pid>.json`; cosmos
+  frees the id (kill the orphan / remove the stale file) and re-`--resume`s the SAME id once on a
+  bounded backoff, surfacing a recoverable error if the budget is exhausted — still never minting
+  fresh. This path is preserved exactly; the continue-don't-restart policy must not weaken it.
+
 ### 4.2 Terminal Panel (renderer)
 - **One `xterm.js` `Terminal` per terminal tab (§4.11)**, each bound to its own `paneId`'s PTY
   stream (its own FitAddon; `pty:data`/`pty:exit` filtered by `paneId`; input/resize/restart/

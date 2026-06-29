@@ -27,8 +27,22 @@
   font-size: 12px;
 }
 
+.terminal-panel__exit-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
 .terminal-panel__exit-msg {
   font-family: Menlo, Monaco, monospace;
+}
+
+/* terminal-session-unnecessary-restart-v1: the honest recovery hint (Restart resumes the
+   conversation; auto-accept mode must be re-enabled). Quieter than the exit message. */
+.terminal-panel__exit-hint {
+  color: #d8a8a8;
+  font-size: 11px;
 }
 
 .terminal-panel__restart {

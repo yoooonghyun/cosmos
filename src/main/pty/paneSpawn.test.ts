@@ -300,22 +300,89 @@ describe('resolvePaneSpawn', () => {
     expect(relaunch).toEqual({ args: ['--resume', ORIGINAL], resume: true, cwd: CWD })
     expect(sessionMap.get('p1')?.sessionId).toBe(ORIGINAL)
 
-    // Mac sleep/wake later kills the PTY; the user clicks Restart (index.ts PtyChannel.Restart now
-    // delegates to paneSpawnFor with NO override). The resume entry was already consumed, so this
-    // is the idempotent reuse branch — it MUST continue the ORIGINAL id, not start fresh.
-    const restart = resolvePaneSpawn('p1', SANDBOX, resumeMap, sessionMap, mint, undefined, dirExists)
-    expect(restart.resume).toBe(false)
-    expect(restart.args).toEqual(['--session-id', ORIGINAL]) // continue, do not orphan
+    // Mac sleep/wake later kills the PTY; the user clicks Restart (index.ts PtyChannel.Restart
+    // delegates to paneSpawnFor with NO override but isExplicitRestart=true). The resume entry was
+    // already consumed, so this is the recorded-session recovery branch — it MUST continue the
+    // ORIGINAL id, not start fresh. terminal-session-unnecessary-restart-v1 (ARCHITECTURE.md §4.1):
+    // an EXPLICIT exit-banner restart re-`--resume`s the recorded id so the genuinely-dead session's
+    // transcript/context is RESTORED (a `--session-id` create-or-continue would not arm the resume
+    // failure / in-use backoff). The id is preserved — never re-minted.
+    const restart = resolvePaneSpawn('p1', SANDBOX, resumeMap, sessionMap, mint, undefined, dirExists, true)
+    expect(restart.resume).toBe(true)
+    expect(restart.args).toEqual(['--resume', ORIGINAL]) // resume, do not orphan, do not mint fresh
     expect(restart.cwd).toBe(CWD)
 
     // A SECOND restart still continues the same conversation — the id is a stable invariant.
-    const restart2 = resolvePaneSpawn('p1', SANDBOX, resumeMap, sessionMap, mint, undefined, dirExists)
-    expect(restart2.args).toEqual(['--session-id', ORIGINAL])
+    const restart2 = resolvePaneSpawn('p1', SANDBOX, resumeMap, sessionMap, mint, undefined, dirExists, true)
+    expect(restart2.args).toEqual(['--resume', ORIGINAL])
 
     // Across the entire lifecycle a fresh id was NEVER minted — the persisted id stays ORIGINAL, so
     // every future relaunch can `--resume` the real conversation (both symptoms fixed at the root).
     expect(mint).not.toHaveBeenCalled()
     expect(sessionMap.get('p1')).toEqual({ sessionId: ORIGINAL, cwd: CWD })
+  })
+
+  // terminal-session-unnecessary-restart-v1 (ARCHITECTURE.md §4.1 continue-don't-restart): an EXPLICIT
+  // exit-banner Restart of a pane with a recorded session re-`--resume`s the ORIGINAL id (resume:true)
+  // so a genuinely-dead live session's transcript/context is restored — the create-or-continue
+  // `--session-id` of a benign re-start would NOT arm the resume-failure / in-use backoff. The id is
+  // preserved; the recorded cwd is the spawn cwd.
+  it('explicit Restart of a recorded session resumes the ORIGINAL id (--resume, resume:true) in the recorded cwd', () => {
+    const CWD = '/Users/me/work'
+    const { resumeMap, sessionMap } = makeMaps()
+    sessionMap.set('p1', { sessionId: 'sess-keep', cwd: CWD })
+    const mint = vi.fn(() => 'sess-fresh-MUST-NOT-APPEAR')
+    const dirExists = vi.fn(() => true)
+    const result = resolvePaneSpawn('p1', SANDBOX, resumeMap, sessionMap, mint, undefined, dirExists, true)
+    expect(result).toEqual({ args: ['--resume', 'sess-keep'], resume: true, cwd: CWD })
+    expect(mint).not.toHaveBeenCalled() // recorded id reused, never re-minted
+    expect(sessionMap.get('p1')).toEqual({ sessionId: 'sess-keep', cwd: CWD })
+  })
+
+  // The SAME explicit-restart caller, but the pane has NO recorded session (a never-resumed fresh tab
+  // whose claude died before any record, or an already-disposed pane). There is no transcript to
+  // resume, so it MUST fall back to a fresh `--session-id` spawn (no crash, no `--resume` against a
+  // non-existent id).
+  it('explicit Restart with NO recorded session falls back to a fresh --session-id spawn', () => {
+    const { resumeMap, sessionMap } = makeMaps()
+    const mint = vi.fn(() => 'sess-fresh')
+    const result = resolvePaneSpawn('p1', SANDBOX, resumeMap, sessionMap, mint, undefined, undefined, true)
+    expect(result).toEqual({ args: ['--session-id', 'sess-fresh'], resume: false, cwd: SANDBOX })
+    expect(sessionMap.get('p1')).toEqual({ sessionId: 'sess-fresh', cwd: SANDBOX })
+  })
+
+  // The stale-cwd guard still applies on an explicit restart: when the recorded folder no longer
+  // resolves the SPAWN falls back to the sandbox so `claude` does not die, but the `--resume <id>` and
+  // the recorded folder are preserved (the session is still resumable; a reappearing folder restores).
+  it('explicit Restart falls the SPAWN back to sandbox when the recorded cwd is gone, keeping --resume + the recorded folder', () => {
+    const GONE = '/persisted/gone'
+    const { resumeMap, sessionMap } = makeMaps()
+    sessionMap.set('p1', { sessionId: 'sess-keep', cwd: GONE })
+    const mint = vi.fn(() => 'sess-new-MUST-NOT-APPEAR')
+    const dirExists = vi.fn((d: string) => d === SANDBOX)
+    const result = resolvePaneSpawn('p1', SANDBOX, resumeMap, sessionMap, mint, undefined, dirExists, true)
+    expect(result.args).toEqual(['--resume', 'sess-keep']) // resume preserved
+    expect(result.resume).toBe(true)
+    expect(result.cwd).toBe(SANDBOX) // spawn falls back so claude does not die
+    expect(mint).not.toHaveBeenCalled()
+    expect(sessionMap.get('p1')).toEqual({ sessionId: 'sess-keep', cwd: GONE }) // record untouched
+  })
+
+  // Guard the StrictMode boundary: a BENIGN cwd-less re-start (isExplicitRestart defaulting false —
+  // the `pty:start` re-issue path) must STILL use `--session-id` create-or-continue, NOT `--resume`,
+  // because the recorded session may be an empty just-minted-then-killed id that `--resume` rejects
+  // with "No conversation found". Only the explicit exit-banner Restart resumes.
+  it('benign cwd-less re-start (NOT an explicit restart) keeps --session-id create-or-continue', () => {
+    const PICKED = '/Users/me/project'
+    const { resumeMap, sessionMap } = makeMaps()
+    sessionMap.set('p1', { sessionId: 'sess-keep', cwd: PICKED })
+    const mint = vi.fn(() => 'sess-fresh-MUST-NOT-APPEAR')
+    const dirExists = vi.fn(() => true)
+    // isExplicitRestart omitted (defaults false) — this is the StrictMode double-start path.
+    const result = resolvePaneSpawn('p1', SANDBOX, resumeMap, sessionMap, mint, undefined, dirExists)
+    expect(result.args).toEqual(['--session-id', 'sess-keep'])
+    expect(result.resume).toBe(false)
+    expect(mint).not.toHaveBeenCalled()
   })
 
   it('does not affect a different pane (per-pane independence, FR-007)', () => {

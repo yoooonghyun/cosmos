@@ -69,6 +69,17 @@ export interface ResolvedPaneSpawn {
  *                     Injected so the resolver stays pure/node-testable (the caller passes a
  *                     real-fs check). Defaults to always-true (existing callers unaffected).
  *                     Used to guard a stale persisted resume cwd (restart-pty-cwd-v1).
+ * @param isExplicitRestart  true ONLY for the exit-banner Restart (`pty:restart`) recovery path
+ *                     (terminal-session-unnecessary-restart-v1). When a recorded session exists this
+ *                     re-spawn carries `--resume <id>` (resume:true) instead of the create-or-continue
+ *                     `--session-id`, per ARCHITECTURE.md §4.1 (continue-don't-restart): a manual
+ *                     Restart recovers a genuinely-dead live session — its transcript exists, so
+ *                     `--resume` restores the context and arms the resume-failure / in-use backoff
+ *                     (`onSessionInUse`/`planResumeRetry`) that frees a just-died id collision. Left
+ *                     false (default) for `pty:start`, including the benign cwd-less StrictMode
+ *                     double-start where the recorded session may be empty (a just-minted-then-killed
+ *                     id) and `--resume` would print "No conversation found"; that path keeps
+ *                     `--session-id` (create-or-continue). The recorded id is NEVER replaced either way.
  */
 export function resolvePaneSpawn(
   paneId: string,
@@ -77,7 +88,8 @@ export function resolvePaneSpawn(
   sessionMap: Map<string, PaneSessionRecord>,
   mintSessionId: () => string,
   overrideCwd?: string,
-  dirExists: (absDir: string) => boolean = () => true
+  dirExists: (absDir: string) => boolean = () => true,
+  isExplicitRestart = false
 ): ResolvedPaneSpawn {
   const resume = resumeMap.get(paneId)
   if (resume) {
@@ -125,6 +137,21 @@ export function resolvePaneSpawn(
   // the record is preserved, so a transient miss never erases the chosen folder.)
   const existing = sessionMap.get(paneId)
   if (existing && !(overrideCwd && overrideCwd.length > 0)) {
+    const exists = dirExists(existing.cwd)
+    const spawnCwd = exists ? existing.cwd : sandboxDir
+    // terminal-session-unnecessary-restart-v1 (ARCHITECTURE.md §4.1 continue-don't-restart): an
+    // EXPLICIT exit-banner Restart (`pty:restart`, isExplicitRestart) recovers a live session that
+    // genuinely DIED (e.g. its API/stream connection dropped on a Mac lock/sleep — an upstream claude
+    // limitation cosmos cannot prevent). That session was alive long enough to die abnormally, so its
+    // transcript exists on disk — recovery must `--resume <id>` to restore the context (and arm the
+    // resume-failure + `onSessionInUse`/`planResumeRetry` backoff that frees the just-died id if it is
+    // momentarily still "in use"), NEVER mint a fresh id. The recorded id is preserved (continue, not
+    // restart). A benign cwd-less re-start (StrictMode double-start, a renderer re-issue) is NOT a
+    // restart: it keeps the `--session-id` create-or-continue below, because its recorded session may
+    // be an empty just-minted-then-killed id that `--resume` would reject with "No conversation found".
+    if (isExplicitRestart) {
+      return { args: ['--resume', existing.sessionId], resume: true, cwd: spawnCwd }
+    }
     // Re-attach the SAME recorded session id in the SAME recorded cwd (idempotent re-start).
     //
     // session-resume-relaunch-v1 (THE FIX): this branch MUST keep `existing.sessionId`, not mint a
@@ -152,8 +179,6 @@ export function resolvePaneSpawn(
     // recoverable terminal error — and critically the PERSISTED id stays correct, so the next
     // start/relaunch resumes the conversation. The old "mint a fresh id" workaround traded that
     // transient race for a PERMANENT orphaning of the conversation, which is the bug this fixes.
-    const exists = dirExists(existing.cwd)
-    const spawnCwd = exists ? existing.cwd : sandboxDir
     return { args: ['--session-id', existing.sessionId], resume: false, cwd: spawnCwd }
   }
   // Fresh path: a non-empty chosen directory overrides the default sandbox cwd (FR-004).

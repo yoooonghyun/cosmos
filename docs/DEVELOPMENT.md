@@ -476,6 +476,42 @@ single new `window.cosmos.session` namespace in `src/shared/ipc.ts` (`session:lo
   `RESUME_FAILURE_WINDOW_MS` (4s), `PtyManager` suppresses the normal `onExit` and calls
   `onResumeFailure(paneId)`; main re-mints a fresh `--session-id` and restarts ONCE. The restored
   read-only scrollback stays visible. `PtyManager` takes injectable `spawn`/`now` for testing.
+- **The live restart seam is the index.ts `PtyChannel.Restart` handler, NOT `PtyManager.restart`.**
+  The renderer's `window.cosmos.pty.restart(paneId)` sends `pty:restart` → the index.ts handler, which
+  resolves via `paneSpawnFor`→`resolvePaneSpawn`→`ptyManager.start`. `PtyManager.restart`
+  (`ptyManager.ts`) is currently UNUSED by any live path (codegraph attributes the renderer bridge to
+  it by name only) and still does a plain `{ cwd }` fresh spawn — do NOT wire new behavior there;
+  change the handler + the pure resolver instead.
+- **Restart RESUMES, it does not mint fresh (terminal-session-unnecessary-restart-v1, ARCHITECTURE.md
+  §4.1 continue-don't-restart).** cosmos never respawns a live `claude` on lock/sleep/wake/focus
+  (`powerMonitor 'suspend'` is log-only; the renderer has no respawn handler). When the upstream
+  `claude` dies on its own (its API/stream connection drops on a lock — an upstream limitation cosmos
+  cannot prevent), it falls through `PtyManager.onExit` to the exit banner. The exit-banner Restart
+  passes `isExplicitRestart=true` through `paneSpawnFor`→`resolvePaneSpawn`, which for a RECORDED
+  session emits `--resume <id>` (resume:true) so the transcript/context is restored and the
+  resume-failure + `onSessionInUse`/`planResumeRetry` backoff arms. THE TENSION to respect: a benign
+  cwd-less `pty:start` re-issue (React StrictMode mount→dispose→remount) lands in the SAME
+  recorded-session branch but MUST keep `--session-id` create-or-continue (`isExplicitRestart` defaults
+  false), because its recorded session may be an empty just-minted-then-killed id that `--resume`
+  rejects with "No conversation found". The recorded id is NEVER re-minted on either path. Auto-accept
+  mode (shift+tab) is process-local TUI state that cannot survive the death; the exit banner is honest
+  about that (`exitRecoveryHint` in `terminalExit.ts`) rather than pretending to restore it.
+- **KNOWN DEV-ONLY annoyance: lock→wake resets terminal sessions in `npm run dev`
+  (terminal-session-unnecessary-restart-v1; NOT fixed — see why).** In dev the renderer runs Vite's
+  HMR client; on sleep the dev-server WebSocket drops and on wake `@vite/client` HARD-CODES
+  `location.reload()` after a successful reconnect ping (`node_modules/vite/dist/client/client.mjs`
+  ≈L863-870, vite 7.3.5 — NO `server.hmr` key and NO listener-cancel hook). That full reload fires
+  `did-start-navigation` → `ptyManager.killAll()` → every pane re-mounts + re-`--resume`s, STACKING
+  startup banners. A renderer-side guard that overrode `location.reload` was tried (direction A) and
+  ROLLED BACK: in a real Chromium/Electron renderer `window.location.reload` is non-configurable, so
+  `Object.defineProperty(location, 'reload', …)` THROWS at startup → white screen (jsdom allowed it,
+  so the unit test was green — a jsdom-green/runtime-broken trap). There is no clean renderer seam
+  (Vite hard-codes the reload; the reload fn is not overridable) and main-side can't distinguish the
+  HMR reload from a genuine Cmd+R. **This is DEV-ONLY: a packaged build uses `loadFile` with no
+  `@vite/client`, so it never wake-reloads — the shipped app is unaffected.** A real fix would be
+  "direction B" (sessions SURVIVE a renderer reload via stable paneIds + a reattach handshake), which
+  is feature-sized (own sdd) and was deferred. The orthogonal exit-banner Restart-`--resume` hardening
+  (above) stands.
 - **Scrollback via `@xterm/addon-serialize`, capped 256KB (D4/D5).** Each `TerminalView` registers a
   serializer (`() => capScrollback(serializeAddon.serialize())`); `capScrollback` keeps the
   most-recent ≤256KB on a UTF-8 boundary. On restore, scrollback is pre-written before `pty:start`.

@@ -454,7 +454,8 @@ const terminalResumeMap = new Map<string, { sessionId: string; cwd: string }>()
 function paneSpawnFor(
   paneId: string,
   sandboxDir: string,
-  overrideCwd?: string
+  overrideCwd?: string,
+  isExplicitRestart = false
 ): ResolvedPaneSpawn {
   return resolvePaneSpawn(
     paneId,
@@ -463,7 +464,8 @@ function paneSpawnFor(
     terminalSessionMap,
     randomUUID,
     overrideCwd,
-    dirExistsOnDisk
+    dirExistsOnDisk,
+    isExplicitRestart
   )
 }
 
@@ -1179,16 +1181,23 @@ function registerIpcHandlers(): void {
   // `claude` session (same session id) — NOT mint a fresh one. This handler is the path a
   // user takes to recover a terminal whose PTY died on Mac sleep/wake (the PTY exits, the
   // renderer shows the exit banner, the user clicks Restart). Minting `randomUUID()` here —
-  // the previous behaviour — overwrote `terminalSessionMap[paneId]` with an EMPTY session
+  // the original behaviour — overwrote `terminalSessionMap[paneId]` with an EMPTY session
   // that has no conversation on disk, ORPHANING the original conversation (content "lost",
   // and the next save persisted the empty fresh id so `--resume` later found nothing). This
-  // violated FR-019 (stable session id) / FR-020 (resume the recorded session). Re-using the
-  // recorded id with `--session-id` (CREATE-OR-CONTINUE — continues a populated session, and
-  // never prints "No conversation found" on an empty one) preserves the conversation across
-  // a restart. Only a pane with NO recorded session (never started / already disposed) mints
-  // a fresh id. The whole resolution (reuse-vs-mint + the stale-cwd guard) lives in the pure,
-  // node-tested `resolvePaneSpawn`, so this handler simply delegates — no override cwd, so a
-  // recorded pane takes the idempotent reuse branch in its recorded cwd.
+  // violated FR-019 (stable session id) / FR-020 (resume the recorded session).
+  //
+  // terminal-session-unnecessary-restart-v1 (ARCHITECTURE.md §4.1 continue-don't-restart): the
+  // exit-banner Restart recovers a session that GENUINELY DIED (its API/stream connection dropped
+  // on a lock/sleep — an upstream claude limitation cosmos cannot prevent). That session lived long
+  // enough to die abnormally, so its transcript exists; recovery re-`--resume`s the recorded id to
+  // RESTORE THE CONTEXT (the `isExplicitRestart` flag → `resolvePaneSpawn`'s `--resume` recovery
+  // branch), arming `presweepResumeLock` + the existing `onSessionInUse`/`planResumeRetry` backoff to
+  // free the just-died id if it is momentarily still "in use" on the registry. The recorded id is
+  // never replaced with a fresh one (continue, not restart). Only a pane with NO recorded session
+  // (never started / already disposed) falls back to a fresh `--session-id` spawn. (Auto-accept mode
+  // is process-local TUI state and cannot survive the death; the exit banner is honest about that —
+  // it cannot be restored here, only the transcript is.) The whole resolution lives in the pure,
+  // node-tested `resolvePaneSpawn`, so this handler simply delegates.
   ipcMain.on(PtyChannel.Restart, (_event: IpcMainEvent, raw: unknown) => {
     const payload = validateRestart(raw)
     if (!payload) {
@@ -1196,7 +1205,9 @@ function registerIpcHandlers(): void {
     }
     // session-resume-relaunch-v2: a manual restart begins a fresh recovery sequence.
     terminalResumeAttempts.delete(payload.paneId)
-    const spawn = paneSpawnFor(payload.paneId, sandboxDirCached)
+    // isExplicitRestart=true: a recorded session resumes (`--resume`) to restore context, NOT a
+    // create-or-continue `--session-id` (that is the StrictMode `pty:start` re-issue path).
+    const spawn = paneSpawnFor(payload.paneId, sandboxDirCached, undefined, true)
     presweepResumeLock(payload.paneId, spawn)
     ptyManager?.start(payload.paneId, spawn)
   })
