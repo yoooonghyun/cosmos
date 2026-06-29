@@ -65,7 +65,7 @@ export function SharedComposer({
   if (mode === 'docked') {
     const footerTab: PanelTab = {
       id: 'cosmos',
-      label: 'Cosmos',
+      label: 'Home',
       status: config.busy ? 'in-flight' : 'idle'
     }
     return (
@@ -74,7 +74,7 @@ export function SharedComposer({
           {composer}
         </div>
         <div className="shrink-0 border-l border-border">
-          <PanelFooter surfaceName="Cosmos" icon={SURFACE_ICON.cosmos} activeTab={footerTab} />
+          <PanelFooter surfaceName="Home" icon={SURFACE_ICON.cosmos} activeTab={footerTab} />
         </div>
       </>
     )

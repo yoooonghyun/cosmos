@@ -84,6 +84,13 @@ export function CosmosPanel({ active }: { active: boolean }): React.JSX.Element 
 
   // The transcript-sourced conversation read state (FR-112).
   const [read, setRead] = useState<ReadState>({ phase: 'loading' })
+  // cosmos-streaming-duplicate-context-chip-v1: a ref mirror of `read` so the STABLE seed callbacks
+  // (the `agent:status 'started'` effect with `[]` deps + the memoized `onSubmit`) capture the
+  // CURRENT transcript turn count at submit/started time, not a stale closure. `liveBaseline()`
+  // reads it to stamp `baseline` onto each new live entry (the count before this run grows the
+  // transcript), so the provisional prompt bubble/chip is suppressed once the run streams.
+  const readRef = useRef(read)
+  readRef.current = read
   // The live in-flight run, reconciled with the transcript (FR-111). Null when idle.
   const [live, setLive] = useState<LiveInFlight>(null)
   // The last submitted prompt text, shown on the in-flight "generating" affordance.
@@ -199,10 +206,15 @@ export function CosmosPanel({ active }: { active: boolean }): React.JSX.Element 
         }
       })
     const off = conversation.onUpdate((result) => {
+      // cosmos-agent-progress-not-streaming-v1: an `conversation:update` now arrives INCREMENTALLY
+      // while a run is in flight (main polls the transcript as it grows), not only on completion.
+      // So a mid-run update must NOT clear `live` — clearing here would kill the TypingIndicator on
+      // every streamed step. Only `agent:status 'completed'`/'error' clears `live` (see the status
+      // effect below); an incremental update just refreshes `read`, so reconcileTimeline shows
+      // [turns-so-far] + the live spinner at the tail. The reconcile suppresses the provisional
+      // prompt bubble + the live surface once the transcript carries them, so each turn still
+      // renders exactly once (FR-111: no double-render).
       setRead(toReadState(result))
-      // A completed run flushed into the transcript — the in-flight provisional entry is now
-      // confirmed by the transcript, so clear the live state (FR-111: shown exactly once).
-      setLive(null)
     })
     return () => {
       disposed = true
@@ -223,7 +235,11 @@ export function CosmosPanel({ active }: { active: boolean }): React.JSX.Element 
         phase: 'surface',
         requestId: payload.requestId,
         spec: payload.spec,
-        promptText: lastPromptRef.current
+        promptText: lastPromptRef.current,
+        // Carry the run-start transcript count through so a live surface after streaming never
+        // reintroduces the provisional bubble (cosmos-streaming-duplicate-context-chip-v1).
+        baseline:
+          readRef.current.phase === 'populated' ? readRef.current.conversation.turns.length : 0
       })
     })
     const offStatus = window.cosmos.agent.onStatus((status: AgentStatusPayload) => {
@@ -234,7 +250,13 @@ export function CosmosPanel({ active }: { active: boolean }): React.JSX.Element 
           // #2: read the App-root shared ref so the live chip reflects the ACTUAL submitting panel
           // (a Jira/Slack/etc submit writes it via useGenerativePanelTabs; a cosmos submit via the
           // onSubmit below). The cosmos-only `lastPromptContextRef` could not see cross-panel runs.
-          promptContext: lastSubmitContextRef.current
+          promptContext: lastSubmitContextRef.current,
+          // cosmos-streaming-duplicate-context-chip-v1: capture the transcript turn count at run
+          // start (per run — this re-seeds on every 'started'), so reconcileTimeline suppresses the
+          // provisional bubble/chip once the transcript grows past it (handles the cross-panel run
+          // whose promptText is undefined — the empty context-only bubble bug).
+          baseline:
+            readRef.current.phase === 'populated' ? readRef.current.conversation.turns.length : 0
         })
       } else {
         // completed / error: clear the in-flight affordance. On completed, the
@@ -273,7 +295,7 @@ export function CosmosPanel({ active }: { active: boolean }): React.JSX.Element 
             const ts = tabsStateRef.current
             const activeTab = ts.tabs.find((t) => t.id === ts.activeTabId)
             promptContext = {
-              panel: { id: 'cosmos', label: 'Cosmos' },
+              panel: { id: 'cosmos', label: RAIL_LABEL.cosmos },
               ...(activeTab ? { tab: { id: activeTab.id, label: activeTab.label } } : {})
             }
           }
@@ -284,7 +306,15 @@ export function CosmosPanel({ active }: { active: boolean }): React.JSX.Element 
           recordSubmitContext(promptContext)
           // FR-113: a new in-flight turn appears immediately (the run's 'started' status will
           // also set this, but seeding here makes the prompt bubble appear on Enter).
-          setLive({ phase: 'generating', promptText: utterance, promptContext })
+          // cosmos-streaming-duplicate-context-chip-v1: stamp the run-start transcript count so the
+          // provisional is suppressed once the transcript grows past it (per run).
+          setLive({
+            phase: 'generating',
+            promptText: utterance,
+            promptContext,
+            baseline:
+              readRef.current.phase === 'populated' ? readRef.current.conversation.turns.length : 0
+          })
           window.cosmos.agent.submit(
             buildAgentSubmitWithMarker(utterance, 'generated-ui', promptContext)
           )
@@ -331,7 +361,7 @@ export function CosmosPanel({ active }: { active: boolean }): React.JSX.Element 
   return (
     <section
       className="flex h-full min-w-0 flex-col border-l border-border bg-card"
-      aria-label="Cosmos"
+      aria-label={RAIL_LABEL.cosmos}
     >
       <PanelTabStrip
         tabs={stripTabs}

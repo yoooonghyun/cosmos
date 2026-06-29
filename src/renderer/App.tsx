@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
+import { Fragment, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
 import { Settings } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
@@ -217,7 +217,7 @@ function AppShell(): React.JSX.Element {
             className="h-full! w-12 shrink-0 justify-start gap-1 rounded-none border-r border-border bg-popover p-0 py-2"
             aria-label="Surfaces"
           >
-            {visibleIds.map((id) => {
+            {visibleIds.map((id, index) => {
               const { label, Icon } = RAIL_ITEM[id]
               // Drive the active highlight from React state (surface === id), NOT
               // `data-[state=active]:*`: the `TooltipTrigger asChild` Slot spreads the
@@ -226,8 +226,14 @@ function AppShell(): React.JSX.Element {
               // ALWAYS the tooltip's value and never "active" — every `data-[state=active]:`
               // class (and the line variant's `data-[state=active]:bg-transparent`) is dead.
               const isActive = surface === id
+              // Hairline divider in the rail BETWEEN Cosmos and Terminal (group separator).
+              const showDivider = id === 'terminal' && visibleIds[index - 1] === 'cosmos'
               return (
-              <Tooltip key={id}>
+              <Fragment key={id}>
+                {showDivider && (
+                  <div className="my-1 h-px w-6 self-center bg-primary" aria-hidden />
+                )}
+              <Tooltip>
                 <TooltipTrigger asChild>
                   <TabsTrigger
                     value={id}
@@ -256,6 +262,7 @@ function AppShell(): React.JSX.Element {
                 </TooltipTrigger>
                 <TooltipContent side="right">{label}</TooltipContent>
               </Tooltip>
+              </Fragment>
               )
             })}
 

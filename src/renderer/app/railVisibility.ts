@@ -31,7 +31,7 @@ export type SurfaceId = 'terminal' | 'cosmos' | GateableIntegration
  */
 export const RAIL_LABEL: Record<SurfaceId, string> = {
   terminal: 'Terminal',
-  cosmos: 'Cosmos',
+  cosmos: 'Home',
   slack: 'Slack',
   jira: 'Jira',
   confluence: 'Confluence',

@@ -124,18 +124,26 @@ export function CosmosTimelineEntry({ entry }: { entry: TimelineEntry }): React.
     case 'assistant-text':
       return (
         <AssistantRow>
-          <p className="whitespace-pre-wrap break-words text-body-sm text-card-foreground">
+          {/* `mt-0.5` nudges the first text line down to sit level with the avatar glyph
+              (the avatar carries `mt-px`). */}
+          <p className="mt-0.5 whitespace-pre-wrap break-words text-body-sm text-card-foreground">
             {turn.text}
           </p>
         </AssistantRow>
       )
     case 'tool-call':
+      // No avatar on a tool-call row, but indent it by the SAME avatar(`size-6`)+`gap-2`
+      // geometry as `AssistantRow` so its left edge lines up with the assistant text (not
+      // further left). The leading box is an invisible avatar-sized spacer (no logo).
       return (
-        <ToolCallRow
-          toolName={turn.toolName}
-          argPreview={turn.argPreview}
-          resultPreview={turn.resultPreview}
-        />
+        <div className="flex items-start gap-2">
+          <div className="size-6 shrink-0" aria-hidden />
+          <ToolCallRow
+            toolName={turn.toolName}
+            argPreview={turn.argPreview}
+            resultPreview={turn.resultPreview}
+          />
+        </div>
       )
     case 'surface':
       // A HISTORICAL surface — display-only (no live requestId, so a control action is a no-op).
@@ -216,7 +224,7 @@ function UserMessageBox({
 function AssistantRow({ children }: { children: React.ReactNode }): React.JSX.Element {
   return (
     <div className="flex items-start gap-2">
-      <Avatar size="sm" className="mt-0.5 items-center justify-center bg-muted">
+      <Avatar size="sm" className="mt-px items-center justify-center bg-muted">
         <CosmosGlyphIcon className="size-4 text-muted-foreground" />
       </Avatar>
       <div className="min-w-0 max-w-chat-bubble">{children}</div>

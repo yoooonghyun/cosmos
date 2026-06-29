@@ -81,7 +81,8 @@ describe('Cosmos docked column order (footer-placement-cosmos-terminal-v1)', () 
 
   it('shows the Cosmos footer with its surface name', () => {
     renderDockedCosmos()
-    expect(screen.getByText('Cosmos')).toBeInTheDocument()
+    // surface label renamed Cosmos → Home (rail/footer display label; wire id stays 'cosmos').
+    expect(screen.getByText('Home')).toBeInTheDocument()
   })
 
   // terminal-broke-scroll-unify-redo-v1 (Task 2): the docked band's bottom padding is the SOLE

@@ -389,18 +389,42 @@ detail.
   (`permission-mode`/`file-history-snapshot`/`attachment`/`queue-operation`), `isSidechain`, and
   malformed/partial lines are skipped (one bad line never blanks the timeline). Tool args/results
   are surfaced ONLY as a bounded (`PREVIEW_MAX_LEN`=200), secret-redacted one-line `previewArgs`.
-- **Live trigger = re-read on run-lifecycle (NOT `fs.watch`).** On every `agent:status`
-  `completed`, main re-reads the transcript and pushes `conversation:update`
-  (`pushConversationUpdateToRenderer`). `claude` has flushed by completion, so no racing a partial
-  mid-write. It fires on ALL completed runs (the status payload has no target) — a non-default run
-  didn't append to the default transcript, so the re-read is idempotent. The fetch handler is
-  `conversation:fetch` (invoke, no arg). Both validated by `validateConversationResult` BEFORE
-  send (validate-before-send, like `validateAgentStatusPayload`) — a malformed/secret frame is
-  dropped, never sent.
-- **Reconciliation: the live in-flight surface shows EXACTLY ONCE.** `cosmosConversation.ts`
-  (`reconcileTimeline`) appends the live `ui:render` provisional entry ONLY while in flight; on
-  `completed` the panel clears `live` (and the `conversation:update` re-read supplies the final
-  turn), and a live `surface` whose `surfaceId` already appears in the transcript is suppressed.
+- **Live trigger = INCREMENTAL transcript poll while in flight + a completion re-read**
+  (cosmos-agent-progress-not-streaming-v1). `claude` appends to the default-session jsonl as a run
+  progresses, so the timeline must STREAM (not dump every turn on completion). On `agent:status`
+  `started`, main arms a `TranscriptWatcher` (`transcriptWatcher.ts`) that POLLS the transcript
+  (default 250ms) and pushes an incremental `conversation:update` on each real change (coalesced by
+  a cheap change signature — an unchanged poll never re-pushes); on `completed`/`error` it `stop()`s
+  and the `completed` path still does the authoritative final re-read (`pushConversationUpdateToRenderer`).
+  POLL, not `fs.watch`: the first run's transcript file/dir does not exist at arm time (`claude
+  --session-id` creates it mid-run). The watcher MUST be stopped on teardown too —
+  `agentRunner.dispose()` detaches the child WITHOUT a terminal status, so reload (`did-start-navigation`)
+  and `closed` both call `transcriptWatcher?.stop()` (mirrors `fsExplorer.stopAll()`); a leaked poll
+  timer otherwise survives the window. `conversation:fetch` (invoke, no arg) is the mount read. All
+  pushes validated by `validateConversationResult` BEFORE send — a malformed/secret frame is dropped.
+- **An incremental `conversation:update` must NOT be treated as completion.** `CosmosPanel.onUpdate`
+  refreshes `read` ONLY — it must NOT `setLive(null)` (that killed the spinner on every streamed
+  step). ONLY `agent:status 'completed'`/'error' clears `live`.
+- **Reconciliation: each turn shows EXACTLY ONCE across the live↔transcript overlap.**
+  `cosmosConversation.ts` (`reconcileTimeline`) appends the live in-flight entry at the tail, but
+  because the transcript now catches up MID-RUN: (a) the provisional `live-generating` prompt bubble
+  AND its context chip are suppressed (only the spinner remains) once the transcript carries the
+  run's `user-prompt` turn. The PRIMARY signal is a renderer-internal `LiveInFlight.baseline` — the
+  transcript turn COUNT `CosmosPanel` captures (from a `readRef` mirror) at run start on BOTH seed
+  sites (`onSubmit` + `agent:status 'started'`), re-captured per run: `reconcileTimeline` suppresses
+  when `turns.length > live.baseline` (the transcript grew past where the run began, so it carries
+  the run's prompt + any streamed turns). This survives the WHOLE stream and the CROSS-PANEL run
+  (whose seed has an undefined `promptText` but a set `promptContext`) — the two earlier signals
+  (last turn is a `user-prompt`, exact-text match) were NOT enough: once assistant/tool turns stream
+  in, the last turn is no longer the user-prompt and `promptText` is undefined, so the provisional
+  re-appeared as an EMPTY context-only bubble (cosmos-streaming-duplicate-context-chip-v1). Those two
+  remain as belt-and-suspenders for the first poll before the count is captured. NO IPC change —
+  `baseline` is renderer-internal. Pre-stream (`turns.length === baseline`, transcript not yet grown)
+  none hold, so the provisional shows INSTANTLY on Enter (FR-024). (b) a LIVE
+  `surface` stays AUTHORITATIVE over its transcript
+  copy (the transcript surface turn with the same `surfaceId` is dropped while `live.phase==='surface'`),
+  so a still-pending interactive surface is never replaced by the display-only transcript copy mid-run.
+  On `completed` the panel clears `live` (=null) and the transcript turns take over.
   HISTORICAL surfaces are display-only: rendered via the SAME `ActiveTabSurface` host but with
   `requestId:''`, so a control action is a safe no-op (`handleAction` bails on empty requestId) —
   never an error. Only the live in-flight surface carries a real, resolvable `requestId`.

@@ -50,6 +50,7 @@ import {
   SlackChannelName,
   UiChannel,
   type AgentStatusPayload,
+  type ConversationResult,
   type ClientConfigSaveResult,
   type PtyPickDirectoryResult,
   type SessionSnapshot,
@@ -125,6 +126,7 @@ import { AgentRunner } from './agent/agentRunner'
 import { AgentSessionStore } from './agent/agentSessionStore'
 import { provisionSandboxClaudeMd } from './agent/sandboxClaudeMd'
 import { TranscriptReader } from './fs/transcriptReader'
+import { TranscriptWatcher } from './fs/transcriptWatcher'
 import { selectDefaultSessionId } from './agent/agentSessionQueue'
 import {
   CONFLUENCE_RENDER_UI_SERVER_NAME,
@@ -305,6 +307,12 @@ let agentRunner: AgentRunner | null = null
 // Owns ALL `~/.claude` access (confined to the one default-session transcript path); the
 // renderer reads the parsed conversation via the `conversation:*` channel only.
 let transcriptReader: TranscriptReader | null = null
+// cosmos-agent-progress-not-streaming-v1: while a headless run is IN FLIGHT, poll the
+// default-session transcript and push an incremental `conversation:update` each time it grows,
+// so the Cosmos timeline STREAMS the agent's intermediate steps instead of dumping them all at
+// completion. Armed on `agent:status 'started'`, stopped on 'completed'/'error' AND on teardown
+// (reload/close), mirroring `fsExplorer.stopAll()` — never leaks a timer.
+let transcriptWatcher: TranscriptWatcher | null = null
 
 /* ------------------------------------------------------------------------- *
  * settings-oauth-clients-v1 — main-owned, safeStorage-encrypted client-config
@@ -2064,11 +2072,15 @@ function pushGeneratingBeginToRenderer(payload: { target: UiRenderTarget }): voi
  * dropped, never sent — FR-118) and guard a destroyed window. NON-SECRET: only the
  * normalized conversation model crosses (no raw line, path, token — FR-104/FR-106).
  */
-function pushConversationUpdateToRenderer(): void {
-  if (!transcriptReader) {
+function pushConversationUpdateToRenderer(result?: ConversationResult): void {
+  // cosmos-agent-progress-not-streaming-v1: the in-flight TranscriptWatcher has ALREADY read the
+  // transcript to detect the change, so it passes its snapshot here to avoid a redundant re-read.
+  // The completion path passes nothing → re-read for the authoritative final push.
+  const raw = result ?? transcriptReader?.read()
+  if (!raw) {
     return
   }
-  const validated = validateConversationResult(transcriptReader.read())
+  const validated = validateConversationResult(raw)
   if (!validated) {
     return
   }
@@ -2363,6 +2375,14 @@ function createWindow(): void {
     fs: { existsSync, readFileSync: (p, enc) => readFileSync(p, enc), readdirSync }
   })
 
+  // cosmos-agent-progress-not-streaming-v1: poll the SAME transcript while a run is in flight so
+  // the timeline streams the agent's steps. `onChange` reuses the existing validate+send path
+  // (the watcher already read the snapshot, so it hands it over to avoid a redundant re-read).
+  transcriptWatcher = new TranscriptWatcher({
+    read: () => transcriptReader?.read() ?? { ok: false as const, reason: 'empty' as const },
+    onChange: (result) => pushConversationUpdateToRenderer(result)
+  })
+
   // Generative-UI foundation v1: the headless `claude -p` runner. A SEPARATE
   // channel from the interactive PTY (FR-008) that reaches the SAME UiBridge via
   // the shared render_ui --mcp-config (FR-007). Its render_ui registration targets
@@ -2379,9 +2399,18 @@ function createWindow(): void {
         let outgoing: AgentStatusPayload = payload
         if (payload.state === 'started') {
           renderPushedForRun = false
+          // cosmos-agent-progress-not-streaming-v1: arm the in-flight transcript watch so the
+          // Cosmos timeline streams this run's steps. Stopped on completed/error below.
+          transcriptWatcher?.start()
         } else if (payload.state === 'completed') {
           outgoing = { ...payload, producedSurface: renderPushedForRun }
           renderPushedForRun = false
+        }
+        // cosmos-agent-progress-not-streaming-v1: a terminal status ends the run — stop the
+        // watcher (the completed re-read below is the authoritative final push; an errored run
+        // simply stops streaming). Stopping BEFORE the final push avoids an overlapping tick.
+        if (payload.state === 'completed' || payload.state === 'error') {
+          transcriptWatcher?.stop()
         }
         // FR-008: validate warn-and-ignore at the main boundary — a non-boolean
         // producedSurface (never expected here, since main sets it) would be dropped and
@@ -2440,6 +2469,10 @@ function createWindow(): void {
     // Edge case: a headless run in flight across a reload MUST NOT leak/wedge the
     // runner — kill any in-flight child and clear state (mirrors PTY teardown).
     agentRunner?.dispose()
+    // cosmos-agent-progress-not-streaming-v1: dispose() detaches the child WITHOUT a
+    // completed/error status, so the in-flight transcript watch would otherwise keep polling —
+    // stop it explicitly here (mirrors fsExplorer.stopAll() on the same navigation).
+    transcriptWatcher?.stop()
   })
 
   // panel-tabs v1 FR-021: the single PTY is NO LONGER auto-started at window
@@ -2471,6 +2504,11 @@ function createWindow(): void {
     clientConfigStore = null
     agentRunner?.dispose()
     agentRunner = null
+    // cosmos-agent-progress-not-streaming-v1: stop the in-flight transcript watch on window
+    // teardown so no poll timer leaks past the closed window.
+    transcriptWatcher?.stop()
+    transcriptWatcher = null
+    transcriptReader = null
     mainWindow = null
     // macOS: destroying the last window resets the dock tile to the bundle's default
     // (Electron) icon. The reset happens on the runloop turn AFTER this handler returns,
