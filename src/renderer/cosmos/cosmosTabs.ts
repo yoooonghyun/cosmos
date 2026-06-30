@@ -102,10 +102,12 @@ export function closeCosmosTab(state: CosmosTabsState, tabId: string): CosmosTab
 }
 
 /**
- * Append a favorited tab and activate it (cosmos-home-favorite-tabs-v1, FR-010/FR-013). A closeable
- * `favorite` tab keyed by {@link favoriteId} is appended AFTER the pinned default, which stays first.
- * IDEMPOTENT / de-duped by source: if a favorite for this source is already pinned, the state is
- * returned UNCHANGED (same reference — no duplicate, no-op render).
+ * Append a favorited tab WITHOUT activating it — pinning is non-disruptive; the user stays on the
+ * current tab (the new favorite is visible in the strip + the tree row marks it pinned)
+ * (cosmos-home-favorite-tabs-v1, FR-010/FR-013). A closeable `favorite` tab keyed by {@link favoriteId}
+ * is appended AFTER the pinned default, which stays first. IDEMPOTENT / de-duped by source: if a
+ * favorite for this source is already pinned, the state is returned UNCHANGED (same reference — no
+ * duplicate, no-op render).
  */
 export function appendFavorite(
   state: CosmosTabsState,
@@ -116,7 +118,8 @@ export function appendFavorite(
     return state // FR-013: already pinned — idempotent no-op.
   }
   const tab: CosmosTab = { id, label: favorite.label, kind: 'favorite', source: favorite.source }
-  return { tabs: [...state.tabs, tab], activeTabId: id }
+  // FR-010: pinning is non-disruptive — keep the CURRENT active tab; do NOT navigate to the favorite.
+  return { tabs: [...state.tabs, tab], activeTabId: state.activeTabId }
 }
 
 /** Set the active tab (only to a tab that exists). */

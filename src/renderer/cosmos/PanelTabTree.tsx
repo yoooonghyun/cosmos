@@ -206,28 +206,36 @@ export function PanelTabTree({
                       No open tabs
                     </p>
                   ) : (
-                    group.tabs.map((tab) => (
-                      <TabRow
-                        key={tab.id}
-                        label={tab.label}
-                        isSelected={
-                          selected?.panelId === group.panelId && selected?.tabId === tab.id
-                        }
-                        focused={effectiveActive === tabKey(group.panelId, tab.id)}
-                        onActivate={() => onActivate(group, tab)}
-                        onFocus={() => setActiveKey(tabKey(group.panelId, tab.id))}
-                        menu={
-                          menuEnabled
-                            ? renderRowMenu({
-                                panelId: group.panelId,
-                                pinned: isPinned?.(group.panelId, tab.id) ?? false,
-                                onPin: () => onPin?.(group, tab),
-                                onUnpin: () => onUnpin?.(group, tab)
-                              })
-                            : undefined
-                        }
-                      />
-                    ))
+                    group.tabs.map((tab) => {
+                      // ONE source of truth for pinned-ness — the SAME signal the Pin/Unpin menu
+                      // uses (cosmos-home-favorite-tabs-v1). Drives both the menu's Pin vs Unpin AND
+                      // the additive row marking (text-primary icon + bold label, D-15). Terminal
+                      // rows are never pinned (isPinned returns false), so they never get the mark.
+                      const pinned = isPinned?.(group.panelId, tab.id) ?? false
+                      return (
+                        <TabRow
+                          key={tab.id}
+                          label={tab.label}
+                          pinned={pinned}
+                          isSelected={
+                            selected?.panelId === group.panelId && selected?.tabId === tab.id
+                          }
+                          focused={effectiveActive === tabKey(group.panelId, tab.id)}
+                          onActivate={() => onActivate(group, tab)}
+                          onFocus={() => setActiveKey(tabKey(group.panelId, tab.id))}
+                          menu={
+                            menuEnabled
+                              ? renderRowMenu({
+                                  panelId: group.panelId,
+                                  pinned,
+                                  onPin: () => onPin?.(group, tab),
+                                  onUnpin: () => onUnpin?.(group, tab)
+                                })
+                              : undefined
+                          }
+                        />
+                      )
+                    })
                   )}
                 </div>
               )}
@@ -326,6 +334,7 @@ function GroupHeaderRow({
  */
 function TabRow({
   label,
+  pinned,
   isSelected,
   focused,
   onActivate,
@@ -333,6 +342,13 @@ function TabRow({
   menu
 }: {
   label: string
+  /**
+   * cosmos-home-favorite-tabs-v1 (D-15): this source tab ALREADY has a Home favorite. An additive,
+   * purely-visual mark so the user can see which tabs are pinned — the leading icon takes the brand
+   * accent (`text-primary`) and the label goes bold (`font-medium`). Driven by the SAME `isPinned`
+   * signal the Pin/Unpin menu uses (one source of truth); terminal rows are never pinned.
+   */
+  pinned: boolean
   isSelected: boolean
   focused: boolean
   onActivate: () => void
@@ -370,8 +386,14 @@ function TabRow({
         'focus-visible:ring-[1.5px] focus-visible:ring-ring focus-visible:ring-inset'
       )}
     >
-      <AppWindow className="size-3.5 shrink-0 text-muted-foreground" aria-hidden="true" />
-      <span className="min-w-0 truncate">{label}</span>
+      <AppWindow
+        // A pinned row's icon carries the brand accent (D-15). The row's hover/focus states recolor
+        // only the BACKGROUND (`hover:bg-accent`) / ring — never the icon — so `text-primary` has no
+        // competing icon-color state to flip against: a selected/hovered pinned row still reads pinned.
+        className={cn('size-3.5 shrink-0', pinned ? 'text-primary' : 'text-muted-foreground')}
+        aria-hidden="true"
+      />
+      <span className={cn('min-w-0 truncate', pinned && 'font-medium')}>{label}</span>
     </div>
   )
   // No menu → the existing Tooltip-only row.

@@ -48,7 +48,32 @@ describe('cosmosTabs', () => {
     expect(state.tabs[1].kind).toBe('favorite')
     expect(state.tabs[1].source).toEqual(JIRA_SOURCE)
     expect(isCloseable(state.tabs[1])).toBe(true)
-    expect(state.activeTabId).toBe(id) // FR-010: activates the new favorite.
+  })
+
+  it('pinning is NON-DISRUPTIVE: appendFavorite does NOT activate the new favorite (FR-010)', () => {
+    // Regression for the navigate-on-pin bug: pinning appends the favorite but the active tab is
+    // UNCHANGED (the user stays on whatever tab they were on — here the default).
+    const state = appendFavorite(initialCosmosTabs(), { source: JIRA_SOURCE, label: 'Saved view' })
+    const id = favoriteId(JIRA_SOURCE)
+    expect(state.tabs.map((t) => t.id)).toEqual([DEFAULT_TAB_ID, id]) // favorite IS appended
+    expect(state.activeTabId).toBe(DEFAULT_TAB_ID) // active stays the default — NOT the favorite
+    expect(state.activeTabId).not.toBe(id)
+  })
+
+  it('pinning preserves a non-default active tab too (stays where the user is)', () => {
+    // Pin one favorite + make it active, then pin a SECOND — the active stays on the first favorite.
+    const first = favoriteId(JIRA_SOURCE)
+    const withFirst = setActiveCosmosTab(
+      appendFavorite(initialCosmosTabs(), { source: JIRA_SOURCE, label: 'A' }),
+      first
+    )
+    const withSecond = appendFavorite(withFirst, { source: SLACK_SOURCE, label: 'B' })
+    expect(withSecond.tabs.map((t) => t.id)).toEqual([
+      DEFAULT_TAB_ID,
+      first,
+      favoriteId(SLACK_SOURCE)
+    ])
+    expect(withSecond.activeTabId).toBe(first) // unchanged — pinning B did not navigate away
   })
 
   it('favoriteId is deterministic + idempotent per source (FR-013)', () => {
@@ -116,7 +141,9 @@ describe('cosmosTabs keyboard navigation (cosmos-home-keyboard-tab-nav-v1)', () 
   })
 
   it('unpinning the ACTIVE favorite reconciles to the default, then cycles the REMAINING tabs (FR-010)', () => {
-    const state = twoFavorites() // active = favSlack
+    // Pinning no longer auto-activates (non-disruptive), so explicitly make favSlack the active tab
+    // to exercise the "unpin the ACTIVE favorite" path.
+    const state = setActiveCosmosTab(twoFavorites(), favoriteId(SLACK_SOURCE))
     expect(state.activeTabId).toBe(favoriteId(SLACK_SOURCE))
     const after = closeCosmosTab(state, favoriteId(SLACK_SOURCE))
     expect(after.activeTabId).toBe(DEFAULT_TAB_ID) // handed back to default

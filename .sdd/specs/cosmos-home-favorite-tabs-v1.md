@@ -119,7 +119,7 @@ they work in the conversation.
 | FR-003 | The menu MUST be reachable by keyboard from a focused tree row (platform context-menu key / Shift+F10) and be arrow-key + Enter operable, preserving the tree's roving-tabindex behavior. | Decision 1 |
 | FR-004 | Right-clicking a **favorite tab in Home's strip** MUST offer **Unpin**; the favorite's close `X` MUST also unpin it. The two are equivalent (close == unpin). | Decision 1 |
 | FR-005 | The menus MUST be built on a shared shadcn/Radix menu primitive (dropdown/context-menu), consistent with the design system — NOT a hand-rolled menu. | Decision 1; DESIGN.md |
-| FR-010 | Choosing Pin MUST append a `kind: 'favorite'` `CosmosTab` to Home's tab state **after** the pinned default tab, recording the source `{ panelId, tabId }` and a captured surface snapshot. | Decision 2 |
+| FR-010 | Choosing Pin MUST append a `kind: 'favorite'` `CosmosTab` to Home's tab state **after** the pinned default tab, recording the source `{ panelId, tabId }` and a captured surface snapshot. Pinning MUST be **non-disruptive**: it MUST NOT change which tab is active — the user stays on the currently-active tab (the favorite simply appears in the strip + the tree row marks it pinned). *(Correction: navigating to the favorite on pin was confusing — user feedback.)* | Decision 2 |
 | FR-011 | The default "Cosmos" tab MUST remain first and undeletable (no close affordance, never unpinnable). | Decision 2 |
 | FR-012 | Favorite tabs MUST be closeable/unpinnable; closing/unpinning the active favorite MUST return focus to the default tab. | Decision 2 |
 | FR-013 | Pinning a source tab that is already pinned MUST be idempotent (no duplicate favorite); favorites are de-duplicated by source `{ panelId, tabId }`. | Decision 2 |

@@ -223,6 +223,15 @@ function openRowMenu(label: string): void {
   fireEvent.contextMenu(tabRow(label), { clientX: 10, clientY: 10 })
 }
 
+/**
+ * Activate a favorite by clicking its strip tab. Pinning is now NON-DISRUPTIVE (it no longer
+ * navigates to the favorite), so a test that asserts favorite-active behavior must click the strip
+ * tab first.
+ */
+function activateStripTab(label: string): void {
+  fireEvent.click(within(strip()).getByRole('tab', { name: new RegExp(label) }))
+}
+
 describe('Home favorite tabs (COSMOS-FAVORITE-TABS-01)', () => {
   it('right-click a tree row → Pin → a favorite appears in the strip after the default', async () => {
     renderApp()
@@ -240,6 +249,11 @@ describe('Home favorite tabs (COSMOS-FAVORITE-TABS-01)', () => {
     const tabs = within(strip()).getAllByRole('tab')
     expect(tabs[0]).toHaveTextContent('Cosmos')
     expect(tabs[1]).toHaveTextContent('Sprint board')
+    // NON-DISRUPTIVE pin: the default "Cosmos" tab stays ACTIVE (pinning does NOT navigate to the
+    // favorite) and the default content — the cross-panel tree — is still shown.
+    expect(tabs[0]).toHaveAttribute('aria-selected', 'true')
+    expect(favTab).toHaveAttribute('aria-selected', 'false')
+    expect(treeOrNull()).toBeInTheDocument()
   })
 
   it('clicking the favorite renders the SOURCE live surface inline; a re-publish mirrors live', async () => {
@@ -248,7 +262,9 @@ describe('Home favorite tabs (COSMOS-FAVORITE-TABS-01)', () => {
     openRowMenu('Sprint board')
     fireEvent.click(await screen.findByRole('menuitem', { name: /Pin/ }))
 
-    // Pinning activates the favorite → the inline surface shows the source surfaceId.
+    // Pinning is non-disruptive — CLICK the favorite strip tab to activate it, then the inline
+    // surface shows the source surfaceId.
+    activateStripTab('Sprint board')
     expect(screen.getByTestId('fav-surface')).toHaveTextContent('s-board')
     // The default conversation placeholder is NOT shown (we are on the favorite tab).
     expect(screen.queryByText(/Describe a UI below/)).not.toBeInTheDocument()
@@ -265,6 +281,7 @@ describe('Home favorite tabs (COSMOS-FAVORITE-TABS-01)', () => {
     await settle()
     openRowMenu('Sprint board')
     fireEvent.click(await screen.findByRole('menuitem', { name: /Pin/ }))
+    activateStripTab('Sprint board') // non-disruptive pin → click to activate the favorite
     expect(screen.getByTestId('fav-surface')).toBeInTheDocument()
 
     // The source tab/panel closes (publisher stops publishing jira).
@@ -337,7 +354,11 @@ describe('Home favorite tabs (COSMOS-FAVORITE-TABS-01)', () => {
     openRowMenu('Sprint board')
     fireEvent.click(await screen.findByRole('menuitem', { name: /Pin/ }))
     await settle()
-    // On the favorite tab the tree is GONE (the favorite content fills the full width).
+    // Pinning is non-disruptive — still on the default tab, tree still present.
+    expect(treeOrNull()).toBeInTheDocument()
+    // Activate the favorite; now the tree is GONE (the favorite content fills the full width).
+    activateStripTab('Sprint board')
+    await settle()
     expect(treeOrNull()).not.toBeInTheDocument()
     // The favorite's source surface still renders.
     expect(screen.getByTestId('fav-surface')).toBeInTheDocument()
@@ -348,6 +369,7 @@ describe('Home favorite tabs (COSMOS-FAVORITE-TABS-01)', () => {
     await settle()
     openRowMenu('Sprint board')
     fireEvent.click(await screen.findByRole('menuitem', { name: /Pin/ }))
+    activateStripTab('Sprint board') // non-disruptive pin → click to activate the favorite
     await settle()
 
     // The docked Cosmos composer is hidden — Home publishes a NULL 'cosmos' config while a favorite
@@ -370,6 +392,7 @@ describe('Home favorite tabs (COSMOS-FAVORITE-TABS-01)', () => {
     await settle()
     openRowMenu('Sprint board')
     fireEvent.click(await screen.findByRole('menuitem', { name: /Pin/ }))
+    activateStripTab('Sprint board') // non-disruptive pin → click to activate the favorite
     await settle()
     expect(treeOrNull()).not.toBeInTheDocument()
 

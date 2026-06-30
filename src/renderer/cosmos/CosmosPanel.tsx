@@ -207,8 +207,10 @@ export function CosmosPanel({ active }: { active: boolean }): React.JSX.Element 
     sessionRegistry.setFavorites(toHomeFavorites(tabsState))
   }, [tabsState, sessionRegistry])
 
-  // FR-001/FR-010: pin a source tab as a favorite (idempotent/de-duped) + activate it. Terminal is
-  // not pinnable (FR-040) — the tree disables its Pin item, and this guard narrows the panel id.
+  // FR-001/FR-010: pin a source tab as a favorite (idempotent/de-duped) WITHOUT activating it —
+  // pinning is non-disruptive, the user stays on the current tab (the favorite just appears in the
+  // strip). Terminal is not pinnable (FR-040) — the tree disables its Pin item, and this guard
+  // narrows the panel id.
   const handlePin = useCallback((group: PanelTabGroup, tab: LivePanelTab): void => {
     if (group.panelId === 'terminal') {
       return

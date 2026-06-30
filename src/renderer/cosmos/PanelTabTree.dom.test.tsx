@@ -167,4 +167,23 @@ describe('PanelTabTree right-click Pin/Unpin menu (cosmos-home-favorite-tabs-v1)
     expect(pin).toHaveAttribute('data-disabled')
     expect(screen.getByText(/Terminal tabs can't be pinned/)).toBeInTheDocument()
   })
+
+  it('marks an ALREADY-PINNED row with text-primary icon + bold label; a non-pinned sibling stays default (D-15)', () => {
+    // j1 is pinned, its sibling j2 is not (same `isPinned` signal the Pin/Unpin menu uses).
+    renderWithMenu({ pinned: new Set(['jira:j1']) })
+
+    const pinnedLabel = screen.getByText('Sprint board')
+    const pinnedRow = pinnedLabel.closest('[role="treeitem"]')!
+    const pinnedIcon = pinnedRow.querySelector('svg')!
+    expect(pinnedIcon.getAttribute('class') ?? '').toContain('text-primary')
+    expect(pinnedIcon.getAttribute('class') ?? '').not.toContain('text-muted-foreground')
+    expect(pinnedLabel.className).toContain('font-medium')
+
+    const plainLabel = screen.getByText('PROJ-9')
+    const plainRow = plainLabel.closest('[role="treeitem"]')!
+    const plainIcon = plainRow.querySelector('svg')!
+    expect(plainIcon.getAttribute('class') ?? '').not.toContain('text-primary')
+    expect(plainIcon.getAttribute('class') ?? '').toContain('text-muted-foreground')
+    expect(plainLabel.className).not.toContain('font-medium')
+  })
 })
