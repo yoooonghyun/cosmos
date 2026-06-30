@@ -439,6 +439,19 @@ detail.
   names, not raw ids — reuse that resolved data, do NOT re-resolve. The mirror is renderer-only,
   non-secret, DISPLAY-ONLY (its own load-more is not wired — it re-projects as the source grows), and
   NEVER persisted (`buildGenerativeTab` does not whitelist `mirrorSurface`).
+- **A Google Calendar favorite is NOT a `mirrorSurface` case — it needs a PINNED-tab FETCH instead
+  (calendar-favorite-waiting-v1).** Unlike Confluence/Slack, the calendar's default view IS a pushed
+  `target:'google-calendar'` frame the shared hook files straight into `tab.surface` (no
+  `onUnsolicitedFrame` interceptor routes it away, like Jira), so the favorite already mirrors it via
+  `mirrorSurface ?? surface` — do NOT add a `buildCalendarMirror`. The bug was that
+  `GoogleCalendarPanel`'s default-view fetch was gated on `active`, so a pinned-but-HIDDEN calendar tab
+  (after a restart — the live `composed:false` default view is NOT persisted and re-fetches; all panels
+  are `forceMount`ed so a hidden panel stays mounted with `active===false`) never fetched → `tab.surface`
+  null → favorite WAITING forever. FIX: gate the fetch on `(active || isActivePinned)`, where
+  `isActivePinned = pins.has(pinnedSourceKey('google-calendar', activeTabId))` reads the SAME reverse
+  `usePinnedSources()` channel the native mirror uses. **General rule: if a panel's surface is fetched
+  only when `active`, its Home favorite is stuck WAITING after restart unless the fetch ALSO fires when
+  the tab is pinned.** Non-pinned hidden tabs still do not eager-read (policy preserved).
 - **GOTCHA — the bound surface builders live in `src/shared/surfaceBuilders/`, not `src/main/`.** The six
   `buildBound*Surface` builders + the row mappers (`confluenceResultRow`/`slack{Channel,Message,Search}Row`)
   + the `*_PATH`/surface-id constants moved to `src/shared/surfaceBuilders/{confluence,slack}SurfaceBuilder.ts`

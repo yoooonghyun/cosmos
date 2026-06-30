@@ -65,6 +65,24 @@ function renderDockedCosmos() {
   )
 }
 
+/**
+ * Renders the docked cosmos surface with NO published cosmos config — the Home-FAVORITE-active
+ * state (cosmos-home-favorite-tabs-v1: a favorite tab publishes a NULL 'cosmos' config so the
+ * docked Cosmos composer is hidden and the source panel's own floating Open-Prompt overlays).
+ */
+function renderDockedCosmosNoConfig() {
+  const surfaceRef = { current: document.createElement('div') }
+  return render(
+    <SessionProvider snapshot={null}>
+      <OpenPromptPositionProvider>
+        <ActiveComposerProvider>
+          <SharedComposer surface="cosmos" surfaceRef={surfaceRef} />
+        </ActiveComposerProvider>
+      </OpenPromptPositionProvider>
+    </SessionProvider>
+  )
+}
+
 describe('Cosmos docked column order (footer-placement-cosmos-terminal-v1)', () => {
   it('renders the composer BEFORE the footer (composer → footer, not footer → composer)', () => {
     renderDockedCosmos()
@@ -98,5 +116,32 @@ describe('Cosmos docked column order (footer-placement-cosmos-terminal-v1)', () 
     expect(band).toHaveClass('shrink-0', 'justify-center', 'pb-8')
     // Guard against a silent revert to the old cramped padding.
     expect(band).not.toHaveClass('pb-5')
+  })
+})
+
+describe('Cosmos docked footer survives a null config (home-favorite-missing-footer-v1)', () => {
+  // A Home FAVORITE tab publishes a NULL 'cosmos' composer config (CosmosPanel hides the docked
+  // Cosmos composer + overlays the source panel's floating Open-Prompt). The "Home" footer is
+  // surface CHROME, not the composer, so it MUST still render. RED before the fix: the early
+  // `if (!config) return null` dropped the WHOLE docked return (composer AND footer) → no footer.
+  it('renders the Home footer (no composer) when no cosmos config is published', () => {
+    renderDockedCosmosNoConfig()
+    // The footer's surface-name strip (aria-label="Panel", text "Home") IS present…
+    expect(screen.getByLabelText('Panel')).toBeInTheDocument()
+    expect(screen.getByText('Home')).toBeInTheDocument()
+    // …and the composer textarea is ABSENT (the band is omitted when config is null).
+    expect(screen.queryByRole('textbox')).not.toBeInTheDocument()
+  })
+
+  it('still renders BOTH composer and footer (composer → footer order) when a config IS present', () => {
+    renderDockedCosmos()
+    const textarea = screen.getByRole('textbox')
+    const footer = screen.getByLabelText('Panel')
+    expect(textarea).toBeInTheDocument()
+    expect(footer).toBeInTheDocument()
+    // The composer→footer order invariant is preserved (CosmosFooterOrder / CMP rows).
+    const rel = textarea.compareDocumentPosition(footer)
+    expect(rel & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    expect(rel & Node.DOCUMENT_POSITION_PRECEDING).toBeFalsy()
   })
 })

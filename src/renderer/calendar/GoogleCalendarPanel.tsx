@@ -78,6 +78,7 @@ import { usePublishComposer } from '../composer/ActiveComposerProvider'
 import { SurfaceSpinner } from '../app/SurfaceSpinner'
 import { GlassDock } from '../glassDock/GlassDock'
 import { useGenerativePanelTabs } from '../tabs/useGenerativePanelTabs'
+import { usePinnedSources, pinnedSourceKey } from '../panelTabs'
 import { calendarViewContext, contextChipFor } from '../app/viewContextCapture'
 import { useRestoredGenerativePanel } from '../session/SessionProvider'
 import { seedHiddenCalendarIds } from './googleCalendarCatalog/logic'
@@ -283,15 +284,29 @@ export function GoogleCalendarPanel({ active }: { active: boolean }): React.JSX.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tabs.length])
 
-  // Lazily load the default month into an EMPTY tab once the panel is shown AND connected
-  // (FR-014). Keyed on the active tab's emptiness: a fresh `+`/seed tab, a reconnect, or
-  // first show all resolve to "active tab has no surface, not loading, no error, not
-  // in-flight" → fire one `requestDefaultInActiveTab(requestDefaultView)`. That marks the
-  // tab loadingDefault (its skeleton), so the condition immediately goes false and never
-  // loops. Gated on `active` so a connected-but-hidden panel does not eager-read.
+  // calendar-favorite-waiting-v1: a calendar tab pinned as a Home favorite mirrors the source
+  // tab's `surface` (the favorite resolves `mirrorSurface ?? surface`; the calendar's pushed
+  // default-view frame IS filed into `tab.surface` by the shared hook — no native-mirror needed).
+  // BUT the default-view fetch below is gated on `active`, so a pinned-but-hidden calendar tab —
+  // e.g. after a restart, since the live default view (composed:false) is NOT persisted and
+  // re-fetches on restore — never fetches while the user sits in Home → `tab.surface` stays null →
+  // the favorite shows "Waiting for this tab's view…" forever. So ALSO fetch when the active tab is
+  // PINNED, reusing the existing reverse pinned-sources channel (the OQ-3 gate Confluence/Slack use)
+  // so only a tab a favorite points at eager-reads while hidden.
+  const pins = usePinnedSources()
+  const isActivePinned =
+    activeTabId != null && pins.has(pinnedSourceKey('google-calendar', activeTabId))
+
+  // Lazily load the default month into an EMPTY tab once the panel is shown (OR a favorite points at
+  // its active tab) AND connected (FR-014). Keyed on the active tab's emptiness: a fresh `+`/seed
+  // tab, a reconnect, or first show all resolve to "active tab has no surface, not loading, no error,
+  // not in-flight" → fire one `requestDefaultInActiveTab(requestDefaultView)`. That marks the tab
+  // loadingDefault (its skeleton), so the condition immediately goes false and never loops. Gated on
+  // `active || isActivePinned` so a connected-but-hidden panel does not eager-read UNLESS a Home
+  // favorite needs the surface (calendar-favorite-waiting-v1).
   useEffect(() => {
     if (
-      active &&
+      (active || isActivePinned) &&
       isConnected &&
       activeTab &&
       !activeTab.surface &&
@@ -301,7 +316,7 @@ export function GoogleCalendarPanel({ active }: { active: boolean }): React.JSX.
     ) {
       requestDefaultInActiveTab(() => window.cosmos.googleCalendar.requestDefaultView())
     }
-  }, [active, isConnected, activeTab, requestDefaultInActiveTab])
+  }, [active, isActivePinned, isConnected, activeTab, requestDefaultInActiveTab])
 
   // calendar-month-year-nav-v1 (Decision 3) → calendar-week-day-views-v1 (FR-002): the
   // per-tab displayed VIEW INTENT — a renderer-only, SESSION-ONLY ephemeral
