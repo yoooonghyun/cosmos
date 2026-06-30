@@ -70,9 +70,15 @@ export function FavoriteSurface({
     )
   }
 
-  // WAITING: the source tab is open but has not composed a surface yet (untitled / in-flight). Flips
-  // to the live surface the instant one is published.
-  if (!live.surface) {
+  // cosmos-native-view-mirror-surface-v1 (D7 / FR-007): resolve `mirrorSurface ?? surface` — the
+  // native-view mirror (Confluence/Slack browsing) when the source shows native, else the agent-
+  // composed surface. They are published mutually exclusively (livePanelProjection), so this always
+  // equals exactly what the source tab is showing.
+  const mirror = live.mirrorSurface ?? live.surface
+
+  // WAITING: the source tab is open but has neither a native mirror nor a composed surface yet
+  // (untitled / in-flight / native data not loaded). Flips to the live surface on the next publish.
+  if (!mirror) {
     return (
       <div
         className="flex min-h-0 min-w-0 flex-1 flex-col items-center justify-center gap-2 overflow-auto p-3 text-center text-card-foreground"
@@ -93,7 +99,7 @@ export function FavoriteSurface({
     >
       <A2UIProvider catalog={host.catalog} key={source.tabId}>
         <ActiveTabSurface
-          surface={live.surface}
+          surface={mirror}
           catalogId={host.catalogId}
           panelName={`Favorite:${host.panelName}`}
           onAction={favoriteOnAction}

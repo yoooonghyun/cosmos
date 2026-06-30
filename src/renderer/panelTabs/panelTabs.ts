@@ -62,6 +62,24 @@ export interface LivePanelTab {
    * this seam (favorites persist by reference only — `{panelId, tabId, label}`).
    */
   serialize?: () => string
+  /**
+   * The favorite-only NATIVE-VIEW mirror surface (cosmos-native-view-mirror-surface-v1, FR-001):
+   * a native-first panel (Confluence, Slack) publishes a secret-free bound {@link TabSurface}
+   * projecting its CURRENT native view (feed/search/page; channel-list/history/search), DISTINCT
+   * from {@link surface} (the agent-COMPOSED surface). A Home favorite resolves
+   * `mirrorSurface ?? surface`, so it mirrors native browsing too — not only composed surfaces.
+   *
+   * MUTUALLY EXCLUSIVE with `surface` by construction (the publish projection nulls this whenever
+   * `surface` is present — see `livePanelProjection`), so the favorite always shows exactly what
+   * the source shows. `null`/absent while the source shows a composed surface, has no native data
+   * yet (→ favorite WAITING), or for Jira/Generated-UI/terminal tabs (which never set it).
+   *
+   * NON-SECRET by the A2UI render contract (the builders' secret-free output — never a token,
+   * OAuth secret, credential, file path, `~/.claude` location, or transcript line). Renderer-only
+   * REFERENCE pass ({@link PanelTabsProvider} is in-renderer, no IPC); NEVER persisted (favorites
+   * persist by reference only — `{panelId, tabId, label}`).
+   */
+  mirrorSurface?: TabSurface | null
 }
 
 /** One panel's FULL live tab list + which tab is active (FR-008). */

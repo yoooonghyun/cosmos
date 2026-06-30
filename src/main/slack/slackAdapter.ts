@@ -32,7 +32,6 @@ import type {
   AdapterResolver
 } from '../generative/adapterDispatcher'
 import type { AdapterDescriptor } from '../../shared/types/adapter'
-import { AdapterSourcePath } from '../../shared/types/adapter'
 import { SlackAdapterSource } from '../../shared/types/slack'
 import type {
   SlackChannel,
@@ -45,14 +44,26 @@ import type {
   SlackSearchParams,
   SlackUser
 } from '../../shared/types/slack'
-
-/** The bound data-model path the channel-list reads its rows from. Single-sourced from the
- * shared {@link AdapterSourcePath} so the tool-description text + the dispatcher agree. */
-export const SLACK_CHANNELS_PATH = AdapterSourcePath.listChannels
-/** The bound data-model path the message-history reads its rows from (single-sourced). */
-export const SLACK_MESSAGES_PATH = AdapterSourcePath.getHistory
-/** The bound data-model path the search-results reads its rows from (single-sourced). */
-export const SLACK_MATCHES_PATH = AdapterSourcePath.search
+// cosmos-native-view-mirror-surface-v1 (D3): the bound-row mappers + bound data-model path
+// constants now live in the SHARED surface builder (so the renderer can reuse them for a
+// favorite mirror). Imported here for the resolver/bind-options + RE-EXPORTED so existing
+// `from './slackAdapter'` callers (tests, surface builder) keep working unchanged.
+import {
+  SLACK_CHANNELS_PATH,
+  SLACK_MESSAGES_PATH,
+  SLACK_MATCHES_PATH,
+  slackChannelRow,
+  slackMessageRow,
+  slackSearchRow
+} from '../../shared/surfaceBuilders/slackSurfaceBuilder'
+export {
+  SLACK_CHANNELS_PATH,
+  SLACK_MESSAGES_PATH,
+  SLACK_MATCHES_PATH,
+  slackChannelRow,
+  slackMessageRow,
+  slackSearchRow
+} from '../../shared/surfaceBuilders/slackSurfaceBuilder'
 
 /** Bind options for a channel-LIST surface: append/load-more pagination (FR-010/FR-011). */
 export const slackChannelsBindOptions: AdapterRegisterOptions = {
@@ -97,64 +108,6 @@ export interface SlackAdapterManager {
   getHistory(params: SlackHistoryParams): Promise<SlackResult<SlackPage<SlackMessage>>>
   search(params: SlackSearchParams): Promise<SlackResult<SlackPage<SlackSearchMatch>>>
   getUser(params: { userId: string }): Promise<SlackResult<SlackUser>>
-}
-
-/** Map one channel to the bound row shape `ChannelList`/`ChannelRow` read (non-secret). */
-export function slackChannelRow(channel: SlackChannel): Record<string, unknown> {
-  return { id: channel.id, name: channel.name, isMember: channel.isMember }
-}
-
-/**
- * Map one message to the bound row shape `MessageList`/`MessageRow` read (non-secret).
- *
- * slack-generative-message-parity-v1 (FR-005/FR-013): when a `channelId` is supplied —
- * ONLY the channel-history branch has one in scope — emit the non-secret thread
- * coordinates `channelId` + `threadTs` (the message's own `ts` IS its thread key) so the
- * generated `MessageRow`'s "N replies" affordance can drill into the native thread view.
- * Omitted entirely when no `channelId` (search rows): a row without coordinates degrades
- * to the non-interactive label. NEVER carries a token/secret (FR-019).
- */
-export function slackMessageRow(
-  message: SlackMessage,
-  channelId?: string
-): Record<string, unknown> {
-  return {
-    ts: message.ts,
-    userId: message.userId,
-    ...(message.userName ? { userName: message.userName } : {}),
-    text: message.text,
-    ...(typeof message.replyCount === 'number' ? { replyCount: message.replyCount } : {}),
-    // slack-rich-message-render-v1 (FR-006/FR-009): carry the per-message custom-emoji ref
-    // map + image attachment refs so the generated row renders identically to the native one.
-    ...(message.customEmoji ? { customEmoji: message.customEmoji } : {}),
-    ...(message.images && message.images.length > 0 ? { images: message.images } : {}),
-    ...(channelId ? { channelId, threadTs: message.ts } : {})
-  }
-}
-
-/**
- * Map one search match to the bound row shape `SearchResultList`/`SearchResultRow` reads.
- *
- * slack-search-row-full-parity-v1: a search hit now carries the SAME render-bearing fields a
- * history row does so the generated search row maps to the canonical row identically — the
- * custom-emoji ref map, inline `images` (extracted main-side), AND the thread coordinate
- * `threadTs` (= the hit's own `ts`, since a message is its own thread root) so the generated row
- * is clickable to open its thread via the `channelId` + `threadTs` pair, exactly like a generated
- * history row. `replyCount` stays absent (search.messages omits reply_count) — the one documented
- * divergence (the "N replies" label simply does not render). NEVER carries a token/secret (FR-019).
- */
-export function slackSearchRow(match: SlackSearchMatch): Record<string, unknown> {
-  return {
-    ts: match.ts,
-    userId: match.userId,
-    ...(match.userName ? { userName: match.userName } : {}),
-    text: match.text,
-    ...(match.customEmoji ? { customEmoji: match.customEmoji } : {}),
-    ...(match.images && match.images.length > 0 ? { images: match.images } : {}),
-    channelId: match.channelId,
-    ...(match.channelName ? { channelName: match.channelName } : {}),
-    ...(match.threadTs ? { threadTs: match.threadTs } : {})
-  }
 }
 
 /**

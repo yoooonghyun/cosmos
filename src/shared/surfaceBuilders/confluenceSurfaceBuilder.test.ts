@@ -3,28 +3,28 @@ import {
   buildBoundDefaultFeedSurface,
   buildBoundPageDetailSurface,
   buildBoundSearchResultsSurface,
+  CONFLUENCE_FEED_PATH,
+  CONFLUENCE_PAGE_PATH,
+  CONFLUENCE_RESULTS_PATH,
+  confluenceResultRow,
   SURFACE_CONFLUENCE_FEED,
   SURFACE_CONFLUENCE_PAGE,
   SURFACE_CONFLUENCE_SEARCH
 } from './confluenceSurfaceBuilder'
-import {
-  CONFLUENCE_FEED_PATH,
-  CONFLUENCE_PAGE_PATH,
-  CONFLUENCE_RESULTS_PATH,
-  confluenceResultRow
-} from './confluenceAdapter'
-import { ConfluenceAdapterSource } from '../../shared/types/confluence'
+import { ConfluenceAdapterSource } from '../types/confluence'
 import type {
   ConfluencePage,
   ConfluencePageDetail,
   ConfluenceSearchResult
-} from '../../shared/types/confluence'
+} from '../types/confluence'
 
 /* confluence-generative-adapter-v1 — the bound surface builders (FR-002/FR-003). Each
  * re-expresses a surface with `{path}` bindings + an initial updateDataModel seed + a
  * secret-free descriptor. Pattern: bound (no literal data props); seed = first page +
  * /loading=false + /hasMore = nextCursor present; detail seeds the value; secret-free;
- * append-only (hasPrev never emitted); ONE SearchResultList backs feed + search. */
+ * append-only (hasPrev never emitted); ONE SearchResultList backs feed + search.
+ * cosmos-native-view-mirror-surface-v1 (D3): RELOCATED here from src/main/confluence so the
+ * renderer can reuse them for a favorite's native-view mirror (single source of truth). */
 
 const HIT: ConfluenceSearchResult = { id: 'P1', title: 'Page One', space: 'ENG', excerpt: 'hi' }
 const FEED_PAGE: ConfluencePage<ConfluenceSearchResult> = { items: [HIT], nextCursor: 'c2' }

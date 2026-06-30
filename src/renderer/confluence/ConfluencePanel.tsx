@@ -61,6 +61,8 @@ import { useRestoredGenerativePanel } from '../session/SessionProvider'
 import { surfaceSpinnerVisible } from '../composer/promptComposerLogic'
 import { usePerTabNav } from '../tabs/usePerTabNav'
 import { useTabShortcuts } from '../tabs/useTabShortcuts'
+import { usePinnedSources, pinnedSourceKey } from '../panelTabs'
+import { buildConfluenceMirror, type ConfluenceMirrorView } from '../cosmos/nativeMirror'
 import { useConfirm } from '../confirm/useConfirm'
 import { ConfirmDialog } from '@/components/ui/confirm-dialog'
 import { confirmCopy } from '../confirm/confirmLogic'
@@ -151,6 +153,23 @@ const CONFLUENCE_NAV_DEFAULT: ConfluenceNav = {
  * ------------------------------------------------------------------------- */
 
 /**
+ * cosmos-native-view-mirror-surface-v1 (D5): a CONTENT key for the favorite mirror that ignores the
+ * per-build requestId, so an unchanged native view never re-publishes the mirror in a loop. Captures
+ * the active tab, the view kind, the search query / page id, the next cursor, and the row ids (which
+ * grow on load-more) — every change that should rebuild the mirror.
+ */
+function confluenceMirrorKey(tabId: string, view: ConfluenceMirrorView): string {
+  if (!view) {
+    return `${tabId}|none`
+  }
+  if (view.kind === 'page') {
+    return `${tabId}|page|${view.detail.id}|${view.detail.webUrl ?? ''}`
+  }
+  const ids = view.page.items.map((i) => i.id).join(',')
+  return `${tabId}|${view.kind}|${view.kind === 'search' ? view.query : ''}|${view.page.nextCursor ?? ''}|${ids}`
+}
+
+/**
  * Generalized content list (confluence-default-feed v1, FR-002). Renders any paginated
  * `ConfluenceSearchResult` source — text search OR the default personal feed — via the
  * same five states, "Load more" pagination, and row-click drill-in. The source is
@@ -164,7 +183,8 @@ function ContentList({
   reloadKey,
   emptyLabel,
   onOpen,
-  onReconnect
+  onReconnect,
+  onData
 }: {
   fetcher: (
     cursor?: string
@@ -173,6 +193,13 @@ function ContentList({
   emptyLabel: string
   onOpen: (result: ConfluenceSearchResult) => void
   onReconnect: () => void
+  /**
+   * cosmos-native-view-mirror-surface-v1 (D5): lift this list's CURRENT (accumulated) page up to
+   * the panel so a Home favorite can mirror the native feed/search view. Fires on every load
+   * (first page + each load-more) with the displayed rows + the next cursor. Read-only; the
+   * panel ignores it unless this tab is pinned.
+   */
+  onData?: (page: ConfluencePage<ConfluenceSearchResult>) => void
 }): React.JSX.Element {
   const [items, setItems] = useState<ConfluenceSearchResult[]>([])
   const [cursor, setCursor] = useState<string | undefined>(undefined)
@@ -180,6 +207,9 @@ function ContentList({
   const [loadingMore, setLoadingMore] = useState(false)
   const [error, setError] = useState<ConfluenceError | null>(null)
   const [loaded, setLoaded] = useState(false)
+  // Accumulated rows mirror of `items`, so `onData` can carry the FULL displayed page without a
+  // side effect inside the `setItems` updater (StrictMode-safe). Resets with the component remount.
+  const itemsRef = useRef<ConfluenceSearchResult[]>([])
 
   const run = useCallback(
     async (next?: string) => {
@@ -191,16 +221,19 @@ function ContentList({
       }
       const result = await fetcher(next)
       if (result.ok) {
-        setItems((prev) => (next ? [...prev, ...result.data.items] : result.data.items))
+        const merged = next ? [...itemsRef.current, ...result.data.items] : result.data.items
+        itemsRef.current = merged
+        setItems(merged)
         setCursor(result.data.nextCursor)
         setLoaded(true)
+        onData?.({ items: merged, ...(result.data.nextCursor ? { nextCursor: result.data.nextCursor } : {}) })
       } else {
         setError(result)
       }
       setLoading(false)
       setLoadingMore(false)
     },
-    [fetcher]
+    [fetcher, onData]
   )
 
   useEffect(() => {
@@ -281,7 +314,8 @@ function ContentList({
 function PageDetail({
   pageId,
   onReconnect,
-  onWebUrl
+  onWebUrl,
+  onData
 }: {
   pageId: string
   onReconnect: () => void
@@ -292,6 +326,12 @@ function PageDetail({
    * to omit) once the page read resolves, and clears (undefined) while loading/on error/unmount.
    */
   onWebUrl?: (webUrl: string | undefined) => void
+  /**
+   * cosmos-native-view-mirror-surface-v1 (D5): lift the fetched page detail up to the panel so a
+   * Home favorite can mirror the open page. Fires with the resolved detail; the panel ignores it
+   * unless this tab is pinned. (Cleared at the panel level when the dock closes.)
+   */
+  onData?: (detail: ConfluencePageDetail) => void
 }): React.JSX.Element {
   const [detail, setDetail] = useState<ConfluencePageDetail | null>(null)
   const [loading, setLoading] = useState(true)
@@ -303,11 +343,12 @@ function PageDetail({
     const result = await window.cosmos.confluence.getPage({ pageId })
     if (result.ok) {
       setDetail(result.data)
+      onData?.(result.data)
     } else {
       setError(result)
     }
     setLoading(false)
-  }, [pageId])
+  }, [pageId, onData])
 
   useEffect(() => {
     void run()
@@ -408,6 +449,19 @@ export function ConfluencePanel({ active }: { active: boolean }): React.JSX.Elem
   useEffect(() => {
     setGenUiPage(null)
   }, [activeTabId])
+
+  // cosmos-native-view-mirror-surface-v1 (D5): the ACTIVE tab's lifted native data, so a Home
+  // favorite can mirror the current native view (feed/search list + the open page detail). Reset
+  // on a tab switch so an inactive tab's data never bleeds into the active mirror (OQ-3: the mirror
+  // is fresh for the active source tab; an inactive tab keeps its last-known mirror until re-active).
+  const [nativeListPage, setNativeListPage] = useState<ConfluencePage<ConfluenceSearchResult> | null>(
+    null
+  )
+  const [nativePageDetail, setNativePageDetail] = useState<ConfluencePageDetail | null>(null)
+  useEffect(() => {
+    setNativeListPage(null)
+    setNativePageDetail(null)
+  }, [activeTabId])
   // confluence-link-404-v1 #100: the open page detail's canonical web URL, lifted out of
   // `PageDetail` so the "Open in Confluence" external-link affordance renders on the DETAIL'S
   // TOP TITLE (the back-row header) rather than the body title. Only one detail header is on
@@ -459,6 +513,51 @@ export function ConfluencePanel({ active }: { active: boolean }): React.JSX.Elem
   // The native search/page browser is the base; while a submitted compose is in flight the
   // send-spinner takes the region instead (it lands a surface or error there next).
   const showNativeBase = (!activeTab || (!activeTab.surface && !activeTab.error)) && !showSpinner
+
+  // cosmos-native-view-mirror-surface-v1 (D5/D6): build + store the favorite NATIVE-VIEW mirror for
+  // the ACTIVE tab, ONLY while it is PINNED (the OQ-3 gate). Select the current native view (an open
+  // page in the dock wins, else the active search list, else the default feed). When not pinned, or
+  // while a composed surface/spinner is showing (mutual exclusivity — the publish projection also
+  // nulls the mirror whenever a `surface` is present), clear any stale mirror. A content key (which
+  // ignores the per-build requestId) de-dupes so an unchanged view never re-publishes in a loop.
+  const pins = usePinnedSources()
+  const isActivePinned = activeTabId != null && pins.has(pinnedSourceKey('confluence', activeTabId))
+  const lastMirrorKeyRef = useRef<string>('')
+  useEffect(() => {
+    if (!activeTabId) {
+      return
+    }
+    const view: ConfluenceMirrorView =
+      !isActivePinned || !showNativeBase
+        ? null
+        : genUiPage
+          ? nativePageDetail
+            ? { kind: 'page', detail: nativePageDetail }
+            : null
+          : query !== ''
+            ? nativeListPage
+              ? { kind: 'search', query, page: nativeListPage }
+              : null
+            : nativeListPage
+              ? { kind: 'feed', page: nativeListPage }
+              : null
+    const key = confluenceMirrorKey(activeTabId, view)
+    if (key === lastMirrorKeyRef.current) {
+      return
+    }
+    lastMirrorKeyRef.current = key
+    update(activeTabId, { mirrorSurface: buildConfluenceMirror(view) })
+  }, [
+    activeTabId,
+    isActivePinned,
+    showNativeBase,
+    genUiPage,
+    nativePageDetail,
+    query,
+    nativeListPage,
+    update
+  ])
+
   // Always keep ≥1 tab (Terminal-unified layout): seed one on mount and reopen a fresh
   // tab if the collection ever empties, so the tab strip is always the topmost element.
   useEffect(() => {
@@ -683,6 +782,7 @@ export function ConfluencePanel({ active }: { active: boolean }): React.JSX.Elem
                           setGenUiPage({ pageId: result.id, title: result.title })
                         }
                         onReconnect={() => void refreshStatus()}
+                        onData={setNativeListPage}
                       />
                     ) : (
                       <ContentList
@@ -699,6 +799,7 @@ export function ConfluencePanel({ active }: { active: boolean }): React.JSX.Elem
                           setGenUiPage({ pageId: result.id, title: result.title })
                         }
                         onReconnect={() => void refreshStatus()}
+                        onData={setNativeListPage}
                       />
                     )}
                 </div>
@@ -793,6 +894,7 @@ export function ConfluencePanel({ active }: { active: boolean }): React.JSX.Elem
                       pageId={genUiPage.pageId}
                       onReconnect={() => void refreshStatus()}
                       onWebUrl={setDetailWebUrl}
+                      onData={setNativePageDetail}
                     />
                   </div>
                 </GlassDock>

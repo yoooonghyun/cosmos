@@ -1059,6 +1059,26 @@ submits still capture dock).
   a foreign panel's live surface to Home for an in-place live mirror (see §3, "Home is a multi-tab
   container").
 
+- **Seam evolution — composed `surface` + native-view `mirrorSurface` (cosmos-native-view-mirror-surface-v1).**
+  The published per-tab payload ALSO carries an optional `LivePanelTab.mirrorSurface`: a favorite-only
+  projection of a **native-first** panel's CURRENT native view (Confluence feed/search/page; Slack
+  channel-list/history/search). Only `surface` was ever populated by an agent COMPOSE, so a favorite of a
+  natively-browsing Confluence/Slack tab showed "Waiting…" forever (`confluence-favorite-waiting-v1`).
+  Now those panels lift their on-screen native data and build a secret-free **bound** `TabSurface` via the
+  relocated **shared** `surfaceBuilders/{confluence,slack}SurfaceBuilder` (the six fossil bound builders
+  moved to `src/shared/surfaceBuilders/`; the main `*SurfaceBuilder.ts`/`*Adapter.ts` re-export them).
+  `FavoriteSurface` resolves **`mirrorSurface ?? surface`**, so a favorite mirrors native browsing too.
+  The two are published **mutually exclusively** by the pure `livePanelProjection.projectLivePanelTab`
+  (`mirrorSurface: surface ? null : (mirrorSurface ?? null)`), so the favorite always shows exactly what
+  the source shows: composed wins while the source shows it; native mirror otherwise. The mirror is built
+  in the RENDERER from data already on screen (`nativeMirror.ts`), DISPLAY-ONLY (a fresh `requestId` per
+  build; its own load-more is not wired — it re-projects as the source grows), **non-secret**,
+  **renderer-only ref pass** (no IPC), and **never persisted** (`buildGenerativeTab` does not whitelist
+  it). It is built ONLY while the source tab is **pinned** — gated by a small **reverse "pinned sources"
+  channel** on `PanelTabsProvider` (Cosmos `publishPins(Set<"panelId:tabId">)` → panels `usePinnedSources()`),
+  so no panel churns building a mirror nobody pinned. **Jira** is unaffected (it already pushes a
+  default-view bound `surface` via `jira:requestDefaultView`); Generated-UI and terminal never set it.
+
 **Home favorites (cosmos-home-favorite-tabs-v1).** From the tree, a user **right-clicks** a generative
 panel's tab row → **Pin** (shared shadcn/Radix `ContextMenu`); Pin appends a `kind:'favorite'`
 `CosmosTab` (recording the source `{panelId,tabId}`, idempotent/de-duped by `favoriteId`) AFTER the

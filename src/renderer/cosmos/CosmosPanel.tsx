@@ -64,6 +64,8 @@ import { SURFACE_ICON } from '../app/surfaceIcons'
 import { ResizeDivider } from '../fileExplorer/ResizeDivider'
 import {
   useAllPanelTabs,
+  usePublishPins,
+  pinnedSourceKey,
   toPanelTabGroups,
   reconcileSelectedContext,
   type CrossPanelId,
@@ -206,6 +208,21 @@ export function CosmosPanel({ active }: { active: boolean }): React.JSX.Element 
   useEffect(() => {
     sessionRegistry.setFavorites(toHomeFavorites(tabsState))
   }, [tabsState, sessionRegistry])
+
+  // cosmos-native-view-mirror-surface-v1 (D6, the OQ-3 gate): publish the set of pinned source
+  // `"panelId:tabId"` keys BACK to the source panels so a native-first panel (Confluence/Slack)
+  // only builds a favorite mirror for a tab a favorite actually points at — never churns building
+  // a mirror nobody pinned. Derived from the current favorite tabs (non-secret ids only).
+  const publishPins = usePublishPins()
+  useEffect(() => {
+    const keys = new Set<string>()
+    for (const tab of tabsState.tabs) {
+      if (tab.kind === 'favorite' && tab.source) {
+        keys.add(pinnedSourceKey(tab.source.panelId, tab.source.tabId))
+      }
+    }
+    publishPins(keys)
+  }, [tabsState, publishPins])
 
   // FR-001/FR-010: pin a source tab as a favorite (idempotent/de-duped) WITHOUT activating it —
   // pinning is non-disruptive, the user stays on the current tab (the favorite just appears in the

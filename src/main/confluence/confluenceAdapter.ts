@@ -36,8 +36,23 @@ import type {
   AdapterResolver
 } from '../generative/adapterDispatcher'
 import type { AdapterDescriptor } from '../../shared/types/adapter'
-import { AdapterSourcePath } from '../../shared/types/adapter'
 import { ConfluenceAdapterSource } from '../../shared/types/confluence'
+// cosmos-native-view-mirror-surface-v1 (D3): the bound-row mapper + bound data-model path
+// constants now live in the SHARED surface builder (so the renderer can reuse them for a
+// favorite mirror). Imported here for the resolver/bind-options + RE-EXPORTED so existing
+// `from './confluenceAdapter'` callers (tests, surface builder) keep working unchanged.
+import {
+  CONFLUENCE_FEED_PATH,
+  CONFLUENCE_RESULTS_PATH,
+  CONFLUENCE_PAGE_PATH,
+  confluenceResultRow
+} from '../../shared/surfaceBuilders/confluenceSurfaceBuilder'
+export {
+  CONFLUENCE_FEED_PATH,
+  CONFLUENCE_RESULTS_PATH,
+  CONFLUENCE_PAGE_PATH,
+  confluenceResultRow
+} from '../../shared/surfaceBuilders/confluenceSurfaceBuilder'
 import type {
   ConfluenceDefaultFeedParams,
   ConfluenceGetPageParams,
@@ -47,14 +62,6 @@ import type {
   ConfluenceSearchParams,
   ConfluenceSearchResult
 } from '../../shared/types/confluence'
-
-/** The bound data-model path the default activity feed reads its rows from. Single-sourced
- * from the shared {@link AdapterSourcePath} so the tool-description text + the dispatcher agree. */
-export const CONFLUENCE_FEED_PATH = AdapterSourcePath.defaultFeed
-/** The bound data-model path the search-results list reads its rows from (single-sourced). */
-export const CONFLUENCE_RESULTS_PATH = AdapterSourcePath.searchContent
-/** The bound data-model path the page-detail surface reads its single value from (single-sourced). */
-export const CONFLUENCE_PAGE_PATH = AdapterSourcePath.getPage
 
 /** Bind options for the default-FEED list surface: append/load-more pagination (FR-010/FR-011). */
 export const confluenceFeedBindOptions: AdapterRegisterOptions = {
@@ -105,16 +112,6 @@ export interface ConfluenceAdapterManager {
     params: ConfluenceSearchParams
   ): Promise<ConfluenceResult<ConfluencePage<ConfluenceSearchResult>>>
   getPage(params: ConfluenceGetPageParams): Promise<ConfluenceResult<ConfluencePageDetail>>
-}
-
-/** Map one search hit to the bound row shape `SearchResultList`/`SearchResultRow` read (non-secret). */
-export function confluenceResultRow(result: ConfluenceSearchResult): Record<string, unknown> {
-  return {
-    id: result.id,
-    title: result.title,
-    ...(result.space ? { space: result.space } : {}),
-    excerpt: result.excerpt
-  }
 }
 
 /**

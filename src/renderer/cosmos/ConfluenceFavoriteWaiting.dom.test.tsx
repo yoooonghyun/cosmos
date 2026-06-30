@@ -24,7 +24,7 @@
  * test, not the SDK's own rendering — same approach as `CosmosFavoriteTabs.dom.test.tsx`).
  */
 import '@testing-library/jest-dom/vitest'
-import { act, useMemo } from 'react'
+import { act, useEffect, useMemo } from 'react'
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { render, screen } from '@testing-library/react'
 
@@ -35,7 +35,15 @@ vi.mock('../generative/ActiveTabSurface', () => ({
 }))
 
 import { useGenerativePanelTabs } from '../tabs/useGenerativePanelTabs'
-import { PanelTabsProvider, usePublishPanelTabs, useAllPanelTabs, type LivePanelTabs } from '../panelTabs'
+import {
+  PanelTabsProvider,
+  usePublishPanelTabs,
+  useAllPanelTabs,
+  usePublishPins,
+  usePinnedSources,
+  pinnedSourceKey,
+  type LivePanelTabs
+} from '../panelTabs'
 import { ActiveComposerProvider } from '../composer/ActiveComposerProvider'
 import { SessionProvider } from '../session/SessionProvider'
 import { SESSION_SCHEMA_VERSION, type SessionSnapshot, type UiRenderPayload } from '../../shared/ipc'
@@ -89,25 +97,40 @@ function HookHarness(): React.JSX.Element {
   )
 }
 
-/** Test B harness: publish a confluence tab with the given surface state, then mirror it. */
-function PublishHarness({ surfaceId }: { surfaceId: string | null }): React.JSX.Element {
+/**
+ * Test B/C/D harness: publish a tab with the given COMPOSED surface + NATIVE mirror state, then
+ * mirror it. `surfaceId`/`mirrorSurfaceId` null/undefined ⇒ that field is absent. The favorite
+ * resolves `mirrorSurface ?? surface` (cosmos-native-view-mirror-surface-v1, FR-007).
+ */
+function PublishHarness({
+  panelId = 'confluence',
+  surfaceId,
+  mirrorSurfaceId
+}: {
+  panelId?: 'confluence' | 'slack'
+  surfaceId: string | null
+  mirrorSurfaceId?: string | null
+}): React.JSX.Element {
   const live = useMemo<LivePanelTabs>(
     () => ({
       tabs: [
         {
           id: 'c1',
-          label: 'My page',
-          surface: surfaceId ? ({ requestId: 'r', spec: { surfaceId, components: [] } } as never) : null
+          label: 'My view',
+          surface: surfaceId ? ({ requestId: 'r', spec: { surfaceId, components: [] } } as never) : null,
+          mirrorSurface: mirrorSurfaceId
+            ? ({ requestId: 'm', spec: { surfaceId: mirrorSurfaceId, components: [] } } as never)
+            : null
         }
       ],
       activeTabId: 'c1'
     }),
-    [surfaceId]
+    [surfaceId, mirrorSurfaceId]
   )
-  usePublishPanelTabs('confluence', live)
+  usePublishPanelTabs(panelId, live)
   // Probe so the registry read re-renders (FavoriteSurface itself calls useAllPanelTabs).
   useAllPanelTabs()
-  return <FavoriteSurface source={{ panelId: 'confluence', tabId: 'c1' }} onUnpin={() => {}} />
+  return <FavoriteSurface source={{ panelId, tabId: 'c1' }} onUnpin={() => {}} />
 }
 
 function wrap(children: React.ReactNode): React.JSX.Element {
@@ -140,14 +163,95 @@ describe('confluence favorite mirror (confluence-favorite-waiting-v1)', () => {
     expect(screen.queryByText(/Waiting for this tab/)).not.toBeInTheDocument()
   })
 
-  it('B: a Confluence tab whose surface is null (native browsing) → favorite shows WAITING', async () => {
-    render(wrap(<PublishHarness surfaceId={null} />))
+  it('B: a Confluence tab with NO surface AND no mirror (e.g. not pinned / no data) → WAITING', async () => {
+    render(wrap(<PublishHarness surfaceId={null} mirrorSurfaceId={null} />))
     await act(async () => {
       await Promise.resolve()
     })
-    // Root cause: Confluence native views never populate `tab.surface`, so the published surface is
-    // null and the favorite is stuck on WAITING. (The seam is correct — this is the upstream gap.)
+    // The GATE outcome (OQ-3): an UNPINNED native-browsing tab publishes mirrorSurface:null (the
+    // panel never builds a mirror nobody pinned), so the favorite stays on the calm WAITING state —
+    // exactly the pre-feature behavior for this case.
     expect(screen.getByText(/Waiting for this tab/)).toBeInTheDocument()
     expect(screen.queryByTestId('fav-surface')).not.toBeInTheDocument()
+  })
+
+  // cosmos-native-view-mirror-surface-v1: the feature — a native-view MIRROR now renders POPULATED
+  // (was WAITING before, with surface null). RED→GREEN: pre-feature there was no `mirrorSurface`, so
+  // a native-browsing tab (surface null) could ONLY be WAITING (Test B's old shape).
+  it('C: a Confluence tab whose mirrorSurface is a native FEED → favorite is POPULATED (not WAITING)', async () => {
+    render(wrap(<PublishHarness surfaceId={null} mirrorSurfaceId="confluence-feed" />))
+    await act(async () => {
+      await Promise.resolve()
+    })
+    expect(screen.getByTestId('fav-surface')).toHaveTextContent('confluence-feed')
+    expect(screen.queryByText(/Waiting for this tab/)).not.toBeInTheDocument()
+  })
+
+  it('D: a Slack tab whose mirrorSurface is a native CHANNEL LIST → favorite is POPULATED', async () => {
+    render(wrap(<PublishHarness panelId="slack" surfaceId={null} mirrorSurfaceId="slack-channels" />))
+    await act(async () => {
+      await Promise.resolve()
+    })
+    expect(screen.getByTestId('fav-surface')).toHaveTextContent('slack-channels')
+    expect(screen.queryByText(/Waiting for this tab/)).not.toBeInTheDocument()
+  })
+
+  it('E: a COMPOSED surface present (mirror nulled by the projection) → favorite shows the composed surface', async () => {
+    // Mutual exclusivity (FR-007): the publish projection nulls the mirror whenever a composed
+    // surface is present, so `mirrorSurface ?? surface` resolves to the composed surface.
+    render(wrap(<PublishHarness surfaceId="confluence-search" mirrorSurfaceId={null} />))
+    await act(async () => {
+      await Promise.resolve()
+    })
+    expect(screen.getByTestId('fav-surface')).toHaveTextContent('confluence-search')
+  })
+})
+
+/** A reader that records the latest pinned-source membership for `confluence:c1`. */
+function PinsProbe({ onRead }: { onRead: (has: boolean) => void }): React.ReactElement | null {
+  const pins = usePinnedSources()
+  onRead(pins.has(pinnedSourceKey('confluence', 'c1')))
+  return null
+}
+
+/** Publishes the given pinned-source keys (Cosmos → panels) on mount/update. */
+function PinsPublisher({ keys }: { keys: string[] }): React.ReactElement | null {
+  const publish = usePublishPins()
+  useEffect(() => {
+    publish(new Set(keys))
+  }, [publish, keys])
+  return null
+}
+
+describe('pinned-sources reverse channel (cosmos-native-view-mirror-surface-v1, D6 gate)', () => {
+  it('publishes the pinned set Cosmos→panels so a panel can gate its mirror build', async () => {
+    let lastRead = false
+    const { rerender } = render(
+      wrap(
+        <>
+          <PinsPublisher keys={[]} />
+          <PinsProbe onRead={(h) => (lastRead = h)} />
+        </>
+      )
+    )
+    await act(async () => {
+      await Promise.resolve()
+    })
+    // Not pinned yet → the gate is closed (the panel would skip the mirror build).
+    expect(lastRead).toBe(false)
+
+    // Cosmos pins confluence:c1 → the reverse channel flips the gate open.
+    rerender(
+      wrap(
+        <>
+          <PinsPublisher keys={[pinnedSourceKey('confluence', 'c1')]} />
+          <PinsProbe onRead={(h) => (lastRead = h)} />
+        </>
+      )
+    )
+    await act(async () => {
+      await Promise.resolve()
+    })
+    expect(lastRead).toBe(true)
   })
 })

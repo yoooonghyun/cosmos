@@ -68,6 +68,14 @@ For the authoritative design see `docs/ARCHITECTURE.md`.
   surfaces re-fits the on-screen view only. xterm-in-jsdom is not exercised by tests, so the live
   mirror + input fan-out + resize-on-switch are a MANUAL check (the non-owning lifecycle gates +
   resize-guard predicate + favorite branch states ARE locked by tests).
+- [ ] Manual GUI verification of **native-view favorite mirrors** (`cosmos-native-view-mirror-surface-v1`)
+  via `npm run dev`: pin a Confluence tab showing a page (and one showing the feed/search) + a Slack tab
+  showing a channel's history (and one on the channel list) → each favorite renders the LIVE native view
+  inline (NOT "Waiting…"); switching the source view (open another page, switch channel, run a search)
+  updates the favorite; composing an agent surface in the source flips the favorite to the composed
+  surface, returning to native restores the mirror; closing the source → GONE. The mirror build +
+  projection + pins gate + builder relocation ARE locked by tests; the live A2UI render of the mirror in
+  Home is the MANUAL check (the SDK render is stubbed in the dom tests).
 - [ ] Manual GUI verification of the **terminal picker spinner-hang fix** (`terminal-picker-spinner-
   hang-v1`) via `npm run dev` (StrictMode dev): open a fresh terminal tab → click `[Open a folder]` →
   pick a directory → confirm `claude` spawns in that cwd and the "Opening…" spinner clears (no infinite

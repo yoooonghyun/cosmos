@@ -3,30 +3,25 @@ import {
   buildBoundChannelListSurface,
   buildBoundMessageListSurface,
   buildBoundSearchResultListSurface,
-  SURFACE_SLACK_CHANNELS,
-  SURFACE_SLACK_HISTORY,
-  SURFACE_SLACK_SEARCH
-} from './slackSurfaceBuilder'
-import {
   SLACK_CHANNELS_PATH,
   SLACK_MATCHES_PATH,
   SLACK_MESSAGES_PATH,
   slackChannelRow,
   slackMessageRow,
-  slackSearchRow
-} from './slackAdapter'
-import { SlackAdapterSource } from '../../shared/types/slack'
-import type {
-  SlackChannel,
-  SlackMessage,
-  SlackPage,
-  SlackSearchMatch
-} from '../../shared/types/slack'
+  slackSearchRow,
+  SURFACE_SLACK_CHANNELS,
+  SURFACE_SLACK_HISTORY,
+  SURFACE_SLACK_SEARCH
+} from './slackSurfaceBuilder'
+import { SlackAdapterSource } from '../types/slack'
+import type { SlackChannel, SlackMessage, SlackPage, SlackSearchMatch } from '../types/slack'
 
 /* slack-generative-adapter-v1 — BOUND Slack surfaces: a `{path}`-bound (data-free) spec +
  * an initial data-model seed + a secret-free descriptor. APPEND-ONLY: every list seeds
  * /loading + /hasMore (never /hasPrev) and binds via {path}. Pattern per FR: happy path;
- * missing-optional (no nextCursor → hasMore:false); no-secret invariant (FR-018). */
+ * missing-optional (no nextCursor → hasMore:false); no-secret invariant (FR-018).
+ * cosmos-native-view-mirror-surface-v1 (D3): RELOCATED here from src/main/slack so the
+ * renderer can reuse them for a favorite's native-view mirror (single source of truth). */
 
 type Component = { id: string; component: string } & Record<string, unknown>
 

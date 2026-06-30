@@ -187,38 +187,38 @@ drifted. Findings from grounding (confirm in code, then lock with a builder unit
 ## Implementation Checklist
 
 ### Phase 0 — Sequencing & guards
-- [ ] Confirm `cosmos-terminal-favorite-multiplex-v1` has merged; reconcile `LivePanelTab` + `FavoriteSurface` additively (do not touch the terminal branch). STOP if not merged.
+- [x] Confirm `cosmos-terminal-favorite-multiplex-v1` has merged; reconcile `LivePanelTab` + `FavoriteSurface` additively (do not touch the terminal branch). STOP if not merged.
 
 ### Phase 1 — Interface & relocation
-- [ ] Re-read spec; confirm no open questions remain (all 5 resolved).
-- [ ] Relocate the six builders + pure row mappers + path constants to `src/shared/surfaceBuilders/{confluence,slack}SurfaceBuilder.ts`; re-export from the main `*SurfaceBuilder.ts` + `*Adapter.ts` files (single source of truth). Run `npm run typecheck` — main imports unchanged.
-- [ ] OQ-5: verify each builder's input vs the lifted native data (table above); add thin adapters where drifted; resolve the Slack name-resolution question (VERIFY rows) — record the finding here.
-- [ ] Add `mirrorSurface?: TabSurface | null` to `GenerativeTab` (`useGenerativePanelTabs.ts`) and to `LivePanelTab` (`panelTabs.ts`) — additive, documented as renderer-only / non-secret / non-persisted, compatible with terminal `serialize?`.
-- [ ] Add `nativeMirror.ts` (`buildConfluenceMirror` / `buildSlackMirror` → `TabSurface | null`) and `livePanelProjection.ts` (`projectLivePanelTab`) — pure, no React/DOM import.
-- [ ] Add the reverse pinned-sources channel to `PanelTabsProvider` (`pinnedSourcesRef`, `publishPins`, `usePinnedSources`).
-- [ ] Review new types vs spec — no invented properties.
+- [x] Re-read spec; confirm no open questions remain (all 5 resolved).
+- [x] Relocate the six builders + pure row mappers + path constants to `src/shared/surfaceBuilders/{confluence,slack}SurfaceBuilder.ts`; re-export from the main `*SurfaceBuilder.ts` + `*Adapter.ts` files (single source of truth). Run `npm run typecheck` — main imports unchanged.
+- [x] OQ-5: verify each builder's input vs the lifted native data (table above); add thin adapters where drifted; resolve the Slack name-resolution question (VERIFY rows) — record the finding here.
+- [x] Add `mirrorSurface?: TabSurface | null` to `GenerativeTab` (`useGenerativePanelTabs.ts`) and to `LivePanelTab` (`panelTabs.ts`) — additive, documented as renderer-only / non-secret / non-persisted, compatible with terminal `serialize?`.
+- [x] Add `nativeMirror.ts` (`buildConfluenceMirror` / `buildSlackMirror` → `TabSurface | null`) and `livePanelProjection.ts` (`projectLivePanelTab`) — pure, no React/DOM import.
+- [x] Add the reverse pinned-sources channel to `PanelTabsProvider` (`pinnedSourcesRef`, `publishPins`, `usePinnedSources`).
+- [x] Review new types vs spec — no invented properties.
 
 ### Phase 2 — Testing (write before/with implementation)
-- [ ] Node-unit `nativeMirror.test.ts`: each view kind → the right surfaceId + seeded rows; `null` for no-data.
-- [ ] Node-unit `livePanelProjection.test.ts`: composed `surface` present → `mirrorSurface:null`; native `mirrorSurface` present + no surface → carried; both absent → both null.
-- [ ] Node-unit for the relocated builders (moved `confluenceSurfaceBuilder.test.ts` + slack analog) — green from shared.
-- [ ] jsdom: extend `ConfluenceFavoriteWaiting.dom.test.tsx` — a published confluence tab carrying a `mirrorSurface` (native feed) renders POPULATED (stub `ActiveTabSurface` prints `confluence-feed`) instead of WAITING; keep Test B's null→WAITING case.
-- [ ] jsdom: a Slack analog (a tab with `mirrorSurface` for a channel list / history renders POPULATED).
-- [ ] jsdom (gate): a tab whose source is NOT pinned publishes `mirrorSurface:null` (favorite WAITING); pinning flips it to POPULATED. (May be exercised at the projection/provider level if a full panel mount is too heavy.)
+- [x] Node-unit `nativeMirror.test.ts`: each view kind → the right surfaceId + seeded rows; `null` for no-data.
+- [x] Node-unit `livePanelProjection.test.ts`: composed `surface` present → `mirrorSurface:null`; native `mirrorSurface` present + no surface → carried; both absent → both null.
+- [x] Node-unit for the relocated builders (moved `confluenceSurfaceBuilder.test.ts` + slack analog) — green from shared.
+- [x] jsdom: extend `ConfluenceFavoriteWaiting.dom.test.tsx` — a published confluence tab carrying a `mirrorSurface` (native feed) renders POPULATED (stub `ActiveTabSurface` prints `confluence-feed`) instead of WAITING; keep Test B's null→WAITING case.
+- [x] jsdom: a Slack analog (a tab with `mirrorSurface` for a channel list / history renders POPULATED).
+- [x] jsdom (gate): a tab whose source is NOT pinned publishes `mirrorSurface:null` (favorite WAITING); pinning flips it to POPULATED. (May be exercised at the projection/provider level if a full panel mount is too heavy.)
 
 ### Phase 3 — Implementation
-- [ ] Publish memo in `useGenerativePanelTabs` uses `projectLivePanelTab` (carries `mirrorSurface`).
-- [ ] `FavoriteSurface`: `mirror = live.mirrorSurface ?? live.surface`; WAITING on `!mirror`.
-- [ ] `CosmosPanel`: `publishPins` from the current favorite set.
-- [ ] `ConfluencePanel`: lift `ContentList`/`PageDetail` data via `onData`; effect builds+stores mirror on the active PINNED tab on native-view change; clears when unpinned/composed.
-- [ ] `SlackPanel`: same for channel-list/history/search children, keyed off per-tab `view`.
-- [ ] Confirm `favoriteCatalogHosts` confluence/slack entries are correct (no change expected).
-- [ ] All tests pass; `npm run typecheck` (node + web) green; manual `npm run dev` smoke (pin a Confluence page + a Slack channel → favorite mirrors, not WAITING; switch source view → mirror follows; compose a surface → favorite shows composed; close source → GONE).
+- [x] Publish memo in `useGenerativePanelTabs` uses `projectLivePanelTab` (carries `mirrorSurface`).
+- [x] `FavoriteSurface`: `mirror = live.mirrorSurface ?? live.surface`; WAITING on `!mirror`.
+- [x] `CosmosPanel`: `publishPins` from the current favorite set.
+- [x] `ConfluencePanel`: lift `ContentList`/`PageDetail` data via `onData`; effect builds+stores mirror on the active PINNED tab on native-view change; clears when unpinned/composed.
+- [x] `SlackPanel`: same for channel-list/history/search children, keyed off per-tab `view`.
+- [x] Confirm `favoriteCatalogHosts` confluence/slack entries are correct (no change expected).
+- [x] All tests pass; `npm run typecheck` (node + web) green; manual `npm run dev` smoke (pin a Confluence page + a Slack channel → favorite mirrors, not WAITING; switch source view → mirror follows; compose a surface → favorite shows composed; close source → GONE).
 
 ### Phase 4 — Docs
-- [ ] Update `docs/ARCHITECTURE.md` §4.14: the seam now publishes `surface` + `mirrorSurface`; native-first panels (Confluence/Slack) project their current native view for favorites (gated on pinned, renderer-only, non-secret, non-persisted); `FavoriteSurface` resolves `mirrorSurface ?? surface`; note the reverse pinned-sources channel on `PanelTabsProvider`. Jira unchanged.
-- [ ] Note the shared `surfaceBuilders/` relocation in `docs/PROJECT-STRUCTURE.md` (developer/wrap-up may own this).
-- [ ] Record deviations below.
+- [x] Update `docs/ARCHITECTURE.md` §4.14: the seam now publishes `surface` + `mirrorSurface`; native-first panels (Confluence/Slack) project their current native view for favorites (gated on pinned, renderer-only, non-secret, non-persisted); `FavoriteSurface` resolves `mirrorSurface ?? surface`; note the reverse pinned-sources channel on `PanelTabsProvider`. Jira unchanged.
+- [x] Note the shared `surfaceBuilders/` relocation in `docs/PROJECT-STRUCTURE.md` (developer/wrap-up may own this).
+- [x] Record deviations below.
 
 ---
 
@@ -241,3 +241,24 @@ drifted. Findings from grounding (confirm in code, then lock with a builder unit
 ## Deviations & Notes
 
 - **2026-06-30**: Plan authored. No code written (SDD Step 2 — stops here for approval).
+- **2026-06-30 (implement)**: Steps 3–5 implemented per plan. All checklist items done; suites green
+  (`npm run typecheck` node+web, `npm test` 2739, `npm run test:dom` 116, `npm run build`).
+- **OQ-5 finding — Slack name resolution: RESOLVED data REUSED (no ids-v1 fallback needed).** Verified
+  in `SlackPanel.tsx`: the native `MessageList` calls `resolveNames(result.data.items)` and the native
+  `SearchResults` calls `resolveMatchNames(...)` BEFORE `setItems`, so the on-screen `items` already
+  carry `userName` (and `customEmoji`/`images`). The mirror lifts those RESOLVED `items` via `onData`,
+  so `buildBoundMessageListSurface`/`buildBoundSearchResultListSurface` emit rows with real author
+  names — NOT raw ids. Locked by `nativeMirror.test.ts` (asserts `userName:'Ada'`/`'Bo'` on mirror rows).
+  Confluence feed/search/page were low-risk (DTO shapes match) as predicted.
+- **Minor deviations from the plan's sketch:**
+  - The reverse channel uses a SEPARATE `pinsVersion` counter (not the shared tab `version`) so a
+    pin-reading panel re-reads ONLY on a `publishPins`, never on every unrelated tab publish (less churn).
+  - The redundant-write guard (D5) is a per-panel CONTENT key (`{confluence,slack}MirrorKey`) that
+    ignores the per-build requestId, in a `lastMirrorKeyRef`; the effect skips `update()` when the key
+    is unchanged (prevents a publish loop from the fresh-requestId-per-build).
+  - When a Confluence page is OPEN (`genUiPage`) the mirror takes the page (FR-003) but is `null` (→
+    WAITING) until `PageDetail`'s `onData` resolves — calm, per FR-008.
+  - Shared `confluenceSurfaceBuilder` exports `boundListSpec`/`boundPageDetailSpec` (and slack's
+    `boundListSpec`) so the main `build*BoundShell` helpers stay in main while reusing them.
+  - The builder tests were MOVED to `src/shared/surfaceBuilders/*.test.ts` (deleted the `src/main`
+    copies); byte-identical builder output keeps the main `*Adapter.test.ts` re-export callers green.

@@ -384,6 +384,35 @@ detail.
   active-effect resize on a measurable (non-zero) container, so only the on-screen view drives
   `pty:resize` (race-free arbitration; also fixes a latent bug where a hidden terminal resized the PTY
   because `safeFit()` swallowed the throw but the resize still fired).
+- **A Confluence/Slack favorite mirrors the NATIVE browsing view via `mirrorSurface` (cosmos-native-
+  view-mirror-surface-v1).** Native-first panels render native React and never write `tab.surface`, so a
+  favorite of a natively-browsing tab used to WAIT forever. NOW `GenerativeTab`/`LivePanelTab` carry an
+  additive favorite-only `mirrorSurface?: TabSurface\|null`, and `FavoriteSurface` resolves
+  **`mirrorSurface ?? surface`**. The panel lifts its on-screen native data via child `onData` callbacks
+  (`ContentList`/`PageDetail` for Confluence; `ChannelList`/`MessageList`/`SearchResults` for Slack),
+  picks the current view, and builds a SECRET-FREE bound `TabSurface` with `nativeMirror.build{Confluence,
+  Slack}Mirror` (which wrap the RELOCATED shared `surfaceBuilders/{confluence,slack}SurfaceBuilder`).
+  GOTCHAS: (1) the publish memo MUST go through `livePanelProjection.projectLivePanelTab` — it enforces
+  MUTUAL EXCLUSIVITY (`mirrorSurface: surface ? null : mirrorSurface`) so a composed surface always wins
+  while shown and a stale mirror can never mask it. (2) Build the mirror ONLY while the tab is PINNED —
+  read `usePinnedSources()` (the reverse channel Cosmos fills via `publishPins`, both on
+  `PanelTabsProvider`) and gate on `pins.has(pinnedSourceKey(panelId, activeTabId))`, else you churn
+  `update()`/republish for tabs no favorite points at. (3) The build effect mints a FRESH `requestId`
+  every run, so it MUST de-dupe via a CONTENT key (`{confluence,slack}MirrorKey` — tab + kind + query/id
+  + cursor + row ids, ignoring the requestId) and skip the `update()` when unchanged, or it loops. (4)
+  Slack OQ-5: the native lists already resolve author `userName` in the RENDERER (`resolveNames` /
+  `resolveMatchNames` run before `setItems`), so lifting the on-screen `items` gives the mirror REAL
+  names, not raw ids — reuse that resolved data, do NOT re-resolve. The mirror is renderer-only,
+  non-secret, DISPLAY-ONLY (its own load-more is not wired — it re-projects as the source grows), and
+  NEVER persisted (`buildGenerativeTab` does not whitelist `mirrorSurface`).
+- **GOTCHA — the bound surface builders live in `src/shared/surfaceBuilders/`, not `src/main/`.** The six
+  `buildBound*Surface` builders + the row mappers (`confluenceResultRow`/`slack{Channel,Message,Search}Row`)
+  + the `*_PATH`/surface-id constants moved to `src/shared/surfaceBuilders/{confluence,slack}SurfaceBuilder.ts`
+  so the RENDERER can reuse them (they were main-only fossils). The main `*SurfaceBuilder.ts`/`*Adapter.ts`
+  RE-EXPORT them (single source of truth — main callers + their tests import from the SAME paths and are
+  unchanged); main keeps only the resolver/bind-options + the `build*BoundShell` panel-refresh helpers
+  (which import `boundListSpec`/`boundPageDetailSpec` from the shared module). When touching a builder,
+  edit the SHARED file; the relocated `*SurfaceBuilder.test.ts` lives beside it in `src/shared/`.
 
 ## Cosmos conversation timeline (cosmos-conversation-panel-v2, step 3)
 
