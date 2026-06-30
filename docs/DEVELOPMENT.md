@@ -578,6 +578,18 @@ single new `window.cosmos.session` namespace in `src/shared/ipc.ts` (`session:lo
   Panels read their slice via `useRestoredGenerativePanel(key)` / `useRestoredTerminalPanel()`; App
   loads once via `useLoadSession()` and shows a `CosmosSpinner` ("Restoring your session…") while
   loading (decision D3).
+- **GOTCHA — the trailing debounce is reload-fragile; persist rare/important state EAGERLY**
+  (bug favorites-lost-on-restart-v1). `SAVE_DEBOUNCE_MS=600` is ONE shared timer reset by EVERY
+  contribution, and `save` is fire-and-forget `ipcRenderer.send`. A dev Vite HMR PARTIAL update
+  fires NEITHER `pagehide` NOR `beforeunload`, so the teardown `flush()` does NOT run — any state
+  still inside the 600ms window (or perpetually deferred by a `report` storm resetting the shared
+  timer) never reaches disk, and the next mount re-seeds from the app-start snapshot
+  (`useLoadSession` loads ONCE), so it silently vanishes on the reload. For rare, user-meaningful,
+  hard-to-recreate state (Home favorites), DON'T rely on the debounce + teardown flush: record then
+  save IMMEDIATELY via the shared private `saveNow()` (the body `flush()` delegates to). `setFavorites`
+  does this; `setOpenPromptPosition`/`setEnabled`/panel `report()` keep the debounce on purpose (a
+  drag/tab storm should coalesce). Eager-saving is strictly safe — it just persists current state
+  early, like teardown.
 - **Restore seeding must stay StrictMode-pure.** Tabs are seeded from the snapshot via the lazy
   `useState`/`useRef` initializers only — `hydrateGenerativeTabs`/`hydrateTerminalTabs` are pure, and
   the monotonic `everOpened` counter is initialized AT `seedEverOpenedFrom(everOpened, tabCount)`

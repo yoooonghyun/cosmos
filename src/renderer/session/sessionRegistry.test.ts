@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest'
-import { SESSION_SCHEMA_VERSION } from '../../shared/ipc'
+import { SESSION_SCHEMA_VERSION, type HomeFavorite } from '../../shared/ipc'
 import {
   assembleSnapshot,
   SessionRegistry,
@@ -114,5 +114,48 @@ describe('SessionRegistry — debounced save (FR-007)', () => {
     sched.run()
     expect(save).toHaveBeenCalledTimes(1)
     expect(save.mock.calls[0][0].openPromptPosition).toEqual({ xFrac: 0.7, yFrac: 0.7 })
+  })
+})
+
+// bug favorites-lost-on-restart-v1: favorites must persist EAGERLY (immediately on pin/unpin), NOT
+// on the shared trailing debounce — a dev HMR / reload (which fires no pagehide/beforeunload on a
+// partial update, so the teardown flush never runs) inside the SAVE_DEBOUNCE_MS window would
+// otherwise pre-empt the save and the just-pinned favorite would never reach disk.
+describe('SessionRegistry — eager favorites persistence (favorites-lost-on-restart-v1)', () => {
+  const fav: HomeFavorite = { panelId: 'jira', tabId: 't1', label: 'TASK-1' }
+
+  it('setFavorites saves IMMEDIATELY, WITHOUT waiting for the debounce to fire', () => {
+    const save = vi.fn()
+    const sched = makeScheduler()
+    const reg = new SessionRegistry(save, sched, 600)
+    reg.setFavorites([fav])
+    // RED before the fix: setFavorites used schedule(), so save fires only on sched.run().
+    expect(save).toHaveBeenCalledTimes(1)
+    expect(save.mock.calls[0][0].favorites).toEqual([fav])
+  })
+
+  it('a report STORM that perpetually resets the shared debounce never starves the favorite', () => {
+    const save = vi.fn()
+    const sched = makeScheduler()
+    const reg = new SessionRegistry(save, sched, 600)
+    // Other panels keep re-scheduling the single shared timer (debounced save never fires)...
+    reg.report('terminal', termDraft)
+    reg.report('jira', { tabs: [], activeTabId: null, everOpened: 0 })
+    // ...yet a pin in that same window still lands the favorite on disk eagerly.
+    reg.setFavorites([fav])
+    expect(save).toHaveBeenCalledTimes(1)
+    expect(save.mock.calls[0][0].favorites).toEqual([fav])
+    // The eager save also carried the other pending contributions (current state, early) — safe.
+    expect(save.mock.calls[0][0].panels.terminal.tabs[0].id).toBe('p1')
+  })
+
+  it('does NOT make OTHER non-panel contributions eager (openPromptPosition still debounces)', () => {
+    const save = vi.fn()
+    const sched = makeScheduler()
+    const reg = new SessionRegistry(save, sched, 600)
+    reg.setOpenPromptPosition({ xFrac: 0.3, yFrac: 0.4 })
+    expect(save).not.toHaveBeenCalled() // still trailing-debounced — no regression
+    sched.run()
+    expect(save).toHaveBeenCalledTimes(1)
   })
 })

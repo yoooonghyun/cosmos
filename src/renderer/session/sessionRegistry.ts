@@ -163,14 +163,24 @@ export class SessionRegistry {
   }
 
   /**
-   * Record the latest Home favorites list (cosmos-home-favorite-tabs-v1, FR-030). The NON-panel
-   * contribution path (mirrors {@link setOpenPromptPosition}): Home reports on every pin/unpin/
-   * relabel, the list merges into the assembled snapshot and trailing-debounces a save. NON-secret
+   * Record the latest Home favorites list (cosmos-home-favorite-tabs-v1, FR-030) and persist it
+   * EAGERLY — the NON-panel contribution path (mirrors {@link setOpenPromptPosition}) records the
+   * list, but favorites save IMMEDIATELY rather than on the shared trailing debounce. NON-secret
    * references only (`{panelId, tabId, label}`) — never an A2UI surface (FR-023/FR-033).
+   *
+   * WHY EAGER (bug favorites-lost-on-restart-v1): a pin/unpin must reach disk PROMPTLY. The shared
+   * `SAVE_DEBOUNCE_MS` (600ms) trailing timer is reset by EVERY contribution (the single `this.timer`
+   * in {@link schedule}), so an actively-changing session can perpetually defer the favorites save;
+   * and a dev HMR / Vite reload that fires inside the debounce window pre-empts it — a partial HMR
+   * update fires NEITHER `pagehide` NOR `beforeunload`, so the teardown {@link flush} never runs and
+   * the just-pinned favorite never lands. Persisting on the spot closes that window so a full reload /
+   * relaunch (which re-runs `useLoadSession`) restores them. Pin/unpin/relabel are rare + user-driven,
+   * so the extra writes are negligible; the eager save flushes any OTHER pending contributions too,
+   * which is strictly safe (it persists current state early, exactly like the teardown flush).
    */
   setFavorites(favorites: HomeFavorite[]): void {
     this.contributions.favorites = favorites
-    this.schedule()
+    this.saveNow()
   }
 
   private schedule(): void {
@@ -183,12 +193,20 @@ export class SessionRegistry {
     }, this.debounceMs)
   }
 
-  /** Force an immediate save of the current contributions (teardown — FR-007). */
-  flush(): void {
+  /**
+   * Cancel any pending trailing-debounce timer and save the current contributions NOW. Shared by
+   * {@link flush} (teardown — FR-007) and {@link setFavorites} (eager favorites persistence).
+   */
+  private saveNow(): void {
     if (this.timer) {
       this.scheduler.clearTimeout(this.timer)
       this.timer = null
     }
     this.save(assembleSnapshot(this.contributions))
+  }
+
+  /** Force an immediate save of the current contributions (teardown — FR-007). */
+  flush(): void {
+    this.saveNow()
   }
 }
