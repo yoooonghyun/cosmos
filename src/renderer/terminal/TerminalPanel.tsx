@@ -48,7 +48,12 @@ import {
   seedTerminalIndex,
   terminalLabel
 } from '../tabs/panelTabs'
-import { usePublishPanelTabs, type LivePanelTabs } from '../panelTabs'
+import {
+  usePublishPanelTabs,
+  usePublishTabCommands,
+  type LivePanelTabs,
+  type TabCommands
+} from '../panelTabs'
 import { useReportPanel, useRestoredTerminalPanel } from '../session/SessionProvider'
 import { buildTerminalDraft, capScrollback, hydrateTerminalTabs } from '../session/sessionSnapshot'
 import { terminalThemeFromTokens } from './terminalTheme'
@@ -808,6 +813,20 @@ export function TerminalPanel({ active }: { active: boolean }): React.JSX.Elemen
     [tabs, activeTabId, livePaneIds]
   )
   usePublishPanelTabs('terminal', livePanelTabs)
+
+  // cosmos-tree-tab-rename-delete-v1 (FR-002/FR-004/FR-005): publish the Terminal panel's REVERSE
+  // tab commands so the Cosmos tree can Rename/Delete a terminal tab. Bound to the EXISTING stable
+  // `update`/`close` ops (the same `onRename`/close the strip uses): rename sets `{ label, renamed:
+  // true }`; delete is the strip-`X` close (Terminal's own last-tab "keep ≥1 / re-open default"
+  // semantics apply unchanged). STABLE object so it publishes once.
+  const tabCommands = useMemo<TabCommands>(
+    () => ({
+      onRename: (id, label) => update(id, { label, renamed: true }),
+      onClose: (id) => close(id)
+    }),
+    [update, close]
+  )
+  usePublishTabCommands('terminal', tabCommands)
 
   const handleNewTab = (): void => {
     // FR-022: mint a new pane + open a tab (its TerminalView issues pty:start).

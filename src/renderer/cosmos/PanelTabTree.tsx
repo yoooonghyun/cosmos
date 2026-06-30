@@ -20,11 +20,13 @@ import {
   ContextMenu,
   ContextMenuContent,
   ContextMenuItem,
+  ContextMenuSeparator,
   ContextMenuTrigger
 } from '@/components/ui/context-menu'
 import { cn } from '@/lib/utils'
 import { SURFACE_ICON, type RailIcon } from '../app/surfaceIcons'
 import { tabIconComponent } from '../tabs/tabIconRegistry'
+import { renameCommitDecision } from '../tabs/panelTabs'
 import type { CrossPanelId, LivePanelTab, PanelTabGroup } from '../panelTabs'
 import type { PromptPanelId } from '../../shared/promptContext/promptContext'
 
@@ -55,7 +57,10 @@ export function PanelTabTree({
   onActivate,
   isPinned,
   onPin,
-  onUnpin
+  onUnpin,
+  canEditTab,
+  onRenameTab,
+  onDeleteTab
 }: {
   groups: PanelTabGroup[]
   selected: PanelTabSelection | null
@@ -71,14 +76,37 @@ export function PanelTabTree({
   onPin?: (group: PanelTabGroup, tab: LivePanelTab) => void
   /** Unpin a source tab's favorite (FR-001/FR-004). */
   onUnpin?: (group: PanelTabGroup, tab: LivePanelTab) => void
+  /**
+   * cosmos-tree-tab-rename-delete-v1 (FR-001/FR-011): whether the source panel has published its
+   * reverse tab commands (so Rename/Delete may act on it). When false/absent the row shows only
+   * Pin/Unpin (graceful degrade — FR-011).
+   */
+  canEditTab?: (panelId: CrossPanelId) => boolean
+  /**
+   * cosmos-tree-tab-rename-delete-v1 (FR-004/FR-006): commit a trimmed rename to the source tab in
+   * its own panel (routes to the panel's `update(id, { label, renamed: true })`). Fired only on a
+   * non-empty commit — the pure `renameCommitDecision` gates empty/whitespace.
+   */
+  onRenameTab?: (group: PanelTabGroup, tab: LivePanelTab, label: string) => void
+  /** cosmos-tree-tab-rename-delete-v1 (FR-005/FR-008): close the source tab immediately (no confirm). */
+  onDeleteTab?: (group: PanelTabGroup, tab: LivePanelTab) => void
 }): React.JSX.Element {
-  // The right-click Pin/Unpin menu is wired only when the panel passes pin handlers.
-  const menuEnabled = Boolean(onPin && onUnpin)
+  // The right-click menu renders when EITHER pin handlers OR edit handlers are wired (FR-001).
+  const menuEnabled = Boolean((onPin && onUnpin) || (onRenameTab && onDeleteTab))
   // Renderer-local expand/collapse, default EXPANDED (survey-first; not persisted — out of scope).
   // We track the COLLAPSED set so a newly-published panel defaults to expanded.
   const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(() => new Set())
   // The roving-active row key (the one `tabIndex={0}`).
   const [activeKey, setActiveKey] = useState<string | null>(null)
+  // cosmos-tree-tab-rename-delete-v1 (FR-006/FR-007): the in-tree inline-rename state, lifted from
+  // the PanelTabStrip idiom. At most ONE row edits at a time; `editingKey` is the row key
+  // `tabKey(panelId,tabId)` + `draft` the live input. Routing through the SAME pure
+  // `renameCommitDecision` (empty/whitespace ⇒ revert, no call).
+  const [editingKey, setEditingKey] = useState<string | null>(null)
+  const [draft, setDraft] = useState('')
+  // After an edit ends, return roving focus to that row (parity with the strip's FR-016). Holds the
+  // key to refocus once `editingKey` clears, then cleared so it does not re-fire.
+  const refocusKeyRef = useRef<string | null>(null)
 
   const rows = useMemo<VisibleRow[]>(() => {
     const out: VisibleRow[] = []
@@ -109,6 +137,58 @@ export function PanelTabTree({
       return next
     })
   }, [])
+
+  // FR-006: enter inline edit for a tab row, seeding the draft from its current label.
+  const beginEdit = useCallback((key: string, label: string): void => {
+    setEditingKey(key)
+    setDraft(label)
+  }, [])
+
+  // FR-006: commit the draft via the pure decision; fire onRenameTab only on a non-empty commit.
+  const commitEdit = useCallback(
+    (group: PanelTabGroup, tab: LivePanelTab): void => {
+      const decision = renameCommitDecision(draft)
+      if (decision.commit && decision.label !== undefined) {
+        onRenameTab?.(group, tab, decision.label)
+      }
+      refocusKeyRef.current = tabKey(group.panelId, tab.id)
+      setEditingKey(null)
+      setDraft('')
+    },
+    [draft, onRenameTab]
+  )
+
+  // FR-006: cancel the edit (Escape) — nothing committed, revert to the source label.
+  const cancelEdit = useCallback((group: PanelTabGroup, tab: LivePanelTab): void => {
+    refocusKeyRef.current = tabKey(group.panelId, tab.id)
+    setEditingKey(null)
+    setDraft('')
+  }, [])
+
+  // FR-007/FR-011: cancel an in-progress edit when its row VANISHES (closed elsewhere / panel
+  // unmounted) — pure revert, no commit, no throw (mirrors the strip's cancel-on-vanish effect).
+  useEffect(() => {
+    if (editingKey === null) {
+      return
+    }
+    if (!rows.some((r) => r.key === editingKey)) {
+      setEditingKey(null)
+      setDraft('')
+    }
+  }, [rows, editingKey])
+
+  // FR-006: after an edit ends, return roving focus to that row (strip-parity FR-016). Only when the
+  // row still exists (a vanished row was handled above).
+  useEffect(() => {
+    if (editingKey !== null || refocusKeyRef.current === null) {
+      return
+    }
+    const key = refocusKeyRef.current
+    refocusKeyRef.current = null
+    if (rows.some((r) => r.key === key)) {
+      setActiveKey(key)
+    }
+  }, [editingKey, rows])
 
   const onKeyDown = useCallback(
     (e: React.KeyboardEvent<HTMLDivElement>): void => {
@@ -161,11 +241,19 @@ export function PanelTabTree({
             onActivate(row.group, row.tab)
           }
           break
+        case 'F2':
+          // cosmos-tree-tab-rename-delete-v1 (keyboard parity with the strip's F2): begin inline
+          // rename on a focused tab row whose panel published edit commands.
+          if (row.type === 'tab' && (canEditTab?.(row.group.panelId) ?? false)) {
+            e.preventDefault()
+            beginEdit(row.key, row.tab.label)
+          }
+          break
         default:
           break
       }
     },
-    [rows, effectiveActive, toggleGroup, onActivate]
+    [rows, effectiveActive, toggleGroup, onActivate, canEditTab, beginEdit]
   )
 
   // FR-021: no in-scope panel available → a single calm centered block (FileTree empty-root idiom).
@@ -213,6 +301,10 @@ export function PanelTabTree({
                       // the additive row marking (text-primary icon + bold label, D-15). Applies to
                       // terminal rows too now (cosmos-terminal-favorite-multiplex-v1).
                       const pinned = isPinned?.(group.panelId, tab.id) ?? false
+                      const rowKey = tabKey(group.panelId, tab.id)
+                      const pinnable = Boolean(onPin && onUnpin)
+                      const canEdit =
+                        Boolean(onRenameTab && onDeleteTab) && (canEditTab?.(group.panelId) ?? false)
                       return (
                         <TabRow
                           key={tab.id}
@@ -224,16 +316,30 @@ export function PanelTabTree({
                           isSelected={
                             selected?.panelId === group.panelId && selected?.tabId === tab.id
                           }
-                          focused={effectiveActive === tabKey(group.panelId, tab.id)}
+                          focused={effectiveActive === rowKey}
+                          // cosmos-tree-tab-rename-delete-v1 (FR-006/FR-007): inline-edit wiring.
+                          editing={editingKey === rowKey}
+                          draft={draft}
+                          onDraftChange={setDraft}
+                          onCommit={() => commitEdit(group, tab)}
+                          onCancel={() => cancelEdit(group, tab)}
                           onActivate={() => onActivate(group, tab)}
-                          onFocus={() => setActiveKey(tabKey(group.panelId, tab.id))}
+                          onFocus={() => setActiveKey(rowKey)}
                           menu={
                             menuEnabled
                               ? renderRowMenu({
-                                  panelId: group.panelId,
+                                  pinnable,
                                   pinned,
                                   onPin: () => onPin?.(group, tab),
-                                  onUnpin: () => onUnpin?.(group, tab)
+                                  onUnpin: () => onUnpin?.(group, tab),
+                                  canEdit,
+                                  // Defer one tick: Radix restores focus to the row trigger on
+                                  // menu close, which would blur a freshly-focused editor input and
+                                  // commit prematurely. Letting that focus restoration settle FIRST,
+                                  // then mounting the editor, keeps the input focused (the F2 path
+                                  // has no menu-close, so it enters edit synchronously).
+                                  onRename: () => setTimeout(() => beginEdit(rowKey, tab.label), 0),
+                                  onDelete: () => onDeleteTab?.(group, tab)
                                 })
                               : undefined
                           }
@@ -252,24 +358,36 @@ export function PanelTabTree({
 }
 
 /**
- * Build a tab row's right-click menu CONTENT (cosmos-home-favorite-tabs-v1, design §2.2/§2.3). Every
- * row — generative OR terminal (cosmos-terminal-favorite-multiplex-v1 relaxed the FR-040 exclusion:
- * terminal tabs ARE pinnable now, as an xterm-multiplex mirror) — gets a single state-reflective
- * item: "Unpin" when pinned, "Pin" when not (FR-001/FR-002). `panelId` is retained for parity with
- * the row's `isPinned` signal even though the menu no longer special-cases it.
+ * Build a tab row's right-click menu CONTENT (cosmos-home-favorite-tabs-v1 + cosmos-tree-tab-rename-
+ * delete-v1, design §2.2/§2.3 / D-19). Pin/Unpin (the state-reflective toggle) comes first; then —
+ * when the source panel published edit commands (`canEdit`, FR-011) — a separator and the
+ * **Rename** + **Delete** pair. Every row (generative OR terminal) is pinnable AND editable now.
+ * Rename begins an in-row inline edit (D-15); Delete is `variant="default"` — a benign, reopenable
+ * close (X == unpin precedent, no confirm), NOT `destructive` (FR-008/FR-012).
  */
 function renderRowMenu(opts: {
-  panelId: CrossPanelId
+  pinnable: boolean
   pinned: boolean
   onPin: () => void
   onUnpin: () => void
+  canEdit: boolean
+  onRename: () => void
+  onDelete: () => void
 }): React.ReactNode {
   return (
     <ContextMenuContent>
-      {opts.pinned ? (
-        <ContextMenuItem onSelect={opts.onUnpin}>Unpin</ContextMenuItem>
-      ) : (
-        <ContextMenuItem onSelect={opts.onPin}>Pin</ContextMenuItem>
+      {opts.pinnable &&
+        (opts.pinned ? (
+          <ContextMenuItem onSelect={opts.onUnpin}>Unpin</ContextMenuItem>
+        ) : (
+          <ContextMenuItem onSelect={opts.onPin}>Pin</ContextMenuItem>
+        ))}
+      {opts.canEdit && (
+        <>
+          {opts.pinnable && <ContextMenuSeparator />}
+          <ContextMenuItem onSelect={opts.onRename}>Rename</ContextMenuItem>
+          <ContextMenuItem onSelect={opts.onDelete}>Delete</ContextMenuItem>
+        </>
       )}
     </ContextMenuContent>
   )
@@ -334,6 +452,11 @@ function TabRow({
   pinned,
   isSelected,
   focused,
+  editing,
+  draft,
+  onDraftChange,
+  onCommit,
+  onCancel,
   onActivate,
   onFocus,
   menu
@@ -355,6 +478,15 @@ function TabRow({
   pinned: boolean
   isSelected: boolean
   focused: boolean
+  /**
+   * cosmos-tree-tab-rename-delete-v1 (FR-006): this row is in inline-rename. The label `<span>` is
+   * swapped for a borderless input seeded with `draft`; Enter/blur commit, Escape cancels.
+   */
+  editing: boolean
+  draft: string
+  onDraftChange: (value: string) => void
+  onCommit: () => void
+  onCancel: () => void
   onActivate: () => void
   onFocus: () => void
   /**
@@ -365,11 +497,24 @@ function TabRow({
   menu?: React.ReactNode
 }): React.JSX.Element {
   const ref = useRef<HTMLDivElement | null>(null)
+  // Don't steal focus to the row div while its inline input is editing (the input owns focus).
   useEffect(() => {
-    if (focused) {
+    if (focused && !editing) {
       ref.current?.focus()
     }
-  }, [focused])
+  }, [focused, editing])
+  // cosmos-tree-tab-rename-delete-v1 (FR-006): on ENTERING edit, focus the input + select its text
+  // ONCE (keyed on `editing` so a keystroke doesn't re-select — the strip's load-bearing fix).
+  const editInputRef = useRef<HTMLInputElement | null>(null)
+  useEffect(() => {
+    if (editing) {
+      const el = editInputRef.current
+      if (el) {
+        el.focus()
+        el.select()
+      }
+    }
+  }, [editing])
   // cosmos-random-tab-icons-v1 (FR-010): the per-tab glyph, else the uniform AppWindow fallback.
   const LeafGlyph = Icon ?? AppWindow
   const row = (
@@ -379,7 +524,13 @@ function TabRow({
       aria-level={2}
       aria-selected={isSelected}
       tabIndex={focused ? 0 : -1}
-      onClick={onActivate}
+      onClick={() => {
+        // FR-006: a click while editing must not activate the row (select-context).
+        if (editing) {
+          return
+        }
+        onActivate()
+      }}
       onFocus={onFocus}
       // Indent the tab rows clearly PAST the group header. The header carries TWO leading glyphs
       // (chevron + panel icon) so its label sits ~48px in; a tab row has ONE glyph, so it needs a
@@ -401,7 +552,34 @@ function TabRow({
         className={cn('size-3.5 shrink-0', pinned ? 'text-primary' : 'text-muted-foreground')}
         aria-hidden="true"
       />
-      <span className={cn('min-w-0 truncate', pinned && 'font-medium')}>{label}</span>
+      {editing ? (
+        // cosmos-tree-tab-rename-delete-v1 (FR-006/D-15): a borderless input that BLENDS into the
+        // row, reusing the strip's idiom — `field-sizing:content` auto-grows, focus+select once via
+        // the effect above. stopPropagation so typing never activates the row or fires the tree
+        // keymap; Enter/blur commit, Escape cancels.
+        <input
+          type="text"
+          aria-label={`Rename ${label}`}
+          value={draft}
+          ref={editInputRef}
+          onChange={(e) => onDraftChange(e.target.value)}
+          onClick={(e) => e.stopPropagation()}
+          onBlur={() => onCommit()}
+          onKeyDown={(e) => {
+            e.stopPropagation()
+            if (e.key === 'Enter') {
+              e.preventDefault()
+              onCommit()
+            } else if (e.key === 'Escape') {
+              e.preventDefault()
+              onCancel()
+            }
+          }}
+          className="h-5 min-w-[1ch] max-w-[14rem] [field-sizing:content] border-0 bg-transparent p-0 text-body-sm leading-none text-foreground outline-none selection:bg-primary selection:text-primary-foreground"
+        />
+      ) : (
+        <span className={cn('min-w-0 truncate', pinned && 'font-medium')}>{label}</span>
+      )}
     </div>
   )
   // No menu → the existing Tooltip-only row.

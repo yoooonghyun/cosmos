@@ -64,6 +64,7 @@ import { SURFACE_ICON } from '../app/surfaceIcons'
 import { ResizeDivider } from '../fileExplorer/ResizeDivider'
 import {
   useAllPanelTabs,
+  useAllTabCommands,
   toPanelTabGroups,
   reconcileSelectedContext,
   type CrossPanelId,
@@ -270,6 +271,32 @@ export function CosmosPanel({ active }: { active: boolean }): React.JSX.Element 
   const isSourcePinned = useCallback(
     (panelId: CrossPanelId, tabId: string): boolean => isPinned(tabsState, { panelId, tabId }),
     [tabsState]
+  )
+
+  // cosmos-tree-tab-rename-delete-v1 (FR-002): the reverse command channel — each source panel's
+  // `{ onRename, onClose }` keyed by CrossPanelId. The tree's Rename/Delete route through these
+  // (renderer-only function refs; NON-SECRET tabId + trimmed label, no IPC). Mirrors `isSourcePinned`/
+  // `handlePin`/`handleUnpin` exactly.
+  const tabCommands = useAllTabCommands()
+  // FR-011: a panel that has not published commands shows only Pin/Unpin (safe degrade).
+  const canEditTab = useCallback(
+    (panelId: CrossPanelId): boolean => Boolean(tabCommands[panelId]),
+    [tabCommands]
+  )
+  // FR-004: route a committed (trimmed) rename to the source panel's `update(id,{label,renamed})`.
+  const handleRenameTab = useCallback(
+    (group: PanelTabGroup, tab: LivePanelTab, label: string): void => {
+      tabCommands[group.panelId]?.onRename(tab.id, label)
+    },
+    [tabCommands]
+  )
+  // FR-005/FR-009: route Delete to the source panel's `close`; a pinned source's favorite falls
+  // through the EXISTING reconcileFavorites gone-source path (FR-031) — no new favorites logic.
+  const handleDeleteTab = useCallback(
+    (group: PanelTabGroup, tab: LivePanelTab): void => {
+      tabCommands[group.panelId]?.onClose(tab.id)
+    },
+    [tabCommands]
   )
 
   // The tree's selection marker (panel id + tab id) derived from the selected context.
@@ -596,6 +623,9 @@ export function CosmosPanel({ active }: { active: boolean }): React.JSX.Element 
                 isPinned={isSourcePinned}
                 onPin={handlePin}
                 onUnpin={handleUnpin}
+                canEditTab={canEditTab}
+                onRenameTab={handleRenameTab}
+                onDeleteTab={handleDeleteTab}
               />
             </aside>
           </>

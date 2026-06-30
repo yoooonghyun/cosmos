@@ -119,7 +119,9 @@ per-tab close `X`, trailing `+` new-tab, horizontal overflow scroll). The rail s
 is UNCHANGED and there is **no global cross-panel NAVIGATION tab bar** — every tab strip lives
 inside its panel. (The Cosmos panel does host a **read-only cross-panel tab LIST** — a survey /
 context-picker, not a navigation bar; clicking a row attaches that panel+tab as the next prompt's
-context, it never switches surfaces — see §4.14.) **Home (Cosmos) is itself a small multi-tab
+context, it never switches surfaces — though its right-click menu can now ALSO **Rename** or
+**Delete** the source tab cross-panel via the §4.14 reverse command channel, reusing each panel's
+existing rename/close ops unchanged — see §4.14.) **Home (Cosmos) is itself a small multi-tab
 container** (cosmos-home-favorite-tabs-v1): the undeletable default conversation-timeline tab PLUS
 user-pinned **favorite** tabs. A favorite of a generative panel (Slack/Jira/Confluence/Google
 Calendar) **relocates that panel's LIVE force-mounted instance** into Home (the reparenting portal
@@ -1092,6 +1094,19 @@ submits still capture dock).
   read; persistence stays its own concern.
 - **No reach-in.** The Cosmos panel never reads another panel's internal hook/component state — every
   panel pushes its own tab list; the tree only consumes the shared registry.
+- **Reverse command channel (cosmos-tree-tab-rename-delete-v1).** `PanelTabsProvider` ALSO carries a
+  SIBLING renderer-only reverse seam so the tree can DRIVE rename/close on a source tab in its own
+  panel (the tree right-click menu's Rename + Delete, §4.11). Each panel publishes
+  `{ onRename(tabId,label), onClose(tabId) }` keyed by `CrossPanelId` via `usePublishTabCommands`
+  (bound to its EXISTING `usePanelTabs` `update({label,renamed:true})`/`close`); the Cosmos panel
+  reads the whole map via `useAllTabCommands` and invokes the matching command (no per-panel hook in
+  the variable-length group loop). It reuses the SAME ref-backed registry + `version` counter as the
+  forward read seam (a command publish bumps the shared version; `useAllPanelTabs` returns the
+  unchanged registry identity, so it never churns the groups), reviving the shape of the DELETED
+  pinned-sources reverse gate. NON-SECRET by the same standard as the forward seam's `serialize` ref —
+  only a `tabId` + trimmed `label` cross, in-renderer, NEVER serialized/persisted/IPC. Delete routes
+  to the source `close`, so last-tab + gone-source-favorite (FR-031) semantics fall out of the
+  existing `reconcileFavorites`/panel logic with no new code.
 - **Seam evolution — published tab list is LABEL-ONLY again (cosmos-favorite-live-panel-portal-v1,
   SUPERSEDES the surface/mirror evolutions).** Two earlier evolutions had the published `LivePanelTab`
   also carry the tab's live composed `surface` (cosmos-home-favorite-tabs-v1) and a native-view

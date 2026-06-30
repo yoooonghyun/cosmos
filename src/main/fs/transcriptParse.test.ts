@@ -158,6 +158,69 @@ describe('parseTranscript', () => {
   })
 })
 
+// cosmos-auto-continue-on-restart-v1: the `claude` binary (print/SDK mode) injects two
+// SYNTHETIC bookkeeping turns on every `--resume` run — a `type:"user"` `isMeta:true` turn
+// "Continue from where you left off." and a paired `type:"assistant"` `model:"<synthetic>"`
+// turn "No response requested." Neither is user-authored; the timeline must NOT render them
+// (they are claude internal continuation bookkeeping, like the other noise types — FR-103).
+describe('parseTranscript — resume bookkeeping (cosmos-auto-continue-on-restart-v1)', () => {
+  it('drops the injected isMeta "Continue from where you left off." user turn', () => {
+    const turns = parseTranscript([
+      line({
+        type: 'user',
+        uuid: 'meta1',
+        timestamp: 't',
+        isMeta: true,
+        message: { role: 'user', content: [{ type: 'text', text: 'Continue from where you left off.' }] }
+      })
+    ])
+    expect(turns).toEqual([])
+  })
+
+  it('drops the synthetic "<synthetic>"-model assistant turn paired with the resume meta', () => {
+    const turns = parseTranscript([
+      line({
+        type: 'assistant',
+        uuid: 'syn1',
+        timestamp: 't',
+        message: { role: 'assistant', model: '<synthetic>', content: [{ type: 'text', text: 'No response requested.' }] }
+      })
+    ])
+    expect(turns).toEqual([])
+  })
+
+  it('a real resume run shows ONLY the real turns, never the injected continuation pair', () => {
+    const turns = parseTranscript([
+      // The two synthetic turns the binary injects before processing the real prompt.
+      line({
+        type: 'user',
+        uuid: 'meta2',
+        timestamp: '1',
+        isMeta: true,
+        message: { role: 'user', content: [{ type: 'text', text: 'Continue from where you left off.' }] }
+      }),
+      line({
+        type: 'assistant',
+        uuid: 'syn2',
+        timestamp: '2',
+        message: { role: 'assistant', model: '<synthetic>', content: [{ type: 'text', text: 'No response requested.' }] }
+      }),
+      // The user's actual prompt + the real model reply.
+      line({ type: 'user', uuid: 'real-u', timestamp: '3', message: { content: 'build me a chart' } }),
+      line({
+        type: 'assistant',
+        uuid: 'real-a',
+        timestamp: '4',
+        message: { model: 'claude-opus-4-8', content: [{ type: 'text', text: 'On it.' }] }
+      })
+    ])
+    expect(turns).toEqual([
+      { kind: 'user-prompt', id: 'real-u', ts: '3', text: 'build me a chart' },
+      { kind: 'assistant-text', id: 'real-a', ts: '4', text: 'On it.' }
+    ])
+  })
+})
+
 // cosmos-timeline-prompt-context-v1: the embedded `<cosmos:context>` marker parse/strip
 // (FR-019/FR-020/FR-025).
 const promptCtx: PromptContext = {

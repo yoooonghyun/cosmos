@@ -43,8 +43,8 @@ import {
 import { buildGenerativePanel, hydrateGenerativeTabs } from '../session/sessionSnapshot'
 import { inFlightOnSubmit, shouldReleaseInFlightOnCompleted } from '../composer/promptComposerLogic'
 import { useRecordSubmitContext } from '../composer/ActiveComposerProvider'
-import { usePublishPanelTabs } from '../panelTabs'
-import type { CrossPanelId, LivePanelTabs } from '../panelTabs'
+import { usePublishPanelTabs, usePublishTabCommands } from '../panelTabs'
+import type { CrossPanelId, LivePanelTabs, TabCommands } from '../panelTabs'
 import { useReportPanel } from '../session/SessionProvider'
 import type { GenerativePanelKey } from '../../shared/ipc'
 import type { AdapterBinding, AdapterDescriptor } from '../../shared/types/adapter'
@@ -348,6 +348,24 @@ export function useGenerativePanelTabs(
     [panelTabsPanelId, tabs, activeTabId]
   )
   usePublishPanelTabs(panelTabsPanelId, livePanelTabs)
+
+  // cosmos-tree-tab-rename-delete-v1 (FR-002/FR-004/FR-005): publish this panel's REVERSE tab
+  // commands so the Cosmos tree can drive Rename/Delete on a source tab. Bound to the EXISTING stable
+  // `update`/`close` ops: rename sets `{ label, renamed: true }` (so `shouldApplyAutoLabel` then skips
+  // the generative auto-relabel, FR-004); delete is the same path as the strip `X`. STABLE object
+  // (memoized on the stable `update`/`close` useCallbacks) so it publishes once, not every render. The
+  // cosmos wire target `'generated-ui'` (panelTabsPanelId === null) publishes nothing.
+  const tabCommands = useMemo<TabCommands | null>(
+    () =>
+      panelTabsPanelId === null
+        ? null
+        : {
+            onRename: (id, label) => update(id, { label, renamed: true }),
+            onClose: (id) => close(id)
+          },
+    [panelTabsPanelId, update, close]
+  )
+  usePublishTabCommands(panelTabsPanelId, tabCommands)
 
   // cosmos-context-chip-crosspanel-and-historical-v1 (#2): record the captured PromptContext for
   // each submit into the App-root shared ref so the Cosmos timeline's live seed reflects THIS panel

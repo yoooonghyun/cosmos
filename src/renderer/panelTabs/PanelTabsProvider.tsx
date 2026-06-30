@@ -16,14 +16,27 @@
  */
 
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react'
-import type { CrossPanelId, LivePanelTabs, PanelTabsRegistry } from './panelTabs'
+import type {
+  CrossPanelId,
+  LivePanelTabs,
+  PanelTabsRegistry,
+  TabCommands,
+  TabCommandsRegistry
+} from './panelTabs'
 
 interface PanelTabsContextValue {
   /** Publish (or clear with `null`) a panel's live tab list; bumps the read version. */
   publish: (panelId: CrossPanelId, tabs: LivePanelTabs | null) => void
   /** The live registry (read by the Cosmos tree consumer). */
   registryRef: React.MutableRefObject<PanelTabsRegistry>
-  /** Bumped on every publish so the consumer re-reads the registry. */
+  /**
+   * cosmos-tree-tab-rename-delete-v1 (FR-002): publish (or clear with `null`) a panel's REVERSE
+   * tab commands; bumps the SAME read version as the forward seam.
+   */
+  publishTabCommands: (panelId: CrossPanelId, commands: TabCommands | null) => void
+  /** The live reverse-command registry (read by the Cosmos tree consumer). */
+  commandsRef: React.MutableRefObject<TabCommandsRegistry>
+  /** Bumped on every publish (forward OR reverse) so consumers re-read their registry. */
   version: number
 }
 
@@ -39,6 +52,10 @@ export function PanelTabsProvider({
   children: React.ReactNode
 }): React.JSX.Element {
   const registryRef = useRef<PanelTabsRegistry>({})
+  // cosmos-tree-tab-rename-delete-v1: the SIBLING reverse-command registry. Shares the ONE `version`
+  // counter with the forward seam — a command publish bumps it, but `useAllPanelTabs` returns the
+  // unchanged `registryRef.current` (same object identity) so it never churns the tree's groups.
+  const commandsRef = useRef<TabCommandsRegistry>({})
   const [version, setVersion] = useState(0)
 
   const publish = useCallback((panelId: CrossPanelId, tabs: LivePanelTabs | null): void => {
@@ -46,9 +63,17 @@ export function PanelTabsProvider({
     setVersion((v) => v + 1)
   }, [])
 
+  const publishTabCommands = useCallback(
+    (panelId: CrossPanelId, commands: TabCommands | null): void => {
+      commandsRef.current = { ...commandsRef.current, [panelId]: commands }
+      setVersion((v) => v + 1)
+    },
+    []
+  )
+
   const value = useMemo<PanelTabsContextValue>(
-    () => ({ publish, registryRef, version }),
-    [publish, version]
+    () => ({ publish, registryRef, publishTabCommands, commandsRef, version }),
+    [publish, publishTabCommands, version]
   )
   return <PanelTabsContext.Provider value={value}>{children}</PanelTabsContext.Provider>
 }
@@ -92,4 +117,40 @@ export function useAllPanelTabs(): PanelTabsRegistry {
   // `version` drives the re-read (the registry itself is a ref, swapped on each publish).
   // eslint-disable-next-line react-hooks/exhaustive-deps
   return useMemo(() => registryRef.current, [registryRef, version])
+}
+
+/**
+ * cosmos-tree-tab-rename-delete-v1 (FR-002/FR-003): publish a panel's REVERSE tab commands (or
+ * `null` to clear). Mirrors {@link usePublishPanelTabs} EXACTLY: re-publishes whenever the memoized
+ * `commands` change, clears the entry on unmount, and a `null` panelId publishes nothing (so the
+ * hook can be called UNCONDITIONALLY from a site whose surface is the wire `'generated-ui'` Cosmos
+ * target — excluded from its own tree). Callers MUST pass a `useMemo`'d commands object so a bare
+ * re-render does not churn the registry.
+ */
+export function usePublishTabCommands(
+  panelId: CrossPanelId | null,
+  commands: TabCommands | null
+): void {
+  const { publishTabCommands } = usePanelTabsContext()
+  useEffect(() => {
+    if (panelId === null) {
+      return
+    }
+    publishTabCommands(panelId, commands)
+    return () => publishTabCommands(panelId, null)
+  }, [publishTabCommands, panelId, commands])
+}
+
+/**
+ * cosmos-tree-tab-rename-delete-v1 (FR-002): read the WHOLE reverse-command registry, re-reading on
+ * every publish (the registry is a ref; `version` drives the re-read). The Cosmos tree consumer
+ * looks commands up by `CrossPanelId` across its VARIABLE-length group order, so this returns the
+ * whole map at once (a per-panel hook could not be called in a loop — rules of hooks); the PUBLISHER
+ * stays per-panel ({@link usePublishTabCommands}).
+ */
+export function useAllTabCommands(): TabCommandsRegistry {
+  const { commandsRef, version } = usePanelTabsContext()
+  // `version` drives the re-read (the registry itself is a ref, swapped on each publish).
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  return useMemo(() => commandsRef.current, [commandsRef, version])
 }

@@ -22,7 +22,10 @@
  *    matching `tool-call` turn's `resultPreview`.
  *
  * Skipped (FR-103): `permission-mode`, `file-history-snapshot`, `attachment`,
- * `queue-operation`, any `isSidechain:true` line, and any line whose JSON does not parse
+ * `queue-operation`, any `isSidechain:true` line, any `isMeta:true` line or
+ * `message.model:"<synthetic>"` line (claude's synthetic resume-continuation bookkeeping —
+ * the "Continue from where you left off." / "No response requested." pair injected on every
+ * `--resume` run; cosmos-auto-continue-on-restart-v1), and any line whose JSON does not parse
  * (a malformed / partial trailing line is dropped — FR-108).
  *
  * Secret-safety (FR-104): tool args/results are surfaced ONLY as a bounded, sanitized
@@ -63,6 +66,25 @@ const SECRET_PATTERNS: readonly RegExp[] = [
 /** True for a top-level line that is conversation noise / a sidechain (FR-103). */
 function isNoiseLine(obj: Record<string, unknown>): boolean {
   if (obj.isSidechain === true) {
+    return true
+  }
+  // cosmos-auto-continue-on-restart-v1: the `claude` binary injects a SYNTHETIC pair on
+  // every `--resume` run — a `type:"user"` `isMeta:true` "Continue from where you left off."
+  // turn and a paired `type:"assistant"` `message.model:"<synthetic>"` "No response
+  // requested." turn. Neither is user-authored (claude's `isMeta` flag + `<synthetic>` model
+  // marker explicitly tag them as internal continuation bookkeeping), so the Cosmos timeline
+  // must drop them like the other noise types — otherwise a restart renders a phantom
+  // "Continue from where you left off." user bubble. This is a DISPLAY-only filter: the
+  // transcript jsonl is untouched, so session resume + the real prior turns are unaffected.
+  if (obj.isMeta === true) {
+    return true
+  }
+  const message = obj.message
+  if (
+    message &&
+    typeof message === 'object' &&
+    (message as Record<string, unknown>).model === '<synthetic>'
+  ) {
     return true
   }
   const type = obj.type

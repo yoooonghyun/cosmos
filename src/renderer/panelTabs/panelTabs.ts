@@ -77,3 +77,32 @@ export interface LivePanelTabs {
  * `null` value is treated the same as absent (a panel clearing its entry on unmount).
  */
 export type PanelTabsRegistry = Partial<Record<CrossPanelId, LivePanelTabs | null>>
+
+/**
+ * A panel's tree-invokable tab commands — the renderer-only REVERSE channel of the cross-panel
+ * tab seam (cosmos-tree-tab-rename-delete-v1, FR-002). The forward seam ({@link LivePanelTabs})
+ * lets the Cosmos tree READ every panel's tabs; this lets the tree DRIVE rename/close on a source
+ * tab in its OWN panel, reusing each panel's existing `usePanelTabs` ops.
+ *
+ * SECURITY (FR-002): these are renderer-only function references invoked with a NON-SECRET `tabId`
+ * + trimmed `label` only — the SAME standard as the forward seam's `serialize` ref. They live in
+ * {@link PanelTabsProvider} (in-renderer); NO token/path/credential can cross, and they are NEVER
+ * serialized, persisted, or sent over IPC.
+ */
+export interface TabCommands {
+  /**
+   * Rename a tab: set its `label` AND mark it `renamed` (so the panel's generative auto-relabel,
+   * `shouldApplyAutoLabel`, will not later clobber the user's name — FR-004). Bound to the panel's
+   * EXISTING `update(id, { label, renamed: true })` path, not a new one.
+   */
+  onRename: (tabId: string, label: string) => void
+  /** Close a tab in its own panel — the SAME path as its strip `X` / `usePanelTabs.close` (FR-005). */
+  onClose: (tabId: string) => void
+}
+
+/**
+ * The published reverse-command registry: a panel that has registered its {@link TabCommands}
+ * appears; a panel that has not (unmounted / disabled / never published) is ABSENT (FR-003). A
+ * `null` value is treated the same as absent (a panel clearing its entry on unmount).
+ */
+export type TabCommandsRegistry = Partial<Record<CrossPanelId, TabCommands | null>>
