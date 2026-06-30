@@ -73,15 +73,15 @@ describe('PanelTabTree Rename + Delete (TREE-TAB-EDIT-01)', () => {
     Element.prototype.releasePointerCapture = vi.fn() as never
   })
 
-  it('a row menu offers Pin + a separator + Rename + Delete (FR-001/FR-012)', async () => {
+  it('a row menu offers Pin + Rename + Delete with NO separator (FR-001/FR-012)', async () => {
     renderEditable()
     rightClick('Sprint board')
     expect(await screen.findByRole('menuitem', { name: /Pin/ })).toBeInTheDocument()
     expect(screen.getByRole('menuitem', { name: 'Rename' })).toBeInTheDocument()
     expect(screen.getByRole('menuitem', { name: 'Delete' })).toBeInTheDocument()
-    // The Rename/Delete pair sits behind a separator from the Pin/Unpin toggle.
+    // Flat list — no divider between Pin/Unpin and Rename/Delete (user request).
     const menu = screen.getByRole('menu')
-    expect(menu.querySelector('[data-slot="context-menu-separator"]')).toBeInTheDocument()
+    expect(menu.querySelector('[data-slot="context-menu-separator"]')).toBeNull()
     // Delete is benign (default variant), NOT destructive.
     expect(screen.getByRole('menuitem', { name: 'Delete' })).toHaveAttribute(
       'data-variant',

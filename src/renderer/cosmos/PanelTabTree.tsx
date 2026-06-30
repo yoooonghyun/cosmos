@@ -20,7 +20,6 @@ import {
   ContextMenu,
   ContextMenuContent,
   ContextMenuItem,
-  ContextMenuSeparator,
   ContextMenuTrigger
 } from '@/components/ui/context-menu'
 import { cn } from '@/lib/utils'
@@ -384,7 +383,6 @@ function renderRowMenu(opts: {
         ))}
       {opts.canEdit && (
         <>
-          {opts.pinnable && <ContextMenuSeparator />}
           <ContextMenuItem onSelect={opts.onRename}>Rename</ContextMenuItem>
           <ContextMenuItem onSelect={opts.onDelete}>Delete</ContextMenuItem>
         </>
