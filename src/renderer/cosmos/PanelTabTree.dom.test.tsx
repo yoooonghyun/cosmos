@@ -5,10 +5,11 @@
  * and group expand/collapse.
  */
 import '@testing-library/jest-dom/vitest'
+import type { ReactElement } from 'react'
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen, fireEvent, within } from '@testing-library/react'
 import { TooltipProvider } from '@/components/ui/tooltip'
-import { PanelTabTree, type PanelTabSelection } from './PanelTabTree'
+import { PanelTabTree, renderRowMenu, type PanelTabSelection } from './PanelTabTree'
 import type { PanelTabGroup, CrossPanelId, LivePanelTab } from '../panelTabs'
 
 const groups: PanelTabGroup[] = [
@@ -263,5 +264,101 @@ describe('PanelTabTree right-click Pin/Unpin menu (cosmos-home-favorite-tabs-v1)
     expect(plainIcon.getAttribute('class') ?? '').not.toContain('text-primary')
     expect(plainIcon.getAttribute('class') ?? '').toContain('text-muted-foreground')
     expect(plainLabel.className).not.toContain('font-medium')
+  })
+})
+
+describe('PanelTabTree inline rename via the row menu (TREE-TAB-EDIT-01, cosmos-tree-rename-not-working-v1)', () => {
+  beforeEach(() => {
+    // Radix Menu touches these jsdom-missing APIs.
+    Element.prototype.scrollIntoView = vi.fn()
+    Element.prototype.hasPointerCapture = vi.fn(() => false) as never
+    Element.prototype.setPointerCapture = vi.fn() as never
+    Element.prototype.releasePointerCapture = vi.fn() as never
+  })
+
+  // THE LOAD-BEARING (deterministic) assertion. The runtime break is timing-only: when the menu
+  // closes, Radix's `onCloseAutoFocus` restores focus to the row trigger AFTER the deferred
+  // `beginEdit` has mounted + auto-focused the inline-rename input, blurring it → onBlur commits →
+  // the editor closes before the user can type. jsdom runs that focus-restore in the REVERSE order
+  // (synchronously on click, before the `setTimeout(0)` input mount), so a plain behavioral jsdom
+  // test stays GREEN even when the runtime is broken — it cannot see the bug. So we assert the
+  // SOURCE-OF-TRUTH fix directly: the row menu wires `onCloseAutoFocus` to preventDefault, which is
+  // what stops Radix yanking focus off the input. RED before the fix (no such prop → calling it
+  // throws / preventDefault never runs), GREEN after.
+  it('wires onCloseAutoFocus to preventDefault so the menu close does NOT steal focus from the editor', () => {
+    const menu = renderRowMenu({
+      pinnable: true,
+      pinned: false,
+      onPin: () => {},
+      onUnpin: () => {},
+      canEdit: true,
+      onRename: () => {},
+      onDelete: () => {}
+    }) as ReactElement<{ onCloseAutoFocus?: (e: Event) => void }>
+    expect(typeof menu.props.onCloseAutoFocus).toBe('function')
+    const preventDefault = vi.fn()
+    menu.props.onCloseAutoFocus?.({ preventDefault } as unknown as Event)
+    expect(preventDefault).toHaveBeenCalledTimes(1)
+  })
+
+  // A behavioral guard over the WHOLE menu→edit→commit route: right-click a renamable row → click
+  // Rename → the inline input opens (the editor did not flash-and-close), typing a new label + Enter
+  // routes a TRIMMED commit to the source panel's onRename(tabId, label). (In jsdom this passes even
+  // without the focus fix — see the deterministic wiring test above for the actual regression guard;
+  // this documents + locks the end-to-end commit route.)
+  it('opens the inline editor from the menu and a typed Enter routes a trimmed rename to onRename', async () => {
+    const onRenameTab = vi.fn<(g: PanelTabGroup, t: LivePanelTab, label: string) => void>()
+    render(
+      <TooltipProvider>
+        <PanelTabTree
+          groups={groups}
+          selected={null}
+          onActivate={() => {}}
+          canEditTab={() => true}
+          onRenameTab={onRenameTab}
+          onDeleteTab={() => {}}
+        />
+      </TooltipProvider>
+    )
+    const row = within(screen.getByRole('tree'))
+      .getAllByRole('treeitem')
+      .find((r) => r.getAttribute('aria-level') === '2' && r.textContent?.includes('Sprint board'))!
+    fireEvent.contextMenu(row, { clientX: 5, clientY: 5 })
+    fireEvent.click(await screen.findByRole('menuitem', { name: /Rename/ }))
+    // The defer is a macrotask; let it flush so the input mounts.
+    await new Promise((r) => setTimeout(r, 0))
+    const input = await screen.findByLabelText('Rename Sprint board')
+    expect(input).toBeInTheDocument()
+    fireEvent.change(input, { target: { value: '  Renamed board  ' } })
+    fireEvent.keyDown(input, { key: 'Enter' })
+    expect(onRenameTab).toHaveBeenCalledTimes(1)
+    expect(onRenameTab).toHaveBeenCalledWith(groups[1], { id: 'j1', label: 'Sprint board' }, 'Renamed board')
+  })
+
+  // A blank/whitespace-only commit reverts (the pure renameCommitDecision gates it): no onRename.
+  it('a blank commit reverts without calling onRename (revert path)', async () => {
+    const onRenameTab = vi.fn<(g: PanelTabGroup, t: LivePanelTab, label: string) => void>()
+    render(
+      <TooltipProvider>
+        <PanelTabTree
+          groups={groups}
+          selected={null}
+          onActivate={() => {}}
+          canEditTab={() => true}
+          onRenameTab={onRenameTab}
+          onDeleteTab={() => {}}
+        />
+      </TooltipProvider>
+    )
+    const row = within(screen.getByRole('tree'))
+      .getAllByRole('treeitem')
+      .find((r) => r.getAttribute('aria-level') === '2' && r.textContent?.includes('Sprint board'))!
+    fireEvent.contextMenu(row, { clientX: 5, clientY: 5 })
+    fireEvent.click(await screen.findByRole('menuitem', { name: /Rename/ }))
+    await new Promise((r) => setTimeout(r, 0))
+    const input = await screen.findByLabelText('Rename Sprint board')
+    fireEvent.change(input, { target: { value: '   ' } })
+    fireEvent.keyDown(input, { key: 'Enter' })
+    expect(onRenameTab).not.toHaveBeenCalled()
   })
 })

@@ -332,11 +332,14 @@ export function PanelTabTree({
                                   onPin: () => onPin?.(group, tab),
                                   onUnpin: () => onUnpin?.(group, tab),
                                   canEdit,
-                                  // Defer one tick: Radix restores focus to the row trigger on
-                                  // menu close, which would blur a freshly-focused editor input and
-                                  // commit prematurely. Letting that focus restoration settle FIRST,
-                                  // then mounting the editor, keeps the input focused (the F2 path
-                                  // has no menu-close, so it enters edit synchronously).
+                                  // cosmos-tree-rename-not-working-v1: the PRIMARY fix is
+                                  // `onCloseAutoFocus` preventDefault on the menu content (see
+                                  // `renderRowMenu`) — that stops Radix yanking focus back to the
+                                  // trigger and blurring the editor. This one-tick defer is kept as
+                                  // belt-and-suspenders: it lets the closing menu's FocusScope fully
+                                  // unmount BEFORE the input mounts + auto-focuses, so the two never
+                                  // race. The F2 path has no menu-close, so it enters edit
+                                  // synchronously (no defer needed there).
                                   onRename: () => setTimeout(() => beginEdit(rowKey, tab.label), 0),
                                   onDelete: () => onDeleteTab?.(group, tab)
                                 })
@@ -364,7 +367,7 @@ export function PanelTabTree({
  * Rename begins an in-row inline edit (D-15); Delete is `variant="default"` — a benign, reopenable
  * close (X == unpin precedent, no confirm), NOT `destructive` (FR-008/FR-012).
  */
-function renderRowMenu(opts: {
+export function renderRowMenu(opts: {
   pinnable: boolean
   pinned: boolean
   onPin: () => void
@@ -374,7 +377,18 @@ function renderRowMenu(opts: {
   onDelete: () => void
 }): React.ReactNode {
   return (
-    <ContextMenuContent>
+    // cosmos-tree-rename-not-working-v1 (ROOT-CAUSE fix): STOP Radix restoring focus to the row
+    // trigger when this menu closes. By default Radix's DismissableLayer/FocusScope re-focuses the
+    // trigger on close (`onCloseAutoFocus`), and that focus-restore runs on a LATER tick than the
+    // `setTimeout(0)`-deferred `beginEdit` below — so it lands AFTER the inline-rename input has
+    // mounted + auto-focused, blurring it → the input's `onBlur` commits → `editingKey` clears →
+    // the editor closes before the user can type (the "flashes and closes" / "does nothing" runtime
+    // break; jsdom never replicates the timing so the old test stayed green). This component already
+    // owns roving focus itself (`refocusKeyRef` + the after-edit `setActiveKey` effect), so Radix's
+    // auto-focus-restore is redundant; preventing it leaves the freshly-mounted input focused. The
+    // Pin/Unpin/Delete paths open no input, so a no-op focus-restore there is harmless — the roving
+    // row is still in the tree and the existing focus effects keep a sane active row.
+    <ContextMenuContent onCloseAutoFocus={(e) => e.preventDefault()}>
       {opts.pinnable &&
         (opts.pinned ? (
           <ContextMenuItem onSelect={opts.onUnpin}>Unpin</ContextMenuItem>
