@@ -38,6 +38,7 @@ vi.mock('../composer/PromptComposer', () => ({
 import { CosmosPanel } from './CosmosPanel'
 import { ActiveComposerProvider } from '../composer/ActiveComposerProvider'
 import { PanelTabsProvider } from '../panelTabs'
+import { PanelHostProvider } from '../panelHost'
 import { SessionProvider } from '../session/SessionProvider'
 import { SESSION_SCHEMA_VERSION, type SessionSnapshot } from '../../shared/ipc'
 
@@ -114,7 +115,9 @@ function renderHome(opts?: { active?: boolean; favorites?: SessionSnapshot['favo
       <SessionProvider snapshot={snapshotWith(opts?.favorites ?? FAVORITES)}>
         <ActiveComposerProvider>
           <PanelTabsProvider>
-            <CosmosPanel active={opts?.active ?? true} />
+            <PanelHostProvider>
+              <CosmosPanel active={opts?.active ?? true} />
+            </PanelHostProvider>
           </PanelTabsProvider>
         </ActiveComposerProvider>
       </SessionProvider>

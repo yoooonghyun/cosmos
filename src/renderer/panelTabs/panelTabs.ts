@@ -16,7 +16,6 @@
  */
 
 import type { SurfaceId } from '../app/railVisibility'
-import type { TabSurface } from '../tabs/useGenerativePanelTabs'
 
 /**
  * The panels the Cosmos tree lists — every rail surface EXCEPT the Cosmos panel itself (it never
@@ -25,26 +24,18 @@ import type { TabSurface } from '../tabs/useGenerativePanelTabs'
  */
 export type CrossPanelId = Exclude<SurfaceId, 'cosmos'>
 
-/** One open tab's non-secret identity + display label (FR-007/FR-011). */
+/**
+ * One open tab's non-secret identity + display label (FR-007/FR-011).
+ *
+ * cosmos-favorite-live-panel-portal-v1: a generative-panel favorite now renders the LIVE source panel
+ * itself (reparented via the panel-host portal), NOT a re-projected A2UI surface — so the published
+ * tab is LABEL-ONLY for those four panels (no `surface`/`mirrorSurface`). The TERMINAL favorite keeps
+ * its xterm-multiplex `serialize` accessor (below). GONE detection for a favorite is "the panel has
+ * no tab with the pinned id" (the registry existence check), not "no published surface".
+ */
 export interface LivePanelTab {
   id: string
   label: string
-  /**
-   * The tab's CURRENT live A2UI surface (cosmos-home-favorite-tabs-v1): the same {@link TabSurface}
-   * the source panel renders — spec + live requestId + descriptor/bindings/dataModel. Carried so a
-   * Home FAVORITE can mirror this tab's surface through the SAME `ActiveTabSurface` host, sharing the
-   * live `requestId`/`surfaceId` (a true live mirror, not a snapshot).
-   *
-   * NON-SECRET by the A2UI render contract — the SAME whitelist as the label/id above (never a
-   * token, OAuth secret, credential, file path, `~/.claude` location, or transcript line). It is a
-   * renderer-only REFERENCE pass: {@link PanelTabsProvider} is in-renderer (no IPC), so carrying it
-   * is cheap, and it is NEVER persisted or sent over IPC by this seam (favorites persist by
-   * reference only — `{panelId, tabId, label}` — and re-acquire the live surface on restore).
-   *
-   * Absent/`null` for a tab with no surface yet (untitled / in-flight source) and for terminal tabs
-   * (a PTY tab has no A2UI surface to mirror).
-   */
-  surface?: TabSurface | null
   /**
    * A TERMINAL pane's live scrollback accessor (cosmos-terminal-favorite-multiplex-v1, FR-009): a
    * renderer-only REFERENCE that returns the source xterm's current serialized buffer. A Home
@@ -62,24 +53,6 @@ export interface LivePanelTab {
    * this seam (favorites persist by reference only — `{panelId, tabId, label}`).
    */
   serialize?: () => string
-  /**
-   * The favorite-only NATIVE-VIEW mirror surface (cosmos-native-view-mirror-surface-v1, FR-001):
-   * a native-first panel (Confluence, Slack) publishes a secret-free bound {@link TabSurface}
-   * projecting its CURRENT native view (feed/search/page; channel-list/history/search), DISTINCT
-   * from {@link surface} (the agent-COMPOSED surface). A Home favorite resolves
-   * `mirrorSurface ?? surface`, so it mirrors native browsing too — not only composed surfaces.
-   *
-   * MUTUALLY EXCLUSIVE with `surface` by construction (the publish projection nulls this whenever
-   * `surface` is present — see `livePanelProjection`), so the favorite always shows exactly what
-   * the source shows. `null`/absent while the source shows a composed surface, has no native data
-   * yet (→ favorite WAITING), or for Jira/Generated-UI/terminal tabs (which never set it).
-   *
-   * NON-SECRET by the A2UI render contract (the builders' secret-free output — never a token,
-   * OAuth secret, credential, file path, `~/.claude` location, or transcript line). Renderer-only
-   * REFERENCE pass ({@link PanelTabsProvider} is in-renderer, no IPC); NEVER persisted (favorites
-   * persist by reference only — `{panelId, tabId, label}`).
-   */
-  mirrorSurface?: TabSurface | null
 }
 
 /** One panel's FULL live tab list + which tab is active (FR-008). */

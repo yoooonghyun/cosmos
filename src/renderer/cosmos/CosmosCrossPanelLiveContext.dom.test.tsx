@@ -33,6 +33,7 @@ import {
   useRecordSubmitContext
 } from '../composer/ActiveComposerProvider'
 import { PanelTabsProvider } from '../panelTabs'
+import { PanelHostProvider } from '../panelHost'
 import { SessionProvider } from '../session/SessionProvider'
 import type { PromptContext } from '../../shared/promptContext/promptContext'
 import type { AgentStatusPayload } from '../../shared/ipc'
@@ -103,8 +104,10 @@ function renderPanel(): { record: (ctx: PromptContext | undefined) => void } {
       <SessionProvider snapshot={null}>
         <ActiveComposerProvider>
           <PanelTabsProvider>
-            <CosmosPanel active />
-            <CrossPanelSubmitter onReady={(r) => (record = r)} />
+            <PanelHostProvider>
+              <CosmosPanel active />
+              <CrossPanelSubmitter onReady={(r) => (record = r)} />
+            </PanelHostProvider>
           </PanelTabsProvider>
         </ActiveComposerProvider>
       </SessionProvider>

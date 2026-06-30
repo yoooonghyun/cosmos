@@ -1,30 +1,31 @@
 /**
- * FavoriteSurface — renders a Home favorite's source tab INLINE as a true LIVE MIRROR
- * (cosmos-home-favorite-tabs-v1, FR-020/FR-022/FR-024/FR-031, design §4). It reads the source tab's
- * CURRENT live `TabSurface` out of the cross-panel registry (`findLiveTab`) and mounts it through the
- * SAME `ActiveTabSurface` host the source panel uses — under the source panel's OWN catalog
- * (`favoriteCatalogHosts`) and sharing the live `requestId`/`surfaceId`. Because two instances of the
- * same surfaceId both receive `updateDataModel` pushes and round-trip bound/deterministic actions
- * through `UiBridge` (which warn-ignores a duplicate resolve), the favorite reflects the source in
- * real time and bound controls work — with NO new cross-panel contract.
+ * FavoriteSurface — renders a Home favorite by RELOCATING the LIVE source panel into it
+ * (cosmos-favorite-live-panel-portal-v1, FR-001/FR-002/FR-003). A favorite of a generative panel
+ * (Jira/Slack/Confluence/Google Calendar) shows that panel's source tab "그대로" (as-is) — the SAME
+ * component instance with its full interactive chrome (search box, date/month nav, legend toggle, tab
+ * strip, footer) and live state — by mounting the panel's stable reverse-portal node here via
+ * `<OutPortal>`. The panel is force-mounted ONCE at App root (`<InPortal>`); only its DOM parent moves
+ * between the rail slot and this favorite slot, so NOTHING remounts and all state survives the move.
  *
- * Four states (design §4.2): POPULATED (source + surface) → the live surface; WAITING (source open,
- * `surface == null`) → a calm placeholder that flips live on the next publish; GONE (source closed /
- * absent on relaunch) → a calm "no longer open" empty state with an Unpin affordance (the favorite is
- * NEVER auto-dropped, FR-031); ERROR → the existing `ActiveTabSurface` boundary, per-body.
+ * The ONE-CLAIMER guard: render the OutPortal ONLY when `hostFor(panelId) === 'favorite'` (in steady
+ * state always true while this favorite is the active Home tab — both render sites read the SAME
+ * synchronous `(visibleSurface, activeFavoriteSource)`). During the one-render handoff transient the
+ * rail slot still claims the node, so render an empty placeholder rather than double-claim.
  *
- * v1 swallows the source panel's renderer-LOCAL navigation actions in Home (`favoriteOnAction`) — see
- * favoriteCatalogHosts.
+ * Three states: LIVE (the source tab exists in the registry) → the reparented panel via OutPortal;
+ * GONE (the panel has no tab with the pinned id — closed / absent on relaunch) → a calm "no longer
+ * open" + Unpin (never auto-dropped, FR-016). The TERMINAL favorite KEEPS its xterm-multiplex mirror
+ * (`TerminalFavoriteSurface`, FR-015) — it is a terminal-pane-only sub-view, not the whole panel, so
+ * the reparenting portal does not fit it.
  */
 
 import { PanelsTopLeft } from 'lucide-react'
-import { A2UIProvider } from '@a2ui-sdk/react/0.9'
+import { OutPortal } from 'react-reverse-portal'
 import { Button } from '@/components/ui/button'
-import { ActiveTabSurface } from '../generative/ActiveTabSurface'
 import { useAllPanelTabs } from '../panelTabs'
+import { usePanelHost, isGenerativePanelId } from '../panelHost'
 import { SURFACE_ICON, type RailIcon } from '../app/surfaceIcons'
 import { findLiveTab } from './homeFavorites'
-import { favoriteCatalogHosts, favoriteOnAction } from './favoriteCatalogHosts'
 import { TerminalFavoriteSurface } from './TerminalFavoriteSurface'
 import type { FavoritePanelId } from './cosmosTabs'
 
@@ -36,23 +37,33 @@ export function FavoriteSurface({
   /** Unpin this favorite (the gone-source empty state's only action; same path as the strip `X`). */
   onUnpin: () => void
 }): React.JSX.Element {
-  // Hook called UNCONDITIONALLY before any branch (rules of hooks — this instance is reused across
-  // favorite switches, so the hook count must not vary).
-  const registry = useAllPanelTabs()
-
-  // cosmos-terminal-favorite-multiplex-v1 (FR-004): a terminal favorite is an xterm-multiplex mirror,
-  // NOT an A2UI surface — branch to it BEFORE the `favoriteCatalogHosts` lookup (which has no terminal
-  // entry). Its own GONE/WAITING/POPULATED states live in TerminalFavoriteSurface.
+  // cosmos-terminal-favorite-multiplex-v1 (FR-015): a terminal favorite is an xterm-multiplex mirror,
+  // NOT a reparented panel — branch to it BEFORE the portal path (terminal has no portal node). Split
+  // out so the terminal branch does not depend on `PanelHostProvider` (the generative path does).
   if (source.panelId === 'terminal') {
     return <TerminalFavoriteSurface source={source} onUnpin={onUnpin} />
   }
+  return <GenerativeFavorite source={source} onUnpin={onUnpin} />
+}
+
+/** The generative-panel favorite: the reparented LIVE panel via the panel-host portal (FR-001..FR-004). */
+function GenerativeFavorite({
+  source,
+  onUnpin
+}: {
+  source: { panelId: FavoritePanelId; tabId: string }
+  onUnpin: () => void
+}): React.JSX.Element {
+  const registry = useAllPanelTabs()
+  const { node, hostFor } = usePanelHost()
 
   const live = findLiveTab(registry, source.panelId, source.tabId)
-  const host = favoriteCatalogHosts[source.panelId]
   const Glyph: RailIcon = SURFACE_ICON[source.panelId] ?? PanelsTopLeft
 
-  // GONE: the source tab/panel is not currently published. Calm empty state; never auto-dropped.
-  if (!live || !host) {
+  // GONE: the panel has no tab with the pinned id (closed / absent on relaunch). Calm empty state;
+  // never auto-dropped (FR-016). Detected by tab EXISTENCE in the registry (the published tab list is
+  // label-only now — the live view comes from the reparented panel, not a published surface).
+  if (!live || !isGenerativePanelId(source.panelId)) {
     return (
       <div
         className="flex min-h-0 min-w-0 flex-1 flex-col items-center justify-center gap-2 overflow-auto p-3 text-center text-card-foreground"
@@ -70,41 +81,14 @@ export function FavoriteSurface({
     )
   }
 
-  // cosmos-native-view-mirror-surface-v1 (D7 / FR-007): resolve `mirrorSurface ?? surface` — the
-  // native-view mirror (Confluence/Slack browsing) when the source shows native, else the agent-
-  // composed surface. They are published mutually exclusively (livePanelProjection), so this always
-  // equals exactly what the source tab is showing.
-  const mirror = live.mirrorSurface ?? live.surface
-
-  // WAITING: the source tab is open but has neither a native mirror nor a composed surface yet
-  // (untitled / in-flight / native data not loaded). Flips to the live surface on the next publish.
-  if (!mirror) {
-    return (
-      <div
-        className="flex min-h-0 min-w-0 flex-1 flex-col items-center justify-center gap-2 overflow-auto p-3 text-center text-card-foreground"
-        role="tabpanel"
-      >
-        <Glyph className="size-6 text-muted-foreground" />
-        <p className="text-caption text-muted-foreground">Waiting for this tab&apos;s view…</p>
-      </div>
-    )
+  // ONE-CLAIMER guard: only claim the node when this favorite is the chosen host. In steady state this
+  // is always true (this favorite is the active Home tab); during the single-render rail↔favorite
+  // handoff the rail slot still holds the node, so render an empty placeholder (no double-claim).
+  if (hostFor(source.panelId) !== 'favorite') {
+    return <div className="min-h-0 min-w-0 flex-1" role="tabpanel" />
   }
 
-  // POPULATED (live mirror): mount the source's live surface under its OWN catalog, sharing the live
-  // requestId/surfaceId so it tracks the source in real time (FR-020/FR-022/FR-024).
-  return (
-    <div
-      className="min-h-0 min-w-0 flex-1 overflow-auto p-3 text-card-foreground"
-      role="tabpanel"
-    >
-      <A2UIProvider catalog={host.catalog} key={source.tabId}>
-        <ActiveTabSurface
-          surface={mirror}
-          catalogId={host.catalogId}
-          panelName={`Favorite:${host.panelName}`}
-          onAction={favoriteOnAction}
-        />
-      </A2UIProvider>
-    </div>
-  )
+  // LIVE: relocate the source panel's force-mounted instance into the favorite. It IS the same
+  // component the rail shows (full chrome + interactivity + shared state) — no remount, no surface copy.
+  return <OutPortal node={node(source.panelId)} />
 }

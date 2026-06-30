@@ -92,15 +92,25 @@ Entry/shell files stay at the root; everything else is grouped by domain/feature
 - `calendar/` — `GoogleCalendarPanel.tsx`, `calendarNavLogic.ts` + nested `googleCalendarCatalog/`
 - `cosmos/` — `CosmosPanel.tsx`, `cosmosConversation.ts`, `cosmosTabs.ts`, `CosmosTimelineEntry.tsx`,
   `PromptContextChip.tsx` (the read-only timeline prompt-context breadcrumb chip), `PanelTabTree.tsx`
-  (the cross-panel tab survey + right-click Pin/Unpin menu), and the Home-favorites trio
-  (cosmos-home-favorite-tabs-v1): `homeFavorites.ts` (pure: `findLiveTab`/`reconcileFavorites`/
+  (the cross-panel tab survey + right-click Pin/Unpin menu), and the Home-favorites group
+  (cosmos-home-favorite-tabs-v1): `homeFavorites.ts` (pure: `findLiveTab` — now the favorite's
+  GONE-vs-live EXISTENCE check, the published list being label-only — `reconcileFavorites`/
   `toFavoriteStripTab`/`toHomeFavorites`/`favoritesToTabs`, re-exports the shared `validateFavorites`),
-  `favoriteCatalogHosts.tsx` (`panelId → {catalog,catalogId,panelName}` + the swallow-local-actions
-  `favoriteOnAction`), `FavoriteSurface.tsx` (the inline live mirror + waiting/gone/error states;
-  resolves `mirrorSurface ?? surface`), plus the cosmos-native-view-mirror-surface-v1 pair:
-  `livePanelProjection.ts` (pure `projectLivePanelTab` — the mutual-exclusivity publish rule) and
-  `nativeMirror.ts` (pure `buildConfluenceMirror`/`buildSlackMirror` — select-the-native-view +
-  wrap the shared bound builder's output into a display-only `TabSurface`) (+ their `.test.ts`)
+  `FavoriteSurface.tsx` (cosmos-favorite-live-panel-portal-v1: a generative favorite renders the LIVE
+  source panel itself via `<OutPortal>` — `GenerativeFavorite` mounts the relocated panel-host node when
+  `hostFor === 'favorite'`, else the calm GONE state; the terminal branch still → `TerminalFavoriteSurface`).
+  NOTE — the surface-mirror trio (`favoriteCatalogHosts.tsx`, `livePanelProjection.ts`, `nativeMirror.ts`
+  from cosmos-home-favorite-tabs-v1 / cosmos-native-view-mirror-surface-v1) was DELETED: the favorite no
+  longer re-projects an A2UI surface, so the published `LivePanelTab`/`GenerativeTab` are label-only (no
+  `surface`/`mirrorSurface`) and the pinned-sources reverse channel is gone
+- `panelHost/` (cosmos-favorite-live-panel-portal-v1) — the App-root reparenting-portal host:
+  `panelHostLogic.ts` (PURE `hostFor`/`panelVisible` selectors + `isGenerativePanelId` —
+  the ONE-CLAIMER rule), `PanelHostProvider.tsx` (four stable `createHtmlPortalNode()` nodes via
+  `react-reverse-portal`, the synchronous `visibleSurface` + `activeFavoriteSource` host signals lifted
+  from `AppShell`, and the one-shot `focusSourceTab`/`onFocusTab` channel), `index.ts`. App root renders
+  the four generative panels ONCE through `<InPortal>` and mounts each via exactly one `<OutPortal>` —
+  the rail slot (`App.tsx`) or the Home favorite slot (`FavoriteSurface`). The relocated panel SUPPRESSES
+  its own tab strip (OQ-1 reversal — body-only in a favorite)
 - `confirm/` — `confirmLogic.ts`, `useConfirm.ts`
 - `fileExplorer/` — the per-tab 3-column terminal/viewer/tree layout (the `useExplorerPanes` hook +
   `FileTree`/`FileViewer`/`FileTabStrip`/`ResizeDivider` components, the `useFileExplorer` hook, the

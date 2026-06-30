@@ -64,6 +64,7 @@ import {
 import { surfaceSpinnerVisible } from '../composer/promptComposerLogic'
 import { shouldAutoLoadDefaultView } from '../tabs/panelTabs'
 import { useTabShortcuts } from '../tabs/useTabShortcuts'
+import { usePanelHost } from '../panelHost'
 import { useConfirm } from '../confirm/useConfirm'
 import { ConfirmDialog } from '@/components/ui/confirm-dialog'
 import { confirmCopy } from '../confirm/confirmLogic'
@@ -593,8 +594,19 @@ export function JiraPanel({ active }: { active: boolean }): React.JSX.Element {
   // ticket-browsing chrome, so it is hidden on generated surfaces but kept otherwise.
   const onGeneratedUi = !!(activeTab?.surface && activeTab.composed)
 
-  // Tab keyboard shortcuts act on THIS strip only while the Jira surface is active.
-  useTabShortcuts({ active, tabs, activeTabId, onActivate: setActive, onNewTab: newTab, onCloseTab: handleCloseTab })
+  // cosmos-favorite-live-panel-portal-v1: SUPPRESS this panel's tab strip while it is relocated into a
+  // Home favorite (the favorite shows only the active tab's body — no nested tab-list), and keep
+  // `tab:*` on the RAIL surface only (Home owns it while a favorite is shown).
+  const { onFocusTab, hostFor } = usePanelHost()
+  const favoriteHosted = hostFor('jira') === 'favorite'
+  // Tab keyboard shortcuts act on THIS strip only while it is the active RAIL surface.
+  useTabShortcuts({ active: active && !favoriteHosted, tabs, activeTabId, onActivate: setActive, onNewTab: newTab, onCloseTab: handleCloseTab })
+
+  // FR-006: register the focus handler so a Home favorite of Jira focuses this LIVE panel onto the
+  // pinned source tab on activation, so the suppressed-strip favorite shows the PINNED tab's body.
+  const setActiveRef = useRef(setActive)
+  setActiveRef.current = setActive
+  useEffect(() => onFocusTab('jira', (tabId) => setActiveRef.current(tabId)), [onFocusTab])
 
   // open-prompt-hoist-v1: publish this panel's composer wiring (or null while not connected,
   // mirroring the old `isConnected &&` JSX gate) so the ONE App-level composer routes to Jira
@@ -622,23 +634,25 @@ export function JiraPanel({ active }: { active: boolean }): React.JSX.Element {
       aria-label="Jira"
     >
       {/* Terminal-unified layout: the tab strip is the topmost element (no title header).
-          The connection status moves to the footer; the not-connected CTA renders inside the
-          active tab's content region. */}
-      <PanelTabStrip
-        tabs={stripTabs}
-        activeTabId={activeTabId}
-        onActivate={setActive}
-        onClose={handleCloseTab}
-        onNewTab={newTab}
-        onRename={(id, label) => update(id, { label, renamed: true, untitled: false })}
-        trailing={
-          <PanelRefreshButton
-            activeTab={refreshInputs.activeTab}
-            requestId={refreshInputs.requestId}
-          />
-        }
-        ariaLabel="Jira tabs"
-      />
+          cosmos-favorite-live-panel-portal-v1: SUPPRESSED while relocated into a Home favorite (the
+          favorite shows only the active tab's body — no nested tab-list). */}
+      {!favoriteHosted && (
+        <PanelTabStrip
+          tabs={stripTabs}
+          activeTabId={activeTabId}
+          onActivate={setActive}
+          onClose={handleCloseTab}
+          onNewTab={newTab}
+          onRename={(id, label) => update(id, { label, renamed: true, untitled: false })}
+          trailing={
+            <PanelRefreshButton
+              activeTab={refreshInputs.activeTab}
+              requestId={refreshInputs.requestId}
+            />
+          }
+          ariaLabel="Jira tabs"
+        />
+      )}
 
       {/* Connection-only chrome: the JQL search row only makes sense connected. Hidden while a
           compose send-spinner is up so the panel blanks to JUST the spinner (parity with
@@ -769,23 +783,26 @@ export function JiraPanel({ active }: { active: boolean }): React.JSX.Element {
       {/* open-prompt-hoist-v1: the composer is now ONE App-level instance; this panel
           publishes its wiring (gated on isConnected) via usePublishComposer above. */}
 
-      {/* Connection bar is the panel footer (Terminal-unified layout). */}
-      <PanelFooter
-        surfaceName="Jira"
-        icon={SURFACE_ICON.jira}
-        activeTab={activeStripTab}
-        right={
-          <ConnectionStatus
-            status={status}
-            onDisconnect={() =>
-              confirmDisconnect.requestConfirm({ integration: 'jira', label: 'Jira' }, () =>
-                void disconnect()
-              )
-            }
-            onCancel={() => void cancelConnect()}
-          />
-        }
-      />
+      {/* Connection bar is the panel footer (Terminal-unified layout). cosmos-favorite-live-panel-
+          portal-v1: SUPPRESSED while relocated into a Home favorite (Home shows only its own footer). */}
+      {!favoriteHosted && (
+        <PanelFooter
+          surfaceName="Jira"
+          icon={SURFACE_ICON.jira}
+          activeTab={activeStripTab}
+          right={
+            <ConnectionStatus
+              status={status}
+              onDisconnect={() =>
+                confirmDisconnect.requestConfirm({ integration: 'jira', label: 'Jira' }, () =>
+                  void disconnect()
+                )
+              }
+              onCancel={() => void cancelConnect()}
+            />
+          }
+        />
+      )}
 
       <ConfirmDialog
         open={confirmDisconnect.state.open}

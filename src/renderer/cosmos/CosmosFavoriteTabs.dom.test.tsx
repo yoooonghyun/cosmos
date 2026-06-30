@@ -1,39 +1,29 @@
 /**
- * DOM test (jsdom) for the Home favorite-tabs flow (cosmos-home-favorite-tabs-v1).
- * Scenario: COSMOS-FAVORITE-TABS-01 — right-click a tree row → Pin → a favorite appears in Home's
- * strip after the pinned default; clicking it renders the SOURCE tab's LIVE surface inline; the
- * mirror reflects a source-surface change (live, not a snapshot); a gone source shows the calm
- * "no longer open" state + Unpin; the strip `X` / context menu unpins; a terminal row's Pin is
- * disabled; restored favorites seed on mount.
+ * DOM test (jsdom) for the Home favorite-tabs flow (cosmos-home-favorite-tabs-v1) UPDATED for the
+ * live-panel reparenting portal (cosmos-favorite-live-panel-portal-v1). Scenario COSMOS-FAVORITE-TABS-01.
  *
- * Corrections (user feedback): a FAVORITE tab is a FULL-WIDTH source mirror — it HIDES the
- * cross-panel tree (which renders only on the default tab) AND hides the docked Cosmos composer
- * (Home publishes a null 'cosmos' config), and shows the SOURCE panel's OWN floating Open Prompt
- * whose `onSubmit` routes to the SOURCE target (jira/slack/…), not the Cosmos conversation.
+ * The favorites LIFECYCLE is unchanged (pin/unpin, non-disruptive pin, persist-by-reference, gone-state,
+ * terminal-pinnable, tree/composer hide on a favorite). What CHANGED: a favorite of a generative panel
+ * now renders the LIVE source panel ITSELF — relocated via the panel-host portal — NOT a re-projected
+ * A2UI surface. So the harness mounts a STUB Jira panel ONCE through an `<InPortal>` (standing in for the
+ * App-root force-mounted JiraPanel); activating the favorite REPARENTS that node into the Home favorite
+ * slot (`jira-live` appears). The stub also wires `useTabShortcuts` + `onFocusTab` so the test can prove:
+ *  - FOCUS-ON-ACTIVATION (FR-006): activating a favorite of jira tab `j2` focuses the live panel to `j2`.
+ *  - KEYBOARD OWNERSHIP (OQ-3): while a generative favorite is active, `tab:*` targets the INNER panel
+ *    (it is visible) and Home CEDES (its `useTabShortcuts` is gated `active && !favoriteActive`).
  *
- * Renders the REAL `CosmosPanel` under the real providers + a sibling publisher (the
- * `usePublishPanelTabs` path the four generative panels use). `ActiveTabSurface` is STUBBED to render
- * its surface's `surfaceId` so the inline live-mirror is assertable without driving the A2UI SDK +
- * jira catalog — the FavoriteSurface wiring (which surface it mounts, and that it re-renders on a
- * re-publish) is the behavior under test, not the SDK's own rendering.
+ * Renders the REAL `CosmosPanel` under the real providers + a sibling publisher (label-only now). The
+ * floating `PromptComposer` is stubbed to assert the favorite surfaces the SOURCE composer's onSubmit.
  */
 import '@testing-library/jest-dom/vitest'
-import { act, useMemo } from 'react'
+import { act, useMemo, useState, useRef, useEffect } from 'react'
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { render, screen, fireEvent, within } from '@testing-library/react'
 import { TooltipProvider } from '@/components/ui/tooltip'
+import { InPortal } from 'react-reverse-portal'
 
-// Stub the shared A2UI host so the inline favorite is assertable without the SDK/catalog.
-vi.mock('../generative/ActiveTabSurface', () => ({
-  ActiveTabSurface: ({ surface }: { surface: { spec?: { surfaceId?: string } } | null }) => (
-    <div data-testid="fav-surface">{surface?.spec?.surfaceId ?? 'no-surface'}</div>
-  )
-}))
-
-// Stub the floating PromptComposer so the favorite's Open Prompt wiring is assertable without the
-// real composer's measure/visibility gate (its collapsed logo is `visibility:hidden` until the panel
-// box is measured, which jsdom cannot do). The stub records the props it received + renders a button
-// that fires `onSubmit`, so the test can prove the favorite mounts the SOURCE composer's onSubmit.
+// Stub the floating PromptComposer so the favorite's Open Prompt wiring is assertable without the real
+// composer's measure/visibility gate. Records props + renders a button that fires `onSubmit`.
 const composerSpy: { onSubmit: ((u: string) => void) | null; ariaLabel: string | null } = {
   onSubmit: null,
   ariaLabel: null
@@ -62,6 +52,8 @@ import {
 } from '../composer/ActiveComposerProvider'
 import type { ComposerConfig } from '../composer/activeComposer'
 import { PanelTabsProvider, usePublishPanelTabs, type LivePanelTabs } from '../panelTabs'
+import { PanelHostProvider, usePanelHost } from '../panelHost'
+import { useTabShortcuts } from '../tabs/useTabShortcuts'
 import { SessionProvider } from '../session/SessionProvider'
 import { SESSION_SCHEMA_VERSION, type SessionSnapshot } from '../../shared/ipc'
 
@@ -69,6 +61,34 @@ import { SESSION_SCHEMA_VERSION, type SessionSnapshot } from '../../shared/ipc'
 const jiraSubmit = vi.fn()
 /** The latest 'cosmos' composer config the registry holds (null ⇒ the docked Cosmos composer hides). */
 let cosmosConfig: ComposerConfig | null = null
+/** A bus so a `tab:*` shortcut reaches BOTH Home's and the inner panel's `useTabShortcuts`. */
+let shortcutListeners: ((p: { command: string; index?: number }) => void)[] = []
+function fireShortcut(p: { command: string; index?: number }): void {
+  act(() => {
+    shortcutListeners.forEach((l) => l(p))
+  })
+}
+
+/** The live STUB Jira panel (stands in for the App-root force-mounted JiraPanel), reparented by the
+ *  portal into the favorite. Wires `useTabShortcuts` (gated on visibility) + `onFocusTab` so the test
+ *  can assert keyboard ownership + focus-on-activation. */
+function StubJiraPanel(): React.JSX.Element {
+  const { panelVisible, hostFor, onFocusTab } = usePanelHost()
+  const [activeTabId, setActiveTabId] = useState('j1')
+  const tabs = useMemo(() => [{ id: 'j1' }, { id: 'j2' }], [])
+  const setActiveRef = useRef(setActiveTabId)
+  setActiveRef.current = setActiveTabId
+  useEffect(() => onFocusTab('jira', (id) => setActiveRef.current(id)), [onFocusTab])
+  // Mirror the real panels: the inner strip's `tab:*` binds ONLY on the rail surface (NOT while hosted
+  // in a favorite, where the strip is suppressed and Home owns the shortcuts).
+  useTabShortcuts({
+    active: panelVisible('jira') && hostFor('jira') !== 'favorite',
+    tabs,
+    activeTabId,
+    onActivate: setActiveTabId
+  })
+  return <div data-testid="jira-live" data-active-tab={activeTabId} />
+}
 
 /** Publishes the Jira panel's composer config (unconditionally, as the real JiraPanel does). */
 function JiraComposerPublisher(): null {
@@ -96,6 +116,7 @@ beforeEach(() => {
   composerSpy.onSubmit = null
   composerSpy.ariaLabel = null
   cosmosConfig = null
+  shortcutListeners = []
   // Radix Menu touches these jsdom-missing APIs; stub them so the context menu opens/closes cleanly.
   Element.prototype.scrollIntoView = vi.fn()
   Element.prototype.hasPointerCapture = vi.fn(() => false) as never
@@ -111,16 +132,20 @@ beforeEach(() => {
       },
       agent: { onStatus: () => () => {}, submit: () => {} },
       ui: { onRender: () => () => {}, onDataModel: () => () => {}, sendAction: () => {} },
-      shortcuts: { onTrigger: () => () => {} },
+      shortcuts: {
+        onTrigger: (cb: (p: { command: string; index?: number }) => void) => {
+          shortcutListeners.push(cb)
+          return () => {
+            shortcutListeners = shortcutListeners.filter((l) => l !== cb)
+          }
+        }
+      },
       session: { save: () => {} }
     }
   })
 })
 
 afterEach(() => {
-  // NB: do NOT manually clear `document.body` — Radix menus portal into it; RTL's auto-cleanup
-  // unmounts the React root (and its portals) correctly, while a manual wipe races the portal
-  // removal and throws "node to be removed is not a child" when a menu is left open at test end.
   vi.clearAllMocks()
 })
 
@@ -136,23 +161,22 @@ function snapshotWith(favorites?: SessionSnapshot['favorites']): SessionSnapshot
       confluence: emptyPanel,
       'google-calendar': emptyPanel
     },
-    // Jira + Terminal visible so both groups show in the tree (terminal is always present).
     enabled: { slack: false, jira: true, confluence: false, 'google-calendar': false },
     ...(favorites ? { favorites } : {})
   }
 }
 
-const surfaceOf = (surfaceId: string) =>
-  ({ requestId: `req-${surfaceId}`, spec: { surfaceId, components: [] } }) as never
-
-/** A jira tab carrying a live surface, plus a terminal tab (to test the disabled Pin). */
-function tabsWith(jiraSurfaceId: string | null): { jira: LivePanelTabs; terminal: LivePanelTabs } {
+/** Two jira tabs (label-only published) + a terminal tab (to test the terminal Pin). */
+function tabsWith(): { jira: LivePanelTabs; terminal: LivePanelTabs } {
   return {
     jira: {
-      tabs: [{ id: 'j1', label: 'Sprint board', surface: jiraSurfaceId ? surfaceOf(jiraSurfaceId) : null }],
+      tabs: [
+        { id: 'j1', label: 'Sprint board' },
+        { id: 'j2', label: 'PROJ-9' }
+      ],
       activeTabId: 'j1'
     },
-    terminal: { tabs: [{ id: 't1', label: 'Terminal', surface: null }], activeTabId: 't1' }
+    terminal: { tabs: [{ id: 't1', label: 'Terminal' }], activeTabId: 't1' }
   }
 }
 
@@ -162,24 +186,35 @@ function Publisher({ jira, terminal }: { jira: LivePanelTabs | null; terminal: L
   return null
 }
 
+/** The reparenting host: the live stub Jira panel via InPortal (mounted once). */
+function JiraHost(): React.JSX.Element {
+  const { node } = usePanelHost()
+  return (
+    <InPortal node={node('jira')}>
+      <StubJiraPanel />
+    </InPortal>
+  )
+}
+
 function renderApp(opts?: {
-  jiraSurfaceId?: string | null
   jiraPresent?: boolean
   favorites?: SessionSnapshot['favorites']
-}): { rerender: (o?: { jiraSurfaceId?: string | null; jiraPresent?: boolean }) => void } {
-  const build = (o?: { jiraSurfaceId?: string | null; jiraPresent?: boolean }): React.JSX.Element => {
-    const sid = o?.jiraSurfaceId === undefined ? (opts?.jiraSurfaceId ?? 's-board') : o.jiraSurfaceId
+}): { rerender: (o?: { jiraPresent?: boolean }) => void } {
+  const build = (o?: { jiraPresent?: boolean }): React.JSX.Element => {
     const present = o?.jiraPresent ?? opts?.jiraPresent ?? true
-    const t = tabsWith(sid)
+    const t = tabsWith()
     return (
       <TooltipProvider>
         <SessionProvider snapshot={snapshotWith(opts?.favorites)}>
           <ActiveComposerProvider>
             <PanelTabsProvider>
-              <CosmosPanel active />
-              <Publisher jira={present ? t.jira : null} terminal={t.terminal} />
-              <JiraComposerPublisher />
-              <CosmosComposerProbe />
+              <PanelHostProvider>
+                <CosmosPanel active />
+                <JiraHost />
+                <Publisher jira={present ? t.jira : null} terminal={t.terminal} />
+                <JiraComposerPublisher />
+                <CosmosComposerProbe />
+              </PanelHostProvider>
             </PanelTabsProvider>
           </ActiveComposerProvider>
         </SessionProvider>
@@ -196,7 +231,6 @@ function strip(): HTMLElement {
 function tree(): HTMLElement {
   return screen.getByRole('tree', { name: 'Open panel tabs' })
 }
-/** The cross-panel tree, or null when it is not rendered (a favorite tab hides it). */
 function treeOrNull(): HTMLElement | null {
   return screen.queryByRole('tree', { name: 'Open panel tabs' })
 }
@@ -207,7 +241,6 @@ async function settle(): Promise<void> {
   })
 }
 
-/** The level-2 tab row (not the level-1 group header) carrying `label`. */
 function tabRow(label: string): HTMLElement {
   const row = within(tree())
     .getAllByRole('treeitem')
@@ -218,16 +251,10 @@ function tabRow(label: string): HTMLElement {
   return row
 }
 
-/** Right-click the named tree TAB row to open its Pin/Unpin menu. */
 function openRowMenu(label: string): void {
   fireEvent.contextMenu(tabRow(label), { clientX: 10, clientY: 10 })
 }
 
-/**
- * Activate a favorite by clicking its strip tab. Pinning is now NON-DISRUPTIVE (it no longer
- * navigates to the favorite), so a test that asserts favorite-active behavior must click the strip
- * tab first.
- */
 function activateStripTab(label: string): void {
   fireEvent.click(within(strip()).getByRole('tab', { name: new RegExp(label) }))
 }
@@ -236,64 +263,56 @@ describe('Home favorite tabs (COSMOS-FAVORITE-TABS-01)', () => {
   it('right-click a tree row → Pin → a favorite appears in the strip after the default', async () => {
     renderApp()
     await settle()
-    // Only the default "Cosmos" tab to start.
     expect(within(strip()).getByRole('tab', { name: /Cosmos/ })).toBeInTheDocument()
 
     openRowMenu('Sprint board')
     fireEvent.click(await screen.findByRole('menuitem', { name: /Pin/ }))
 
-    // A favorite tab labeled by the source appears in the strip.
     const favTab = within(strip()).getByRole('tab', { name: /Sprint board/ })
     expect(favTab).toBeInTheDocument()
-    // It is AFTER the default tab.
     const tabs = within(strip()).getAllByRole('tab')
     expect(tabs[0]).toHaveTextContent('Cosmos')
     expect(tabs[1]).toHaveTextContent('Sprint board')
-    // NON-DISRUPTIVE pin: the default "Cosmos" tab stays ACTIVE (pinning does NOT navigate to the
-    // favorite) and the default content — the cross-panel tree — is still shown.
+    // NON-DISRUPTIVE pin: the default stays active + the tree stays shown.
     expect(tabs[0]).toHaveAttribute('aria-selected', 'true')
     expect(favTab).toHaveAttribute('aria-selected', 'false')
     expect(treeOrNull()).toBeInTheDocument()
   })
 
-  it('clicking the favorite renders the SOURCE live surface inline; a re-publish mirrors live', async () => {
-    const { rerender } = renderApp({ jiraSurfaceId: 's-board' })
+  it('activating a favorite RELOCATES the live source panel into Home (the reparenting portal)', async () => {
+    renderApp()
     await settle()
     openRowMenu('Sprint board')
     fireEvent.click(await screen.findByRole('menuitem', { name: /Pin/ }))
 
-    // Pinning is non-disruptive — CLICK the favorite strip tab to activate it, then the inline
-    // surface shows the source surfaceId.
-    activateStripTab('Sprint board')
-    expect(screen.getByTestId('fav-surface')).toHaveTextContent('s-board')
-    // The default conversation placeholder is NOT shown (we are on the favorite tab).
-    expect(screen.queryByText(/Describe a UI below/)).not.toBeInTheDocument()
+    // Before activation the live panel is OFF-DOM (its node has no OutPortal mounting it).
+    expect(screen.queryByTestId('jira-live')).not.toBeInTheDocument()
 
-    // LIVE MIRROR: the source re-publishes a NEW surface → the inline mirror reflects it.
-    act(() => {
-      rerender({ jiraSurfaceId: 's-board-v2' })
-    })
-    expect(screen.getByTestId('fav-surface')).toHaveTextContent('s-board-v2')
+    activateStripTab('Sprint board')
+    await settle()
+    // The live Jira panel is now mounted inside the favorite (reparented), and the default conversation
+    // placeholder is gone.
+    expect(screen.getByTestId('jira-live')).toBeInTheDocument()
+    expect(screen.queryByText(/Describe a UI below/)).not.toBeInTheDocument()
   })
 
   it('a gone source shows the calm "no longer open" state + Unpin (never auto-dropped)', async () => {
-    const { rerender } = renderApp({ jiraSurfaceId: 's-board' })
+    const { rerender } = renderApp()
     await settle()
     openRowMenu('Sprint board')
     fireEvent.click(await screen.findByRole('menuitem', { name: /Pin/ }))
-    activateStripTab('Sprint board') // non-disruptive pin → click to activate the favorite
-    expect(screen.getByTestId('fav-surface')).toBeInTheDocument()
+    activateStripTab('Sprint board')
+    await settle()
+    expect(screen.getByTestId('jira-live')).toBeInTheDocument()
 
-    // The source tab/panel closes (publisher stops publishing jira).
+    // The source panel stops publishing jira → the favorite's tab is gone from the registry.
     act(() => {
       rerender({ jiraPresent: false })
     })
-    // The favorite is KEPT in the strip, and the body shows the calm gone state with Unpin.
     expect(within(strip()).getByRole('tab', { name: /Sprint board/ })).toBeInTheDocument()
     expect(screen.getByText('This tab is no longer open')).toBeInTheDocument()
     const unpin = screen.getByRole('button', { name: 'Unpin' })
     fireEvent.click(unpin)
-    // Unpinned → the favorite is gone, focus back on the default conversation.
     expect(within(strip()).queryByRole('tab', { name: /Sprint board/ })).not.toBeInTheDocument()
     expect(screen.getByText(/Describe a UI below/)).toBeInTheDocument()
   })
@@ -305,25 +324,19 @@ describe('Home favorite tabs (COSMOS-FAVORITE-TABS-01)', () => {
     fireEvent.click(await screen.findByRole('menuitem', { name: /Pin/ }))
     expect(within(strip()).getByRole('tab', { name: /Sprint board/ })).toBeInTheDocument()
 
-    // The favorite tab's close affordance unpins it.
     fireEvent.click(within(strip()).getByRole('button', { name: 'Close Sprint board' }))
     expect(within(strip()).queryByRole('tab', { name: /Sprint board/ })).not.toBeInTheDocument()
     expect(screen.getByText(/Describe a UI below/)).toBeInTheDocument()
   })
 
   it('a pinned tree row shows Unpin instead of Pin (state-reflective, FR-002)', async () => {
-    // Seed an already-pinned favorite so the row reflects the pinned state on first open.
     renderApp({ favorites: [{ panelId: 'jira', tabId: 'j1', label: 'Sprint board' }] })
     await settle()
     openRowMenu('Sprint board')
     expect(await screen.findByRole('menuitem', { name: /Unpin/ })).toBeInTheDocument()
   })
 
-  it('a terminal tree row IS pinnable → pinning appends a terminal favorite after the default (cosmos-terminal-favorite-multiplex-v1, FR-001/FR-002)', async () => {
-    // FR-040 relaxed: the terminal row's Pin is enabled (no disabled item / "can't be pinned" reason),
-    // and pinning a terminal source appends a favorite to the strip (NON-DISRUPTIVE — we don't activate
-    // it, so the lazy xterm mirror is not rendered; the pin path through CosmosPanel.handlePin is the
-    // behavior under test).
+  it('a terminal tree row IS pinnable → pinning appends a terminal favorite after the default', async () => {
     renderApp()
     await settle()
     openRowMenu('Terminal')
@@ -332,18 +345,15 @@ describe('Home favorite tabs (COSMOS-FAVORITE-TABS-01)', () => {
     expect(screen.queryByText(/Terminal tabs can't be pinned/)).not.toBeInTheDocument()
     fireEvent.click(pin)
     await settle()
-    // A terminal favorite appears in the strip after the default "Cosmos" tab.
     const tabs = within(strip()).getAllByRole('tab')
     expect(tabs[0]).toHaveTextContent('Cosmos')
     expect(tabs[1]).toHaveTextContent('Terminal')
-    // Pinning is non-disruptive — the default stays active, the tree is still shown.
     expect(treeOrNull()).toBeInTheDocument()
   })
 
   it('restored favorites seed the strip on mount (FR-030)', async () => {
     renderApp({ favorites: [{ panelId: 'jira', tabId: 'j1', label: 'Sprint board' }] })
     await settle()
-    // The favorite is present from the persisted snapshot, after the default.
     const tabs = within(strip()).getAllByRole('tab')
     expect(tabs[0]).toHaveTextContent('Cosmos')
     expect(tabs[1]).toHaveTextContent('Sprint board')
@@ -352,67 +362,91 @@ describe('Home favorite tabs (COSMOS-FAVORITE-TABS-01)', () => {
   it('the DEFAULT tab shows the tree + the docked Cosmos composer, NOT a favorite Open Prompt', async () => {
     renderApp()
     await settle()
-    // Default tab: the cross-panel tree is visible, the docked Cosmos composer config is published,
-    // and there is no source Open Prompt.
     expect(treeOrNull()).toBeInTheDocument()
     expect(cosmosConfig).not.toBeNull()
     expect(screen.queryByTestId('favorite-open-prompt')).not.toBeInTheDocument()
   })
 
-  it('a FAVORITE tab is FULL-WIDTH: hides the tree (correction #1)', async () => {
+  it('a FAVORITE tab is FULL-WIDTH: hides the tree and shows the live panel', async () => {
     renderApp()
     await settle()
-    expect(treeOrNull()).toBeInTheDocument() // tree present on the default tab
+    expect(treeOrNull()).toBeInTheDocument()
     openRowMenu('Sprint board')
     fireEvent.click(await screen.findByRole('menuitem', { name: /Pin/ }))
     await settle()
-    // Pinning is non-disruptive — still on the default tab, tree still present.
     expect(treeOrNull()).toBeInTheDocument()
-    // Activate the favorite; now the tree is GONE (the favorite content fills the full width).
     activateStripTab('Sprint board')
     await settle()
     expect(treeOrNull()).not.toBeInTheDocument()
-    // The favorite's source surface still renders.
-    expect(screen.getByTestId('fav-surface')).toBeInTheDocument()
+    expect(screen.getByTestId('jira-live')).toBeInTheDocument()
   })
 
-  it("a FAVORITE tab hides the docked Cosmos composer and shows the SOURCE's Open Prompt routing to the source (correction #2)", async () => {
+  it('a FAVORITE tab hides the docked Cosmos composer and shows the SOURCE Open Prompt routing to source', async () => {
     renderApp()
     await settle()
     openRowMenu('Sprint board')
     fireEvent.click(await screen.findByRole('menuitem', { name: /Pin/ }))
-    activateStripTab('Sprint board') // non-disruptive pin → click to activate the favorite
+    activateStripTab('Sprint board')
     await settle()
 
-    // The docked Cosmos composer is hidden — Home publishes a NULL 'cosmos' config while a favorite
-    // is active (so the App-level SharedComposer renders nothing for Home).
     expect(cosmosConfig).toBeNull()
-
-    // The favorite shows the SOURCE (Jira) panel's own floating Open Prompt — its ariaLabel + onSubmit
-    // are the source's published config, NOT the Cosmos conversation composer.
     const openPrompt = screen.getByTestId('favorite-open-prompt')
     expect(openPrompt).toHaveAttribute('aria-label', 'Ask about your Jira issues')
     expect(composerSpy.onSubmit).toBe(jiraSubmit)
-
-    // Submitting through it routes to the SOURCE target (the Jira panel's onSubmit), not cosmos.
     fireEvent.click(openPrompt)
     expect(jiraSubmit).toHaveBeenCalledTimes(1)
   })
 
-  it('switching back to the default tab restores the tree + docked composer (no favorite Open Prompt)', async () => {
+  it('switching back to the default tab restores the tree + docked composer (live panel returns to rail)', async () => {
     renderApp()
     await settle()
     openRowMenu('Sprint board')
     fireEvent.click(await screen.findByRole('menuitem', { name: /Pin/ }))
-    activateStripTab('Sprint board') // non-disruptive pin → click to activate the favorite
+    activateStripTab('Sprint board')
     await settle()
     expect(treeOrNull()).not.toBeInTheDocument()
+    expect(screen.getByTestId('jira-live')).toBeInTheDocument()
 
-    // Click the default "Cosmos" tab.
     fireEvent.click(within(strip()).getByRole('tab', { name: /Cosmos/ }))
     await settle()
     expect(treeOrNull()).toBeInTheDocument()
     expect(cosmosConfig).not.toBeNull()
-    expect(screen.queryByTestId('favorite-open-prompt')).not.toBeInTheDocument()
+    // The live panel returned to its (off-DOM) rail home — no longer mounted in Home.
+    expect(screen.queryByTestId('jira-live')).not.toBeInTheDocument()
+  })
+
+  it('FOCUS-ON-ACTIVATION (FR-006): activating a favorite of jira tab j2 focuses the live panel to j2', async () => {
+    renderApp({ favorites: [{ panelId: 'jira', tabId: 'j2', label: 'PROJ-9' }] })
+    await settle()
+    activateStripTab('PROJ-9')
+    await settle()
+    // The one-shot focus fired: the live panel's active tab is now j2 (was j1).
+    expect(screen.getByTestId('jira-live')).toHaveAttribute('data-active-tab', 'j2')
+  })
+
+  it('KEYBOARD OWNERSHIP (OQ-1 reversal): the inner strip is suppressed, so HOME owns tab:* (inner panel does not move)', async () => {
+    renderApp({ favorites: [{ panelId: 'jira', tabId: 'j1', label: 'Sprint board' }] })
+    await settle()
+    activateStripTab('Sprint board')
+    await settle()
+
+    expect(within(strip()).getByRole('tab', { name: /Sprint board/ })).toHaveAttribute(
+      'aria-selected',
+      'true'
+    )
+    // The live panel's inner active tab does NOT respond to tab:* while suppressed in the favorite.
+    expect(screen.getByTestId('jira-live')).toHaveAttribute('data-active-tab', 'j1')
+
+    // Fire tab:next — HOME owns it: it moves OFF the favorite (wrapping to the default "Cosmos" tab).
+    fireShortcut({ command: 'tab:next' })
+    await settle()
+    expect(within(strip()).getByRole('tab', { name: /Cosmos/ })).toHaveAttribute(
+      'aria-selected',
+      'true'
+    )
+    expect(within(strip()).getByRole('tab', { name: /Sprint board/ })).toHaveAttribute(
+      'aria-selected',
+      'false'
+    )
   })
 })

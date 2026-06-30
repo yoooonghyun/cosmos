@@ -41,6 +41,7 @@ import { TooltipProvider } from '@/components/ui/tooltip'
 import { CosmosPanel } from './CosmosPanel'
 import { ActiveComposerProvider } from '../composer/ActiveComposerProvider'
 import { PanelTabsProvider } from '../panelTabs'
+import { PanelHostProvider } from '../panelHost'
 import { SessionProvider } from '../session/SessionProvider'
 import type { PromptContext } from '../../shared/promptContext/promptContext'
 import type { Conversation } from '../../shared/types/conversation'
@@ -130,7 +131,9 @@ function renderPanel(): void {
       <SessionProvider snapshot={null}>
         <ActiveComposerProvider>
           <PanelTabsProvider>
-            <CosmosPanel active />
+            <PanelHostProvider>
+              <CosmosPanel active />
+            </PanelHostProvider>
           </PanelTabsProvider>
         </ActiveComposerProvider>
       </SessionProvider>

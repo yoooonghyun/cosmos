@@ -48,7 +48,6 @@ import type { CrossPanelId, LivePanelTabs } from '../panelTabs'
 import { useReportPanel } from '../session/SessionProvider'
 import type { GenerativePanelKey } from '../../shared/ipc'
 import type { AdapterBinding, AdapterDescriptor } from '../../shared/types/adapter'
-import { projectLivePanelTab } from '../cosmos/livePanelProjection'
 
 /** A rendered surface stored on a tab: the spec to (re)process + its requestId. */
 export interface TabSurface {
@@ -154,21 +153,6 @@ export interface GenerativeTab {
    * email-like ids. Only google-calendar tabs ever set it; the other panels never do.
    */
   hiddenCalendars?: string[]
-  /**
-   * The favorite-only NATIVE-VIEW mirror surface (cosmos-native-view-mirror-surface-v1,
-   * FR-001). Native-first panels (Confluence, Slack) build a secret-free bound {@link
-   * TabSurface} projecting their CURRENT native view (feed/search/page; channel-list/history/
-   * search) and store it HERE — distinct from {@link surface} (which stays the agent-COMPOSED
-   * surface). A Home favorite resolves `mirrorSurface ?? surface`, so a favorite mirrors native
-   * browsing too. MUTUALLY EXCLUSIVE with `surface` on publish: the publish projection nulls
-   * `mirrorSurface` whenever `surface` is present (livePanelProjection), so the favorite always
-   * shows exactly what the source shows. Built in the RENDERER from on-screen data (OQ-2), only
-   * while the source tab is PINNED (OQ-3 gate). NON-SECRET (the builders' secret-free output),
-   * renderer-only ref pass (no IPC), and NEVER persisted — `buildGenerativeTab` does not
-   * whitelist it (FR-006/FR-013). Only Confluence/Slack tabs ever set it; Jira/Generated-UI
-   * never do (they push composed surfaces instead).
-   */
-  mirrorSurface?: TabSurface | null
 }
 
 export interface GenerativePanelTabs extends PanelTabsController<GenerativeTab> {
@@ -337,14 +321,12 @@ export function useGenerativePanelTabs(
       panelTabsPanelId === null
         ? null
         : {
-            // cosmos-home-favorite-tabs-v1: carry each tab's CURRENT live `surface` so a Home favorite
-            // can MIRROR it through the shared `ActiveTabSurface` host (renderer-only ref pass, NO IPC,
-            // NON-SECRET by the A2UI render contract — never a token/path/transcript, never persisted).
-            // cosmos-native-view-mirror-surface-v1 (D2): `projectLivePanelTab` ALSO carries each tab's
-            // favorite-only `mirrorSurface` (native-view projection), applying the mutual-exclusivity
-            // rule (`surface ? null : mirrorSurface`) so a favorite resolves `mirrorSurface ?? surface`
-            // to exactly what the source shows.
-            tabs: tabs.map(projectLivePanelTab),
+            // cosmos-favorite-live-panel-portal-v1: the published tab is LABEL-ONLY ({id,label}). A
+            // Home favorite of a generative panel no longer reads a published surface — it renders the
+            // LIVE source panel itself (reparented via the panel-host portal). The tree consumer
+            // (`toPanelTabGroups`) only needs {id,label}, and favorite GONE detection is by tab
+            // EXISTENCE in this list. (No `surface`/`mirrorSurface` — those evolutions are superseded.)
+            tabs: tabs.map((t) => ({ id: t.id, label: t.label })),
             activeTabId
           },
     [panelTabsPanelId, tabs, activeTabId]

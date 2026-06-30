@@ -64,14 +64,13 @@ import { SURFACE_ICON } from '../app/surfaceIcons'
 import { ResizeDivider } from '../fileExplorer/ResizeDivider'
 import {
   useAllPanelTabs,
-  usePublishPins,
-  pinnedSourceKey,
   toPanelTabGroups,
   reconcileSelectedContext,
   type CrossPanelId,
   type LivePanelTab,
   type PanelTabGroup
 } from '../panelTabs'
+import { usePanelHost, isGenerativePanelId } from '../panelHost'
 import { RAIL_LABEL, visibleSurfaceIds } from '../app/railVisibility'
 import {
   useEnabledIntegrations,
@@ -157,6 +156,34 @@ export function CosmosPanel({ active }: { active: boolean }): React.JSX.Element 
   tabsStateRef.current = tabsState
   const scrollRef = useRef<HTMLDivElement>(null)
 
+  // cosmos-favorite-live-panel-portal-v1: the active Home tab decides whether a generative panel is
+  // relocated into Home. A FAVORITE active tab → its `source` is the active favorite (the panel-host
+  // selector relocates that panel's live instance here); a `default` active tab → null. Derived from
+  // `tabsState` ABOVE Home's `useTabShortcuts` so the cede-keyboard gate can read `favoriteActive`.
+  const activeTab = tabsState.tabs.find((t) => t.id === tabsState.activeTabId)
+  const activeFavoriteSource =
+    activeTab?.kind === 'favorite' && activeTab.source ? activeTab.source : null
+  const favoriteActive = activeFavoriteSource !== null
+
+  // Publish the active favorite source to the App-root PanelHostProvider so the rail OutPortals AND
+  // the favorite OutPortal read ONE consistent `(visibleSurface, activeFavoriteSource)` (the
+  // ONE-CLAIMER invariant). Synchronous-state publish (an effect off the derived value), de-duped in
+  // the provider so it never churns the OutPortals.
+  const { setActiveFavoriteSource, focusSourceTab } = usePanelHost()
+  useEffect(() => {
+    setActiveFavoriteSource(activeFavoriteSource)
+  }, [activeFavoriteSource, setActiveFavoriteSource])
+
+  // FR-006 (initial-focus-then-free): when a favorite of a GENERATIVE panel becomes the active Home
+  // tab, fire the one-shot focus so the relocated live panel opens on the pinned source tab. The
+  // panel's registered handler calls its own `setActive(tabId)` ONCE; the user then navigates the
+  // live panel freely (no continuous re-pin). A GONE source (no such tab) is a safe no-op there.
+  useEffect(() => {
+    if (activeFavoriteSource && isGenerativePanelId(activeFavoriteSource.panelId)) {
+      focusSourceTab(activeFavoriteSource.panelId, activeFavoriteSource.tabId)
+    }
+  }, [activeFavoriteSource, focusSourceTab])
+
   // cosmos-home-keyboard-tab-nav-v1 (FR-001..FR-006/FR-014): Home participates in the SHARED global
   // tab-cycle shortcuts (tab:next/prev = Ctrl+Tab / Cmd+Opt+Arrow; tab:jump = mod+1..8; tab:last =
   // mod+9), gated on the `active` rail-surface prop, cycling `cosmosTabs` order (default first, then
@@ -165,6 +192,10 @@ export function CosmosPanel({ active }: { active: boolean }): React.JSX.Element 
   // tab:new (Q5) and tab:close (Q4) are structural no-ops in Home. The roving strip-focus arrow nav on
   // PanelTabStrip stays intact (additive). FR-008 (no stray char in a focused composer) is guaranteed
   // by main-side preventDefault (§4.12) — main consumes the keystroke before the DOM sees it.
+  // cosmos-favorite-live-panel-portal-v1 (OQ-1 reversal — user feedback): a generative favorite shows
+  // only the relocated panel's BODY, with the inner panel's tab strip SUPPRESSED, so Home KEEPS the
+  // global `tab:*` shortcuts (no nested strip to cede them to). The relocated panel gates its own
+  // `useTabShortcuts` to its RAIL surface only, so there is no double-bind while a favorite is shown.
   useTabShortcuts({
     active,
     tabs: tabsState.tabs,
@@ -219,21 +250,6 @@ export function CosmosPanel({ active }: { active: boolean }): React.JSX.Element 
   useEffect(() => {
     sessionRegistry.setFavorites(toHomeFavorites(tabsState))
   }, [tabsState, sessionRegistry])
-
-  // cosmos-native-view-mirror-surface-v1 (D6, the OQ-3 gate): publish the set of pinned source
-  // `"panelId:tabId"` keys BACK to the source panels so a native-first panel (Confluence/Slack)
-  // only builds a favorite mirror for a tab a favorite actually points at — never churns building
-  // a mirror nobody pinned. Derived from the current favorite tabs (non-secret ids only).
-  const publishPins = usePublishPins()
-  useEffect(() => {
-    const keys = new Set<string>()
-    for (const tab of tabsState.tabs) {
-      if (tab.kind === 'favorite' && tab.source) {
-        keys.add(pinnedSourceKey(tab.source.panelId, tab.source.tabId))
-      }
-    }
-    publishPins(keys)
-  }, [tabsState, publishPins])
 
   // FR-001/FR-010: pin a source tab as a favorite (idempotent/de-duped) WITHOUT activating it —
   // pinning is non-disruptive, the user stays on the current tab (the favorite just appears in the
@@ -390,9 +406,7 @@ export function CosmosPanel({ active }: { active: boolean }): React.JSX.Element 
   // which submits to the SOURCE target (jira/slack/…), not the Cosmos conversation. So on a favorite
   // tab Home HIDES its docked composer (publishes a null 'cosmos' config) and renders the SOURCE's
   // already-published composer config (read by key from the shared registry) as a floating composer.
-  const activeTab = tabsState.tabs.find((t) => t.id === tabsState.activeTabId)
-  const activeFavoriteSource =
-    activeTab?.kind === 'favorite' && activeTab.source ? activeTab.source : null
+  // (`activeTab`/`activeFavoriteSource`/`favoriteActive` are derived above the keyboard gate.)
   // The source panel's published composer wiring (it publishes unconditionally while connected, so it
   // is in the registry even though Home — not the source — is the active rail surface). Read by key;
   // the fallback key when no favorite is active is harmless (its result is only used when a favorite is).
@@ -405,7 +419,6 @@ export function CosmosPanel({ active }: { active: boolean }): React.JSX.Element 
   // `null` while a favorite tab is active so the docked Cosmos composer (+ its footer) hides — the
   // favorite shows the SOURCE's floating composer instead (rendered below).
   const showSpinner = live?.phase === 'generating'
-  const favoriteActive = activeFavoriteSource !== null
   usePublishComposer(
     'cosmos',
     useMemo(

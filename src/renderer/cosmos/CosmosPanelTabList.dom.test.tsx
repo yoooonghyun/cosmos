@@ -24,6 +24,7 @@ import {
   useActiveComposerConfig
 } from '../composer/ActiveComposerProvider'
 import { PanelTabsProvider, usePublishPanelTabs, type LivePanelTabs } from '../panelTabs'
+import { PanelHostProvider } from '../panelHost'
 import { SessionProvider } from '../session/SessionProvider'
 import { SESSION_SCHEMA_VERSION, type AgentSubmitPayload, type SessionSnapshot } from '../../shared/ipc'
 
@@ -131,9 +132,11 @@ function renderApp(tabs: LivePanelTabs = twoJiraTabs): { rerender: (t: LivePanel
       <SessionProvider snapshot={snapshot}>
         <ActiveComposerProvider>
           <PanelTabsProvider>
-            <CosmosPanel active />
-            <JiraPublisher tabs={t} />
-            <ComposerProbe />
+            <PanelHostProvider>
+              <CosmosPanel active />
+              <JiraPublisher tabs={t} />
+              <ComposerProbe />
+            </PanelHostProvider>
           </PanelTabsProvider>
         </ActiveComposerProvider>
       </SessionProvider>

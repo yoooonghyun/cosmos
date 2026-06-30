@@ -363,7 +363,7 @@ detail.
   (`useExplorerPanes(paneId, mirror ? false : live, …)` keeps the explorer inert + Monaco unmounted),
   (e) shows the exit banner READ-ONLY (no Restart). The favorite branch lives in
   `cosmos/TerminalFavoriteSurface.tsx` (`FavoriteSurface` branches on `source.panelId === 'terminal'`
-  BEFORE the `favoriteCatalogHosts` lookup).
+  BEFORE the generative `GenerativeFavorite` portal path — see the reparenting-portal gotcha below).
 - **The terminal favorite now mirrors the FULL view — the file-explorer split too — via SHARED
   state + separate render (cosmos-terminal-favorite-explorer-share-v1).** This RELAXES the base's
   "terminal pane only" (the `mirror ? false : live` inert-gate is gone — the mirror now calls
@@ -418,40 +418,39 @@ detail.
   active-effect resize on a measurable (non-zero) container, so only the on-screen view drives
   `pty:resize` (race-free arbitration; also fixes a latent bug where a hidden terminal resized the PTY
   because `safeFit()` swallowed the throw but the resize still fired).
-- **A Confluence/Slack favorite mirrors the NATIVE browsing view via `mirrorSurface` (cosmos-native-
-  view-mirror-surface-v1).** Native-first panels render native React and never write `tab.surface`, so a
-  favorite of a natively-browsing tab used to WAIT forever. NOW `GenerativeTab`/`LivePanelTab` carry an
-  additive favorite-only `mirrorSurface?: TabSurface\|null`, and `FavoriteSurface` resolves
-  **`mirrorSurface ?? surface`**. The panel lifts its on-screen native data via child `onData` callbacks
-  (`ContentList`/`PageDetail` for Confluence; `ChannelList`/`MessageList`/`SearchResults` for Slack),
-  picks the current view, and builds a SECRET-FREE bound `TabSurface` with `nativeMirror.build{Confluence,
-  Slack}Mirror` (which wrap the RELOCATED shared `surfaceBuilders/{confluence,slack}SurfaceBuilder`).
-  GOTCHAS: (1) the publish memo MUST go through `livePanelProjection.projectLivePanelTab` — it enforces
-  MUTUAL EXCLUSIVITY (`mirrorSurface: surface ? null : mirrorSurface`) so a composed surface always wins
-  while shown and a stale mirror can never mask it. (2) Build the mirror ONLY while the tab is PINNED —
-  read `usePinnedSources()` (the reverse channel Cosmos fills via `publishPins`, both on
-  `PanelTabsProvider`) and gate on `pins.has(pinnedSourceKey(panelId, activeTabId))`, else you churn
-  `update()`/republish for tabs no favorite points at. (3) The build effect mints a FRESH `requestId`
-  every run, so it MUST de-dupe via a CONTENT key (`{confluence,slack}MirrorKey` — tab + kind + query/id
-  + cursor + row ids, ignoring the requestId) and skip the `update()` when unchanged, or it loops. (4)
-  Slack OQ-5: the native lists already resolve author `userName` in the RENDERER (`resolveNames` /
-  `resolveMatchNames` run before `setItems`), so lifting the on-screen `items` gives the mirror REAL
-  names, not raw ids — reuse that resolved data, do NOT re-resolve. The mirror is renderer-only,
-  non-secret, DISPLAY-ONLY (its own load-more is not wired — it re-projects as the source grows), and
-  NEVER persisted (`buildGenerativeTab` does not whitelist `mirrorSurface`).
-- **A Google Calendar favorite is NOT a `mirrorSurface` case — it needs a PINNED-tab FETCH instead
-  (calendar-favorite-waiting-v1).** Unlike Confluence/Slack, the calendar's default view IS a pushed
-  `target:'google-calendar'` frame the shared hook files straight into `tab.surface` (no
-  `onUnsolicitedFrame` interceptor routes it away, like Jira), so the favorite already mirrors it via
-  `mirrorSurface ?? surface` — do NOT add a `buildCalendarMirror`. The bug was that
-  `GoogleCalendarPanel`'s default-view fetch was gated on `active`, so a pinned-but-HIDDEN calendar tab
-  (after a restart — the live `composed:false` default view is NOT persisted and re-fetches; all panels
-  are `forceMount`ed so a hidden panel stays mounted with `active===false`) never fetched → `tab.surface`
-  null → favorite WAITING forever. FIX: gate the fetch on `(active || isActivePinned)`, where
-  `isActivePinned = pins.has(pinnedSourceKey('google-calendar', activeTabId))` reads the SAME reverse
-  `usePinnedSources()` channel the native mirror uses. **General rule: if a panel's surface is fetched
-  only when `active`, its Home favorite is stuck WAITING after restart unless the fetch ALSO fires when
-  the tab is pinned.** Non-pinned hidden tabs still do not eager-read (policy preserved).
+- **A generative favorite renders the LIVE source panel itself, REPARENTED via a reverse portal
+  (cosmos-favorite-live-panel-portal-v1) — this SUPERSEDES the `mirrorSurface` surface-mirror, which
+  was DELETED.** The old surface-mirror (`nativeMirror.ts`, `livePanelProjection.ts`,
+  `favoriteCatalogHosts.tsx`, the `surface`/`mirrorSurface` fields, the `publishPins`/`usePinnedSources`
+  reverse channel, the calendar pinned-fetch hack) is GONE. The favorite now shows the SAME component the
+  rail shows because it IS that component. Mechanics:
+  - `panelHost/` (`PanelHostProvider`, sibling to `PanelTabsProvider`) owns FOUR stable
+    `createHtmlPortalNode()` nodes (one per generative panel, via `react-reverse-portal`), the synchronous
+    React state `visibleSurface` (lifted from `AppShell` — `AppShell` reads it via `usePanelHost()` now,
+    no local `surface` state) + `activeFavoriteSource` (published by `CosmosPanel`), and a one-shot
+    `focusSourceTab`/`onFocusTab` channel.
+  - `App.tsx` renders each generative panel ONCE through `<InPortal node={node(id)}>` (off-DOM, mounted
+    once → state permanent) and mounts it via exactly one `<OutPortal>`: the rail slot iff
+    `hostFor(id)==='rail'`, the Home favorite slot (`FavoriteSurface`) iff `hostFor(id)==='favorite'`.
+    The PURE `hostFor`/`panelVisible` selectors live in `panelHost/panelHostLogic.ts`.
+  - **THE ONE-CLAIMER INVARIANT (the correctness risk):** both render sites compute `hostFor` from the
+    SAME `(visibleSurface, activeFavoriteSource)`, so EXACTLY ONE OutPortal claims each node. Moving the
+    OutPortal REPARENTS the DOM node WITHOUT remount (state survives). `hostFor='favorite'` iff
+    `visibleSurface==='cosmos' && activeFavoriteSource?.panelId===id`.
+  - **`active` is redefined to mean VISIBLE** = `panelVisible(...)` (rail-active OR hosted in the active
+    favorite). It drives render/scroll/resize AND the default-view fetch — so the calendar gate reverted
+    to plain `active` (no pinned-fetch hack).
+  - **GOTCHA (provider required):** `CosmosPanel`, `FavoriteSurface` (generative branch), and all four
+    generative panels call `usePanelHost()` → every test that renders them MUST wrap in
+    `PanelHostProvider`. `FavoriteSurface`'s TERMINAL branch is split into a separate component so the
+    terminal favorite does NOT need the provider (and `TerminalFavoriteSurface` is unchanged — the
+    terminal favorite keeps its xterm multiplex; only the four generative panels use the portal).
+  - **OQ-1 reversal (user feedback): a relocated panel renders BODY-ONLY in a favorite** — it SUPPRESSES
+    its OWN `PanelTabStrip` AND its OWN `PanelFooter` while `hostFor(id)==='favorite'` (no tab-list and no
+    second footer nested inside a Home tab; Home shows only its own docked footer). Consequently the inner
+    panel's `useTabShortcuts` is gated `active && hostFor!=='favorite'` (rail surface only) and **Home
+    KEEPS `tab:*`** (it does NOT cede). Focus-on-activation (`focusSourceTab` → the panel's `onFocusTab`
+    handler → `setActive`) still focuses the pinned tab so the body shown is the pinned one.
 - **GOTCHA — the bound surface builders live in `src/shared/surfaceBuilders/`, not `src/main/`.** The six
   `buildBound*Surface` builders + the row mappers (`confluenceResultRow`/`slack{Channel,Message,Search}Row`)
   + the `*_PATH`/surface-id constants moved to `src/shared/surfaceBuilders/{confluence,slack}SurfaceBuilder.ts`

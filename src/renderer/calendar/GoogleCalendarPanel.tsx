@@ -78,7 +78,7 @@ import { usePublishComposer } from '../composer/ActiveComposerProvider'
 import { SurfaceSpinner } from '../app/SurfaceSpinner'
 import { GlassDock } from '../glassDock/GlassDock'
 import { useGenerativePanelTabs } from '../tabs/useGenerativePanelTabs'
-import { usePinnedSources, pinnedSourceKey } from '../panelTabs'
+import { usePanelHost } from '../panelHost'
 import { calendarViewContext, contextChipFor } from '../app/viewContextCapture'
 import { useRestoredGenerativePanel } from '../session/SessionProvider'
 import { seedHiddenCalendarIds } from './googleCalendarCatalog/logic'
@@ -284,29 +284,30 @@ export function GoogleCalendarPanel({ active }: { active: boolean }): React.JSX.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tabs.length])
 
-  // calendar-favorite-waiting-v1: a calendar tab pinned as a Home favorite mirrors the source
-  // tab's `surface` (the favorite resolves `mirrorSurface ?? surface`; the calendar's pushed
-  // default-view frame IS filed into `tab.surface` by the shared hook — no native-mirror needed).
-  // BUT the default-view fetch below is gated on `active`, so a pinned-but-hidden calendar tab —
-  // e.g. after a restart, since the live default view (composed:false) is NOT persisted and
-  // re-fetches on restore — never fetches while the user sits in Home → `tab.surface` stays null →
-  // the favorite shows "Waiting for this tab's view…" forever. So ALSO fetch when the active tab is
-  // PINNED, reusing the existing reverse pinned-sources channel (the OQ-3 gate Confluence/Slack use)
-  // so only a tab a favorite points at eager-reads while hidden.
-  const pins = usePinnedSources()
-  const isActivePinned =
-    activeTabId != null && pins.has(pinnedSourceKey('google-calendar', activeTabId))
+  // cosmos-favorite-live-panel-portal-v1: SUPPRESS this panel's tab strip while relocated into a Home
+  // favorite (the favorite shows only the active tab's body — no nested tab-list). FR-006: register the
+  // focus handler so a Home favorite focuses this LIVE panel onto the pinned source tab on activation,
+  // so the suppressed-strip favorite shows the PINNED tab's body.
+  const { onFocusTab, hostFor } = usePanelHost()
+  const favoriteHosted = hostFor('google-calendar') === 'favorite'
+  const setActiveRef = useRef(setActive)
+  setActiveRef.current = setActive
+  useEffect(
+    () => onFocusTab('google-calendar', (tabId) => setActiveRef.current(tabId)),
+    [onFocusTab]
+  )
 
-  // Lazily load the default month into an EMPTY tab once the panel is shown (OR a favorite points at
-  // its active tab) AND connected (FR-014). Keyed on the active tab's emptiness: a fresh `+`/seed
-  // tab, a reconnect, or first show all resolve to "active tab has no surface, not loading, no error,
-  // not in-flight" → fire one `requestDefaultInActiveTab(requestDefaultView)`. That marks the tab
-  // loadingDefault (its skeleton), so the condition immediately goes false and never loops. Gated on
-  // `active || isActivePinned` so a connected-but-hidden panel does not eager-read UNLESS a Home
-  // favorite needs the surface (calendar-favorite-waiting-v1).
+  // Lazily load the default month into an EMPTY tab once the panel is VISIBLE AND connected (FR-014).
+  // Keyed on the active tab's emptiness: a fresh `+`/seed tab, a reconnect, or first show all resolve
+  // to "active tab has no surface, not loading, no error, not in-flight" → fire one
+  // `requestDefaultInActiveTab(requestDefaultView)`. That marks the tab loadingDefault (its skeleton),
+  // so the condition immediately goes false and never loops. cosmos-favorite-live-panel-portal-v1
+  // (REVERT of calendar-favorite-waiting-v1): `active` now means VISIBLE = rail-active OR hosted in
+  // the active Home favorite, so a favorited Calendar tab is genuinely `active` when shown and the
+  // default-view effect fires naturally — the old `isActivePinned` + pinned-sources hack is gone.
   useEffect(() => {
     if (
-      (active || isActivePinned) &&
+      active &&
       isConnected &&
       activeTab &&
       !activeTab.surface &&
@@ -316,7 +317,7 @@ export function GoogleCalendarPanel({ active }: { active: boolean }): React.JSX.
     ) {
       requestDefaultInActiveTab(() => window.cosmos.googleCalendar.requestDefaultView())
     }
-  }, [active, isActivePinned, isConnected, activeTab, requestDefaultInActiveTab])
+  }, [active, isConnected, activeTab, requestDefaultInActiveTab])
 
   // calendar-month-year-nav-v1 (Decision 3) → calendar-week-day-views-v1 (FR-002): the
   // per-tab displayed VIEW INTENT — a renderer-only, SESSION-ONLY ephemeral
@@ -635,9 +636,10 @@ export function GoogleCalendarPanel({ active }: { active: boolean }): React.JSX.
     [clearIntent, closeTab]
   )
 
-  // Tab keyboard shortcuts act on THIS strip only while the Calendar surface is active.
+  // Tab keyboard shortcuts act on THIS strip only while it is the active RAIL surface (not while
+  // hosted in a favorite, where the strip is suppressed and Home owns `tab:*`).
   useTabShortcuts({
-    active,
+    active: active && !favoriteHosted,
     tabs,
     activeTabId,
     onActivate: setActive,
@@ -671,24 +673,26 @@ export function GoogleCalendarPanel({ active }: { active: boolean }): React.JSX.
       aria-label="Google Calendar"
     >
       {/* Terminal-unified layout: the tab strip is the topmost element (no title header).
-          The connection status moves to the footer; the not-connected CTA renders inside the
-          active tab's content region. */}
-      <PanelTabStrip
-        tabs={stripTabs}
-        activeTabId={activeTabId}
-        onActivate={setActive}
-        onClose={handleCloseTab}
-        onNewTab={newTab}
-        onRename={(id, label) => update(id, { label, renamed: true, untitled: false })}
-        trailing={
-          <PanelRefreshButton
-            activeTab={refreshInputs.activeTab}
-            requestId={refreshInputs.requestId}
-            {...(isLiveDefaultView ? { onRefresh: onRefreshLiveDefaultView } : {})}
-          />
-        }
-        ariaLabel="Calendar tabs"
-      />
+          cosmos-favorite-live-panel-portal-v1: SUPPRESSED while relocated into a Home favorite (the
+          favorite shows only the active tab's body — no nested tab-list). */}
+      {!favoriteHosted && (
+        <PanelTabStrip
+          tabs={stripTabs}
+          activeTabId={activeTabId}
+          onActivate={setActive}
+          onClose={handleCloseTab}
+          onNewTab={newTab}
+          onRename={(id, label) => update(id, { label, renamed: true, untitled: false })}
+          trailing={
+            <PanelRefreshButton
+              activeTab={refreshInputs.activeTab}
+              requestId={refreshInputs.requestId}
+              {...(isLiveDefaultView ? { onRefresh: onRefreshLiveDefaultView } : {})}
+            />
+          }
+          ariaLabel="Calendar tabs"
+        />
+      )}
 
       {/* Content region (the active tab's content). */}
       <div className="flex min-h-0 flex-1 flex-col overflow-auto scrollbar-hover-only">
@@ -798,24 +802,27 @@ export function GoogleCalendarPanel({ active }: { active: boolean }): React.JSX.
       {/* open-prompt-hoist-v1: the composer is now ONE App-level instance; this panel
           publishes its wiring (gated on isConnected) via usePublishComposer above. */}
 
-      {/* Connection bar is the panel footer (Terminal-unified layout). */}
-      <PanelFooter
-        surfaceName="Calendar"
-        icon={SURFACE_ICON['google-calendar']}
-        activeTab={activeStripTab}
-        right={
-          <GoogleConnectionStatus
-            status={status}
-            onDisconnect={() =>
-              confirmDisconnect.requestConfirm(
-                { integration: 'google-calendar', label: 'Google Calendar' },
-                () => void disconnect()
-              )
-            }
-            onCancel={() => void cancelConnect()}
-          />
-        }
-      />
+      {/* Connection bar is the panel footer (Terminal-unified layout). cosmos-favorite-live-panel-
+          portal-v1: SUPPRESSED while relocated into a Home favorite (Home shows only its own footer). */}
+      {!favoriteHosted && (
+        <PanelFooter
+          surfaceName="Calendar"
+          icon={SURFACE_ICON['google-calendar']}
+          activeTab={activeStripTab}
+          right={
+            <GoogleConnectionStatus
+              status={status}
+              onDisconnect={() =>
+                confirmDisconnect.requestConfirm(
+                  { integration: 'google-calendar', label: 'Google Calendar' },
+                  () => void disconnect()
+                )
+              }
+              onCancel={() => void cancelConnect()}
+            />
+          }
+        />
+      )}
 
       <ConfirmDialog
         open={confirmDisconnect.state.open}

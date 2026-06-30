@@ -94,8 +94,7 @@ import { loadAllChannels } from './slackChannelSearchLogic'
 import { useConfirm } from '../confirm/useConfirm'
 import { ConfirmDialog } from '@/components/ui/confirm-dialog'
 import { confirmCopy } from '../confirm/confirmLogic'
-import { usePinnedSources, pinnedSourceKey } from '../panelTabs'
-import { buildSlackMirror, type SlackMirrorView } from '../cosmos/nativeMirror'
+import { usePanelHost } from '../panelHost'
 import type {
   SlackChannel,
   SlackConnectionStatus,
@@ -115,27 +114,6 @@ import type {
  * (search + history + thread all render through it — bug slack-search-shared-row-v1), so
  * the panel no longer hand-rolls those formatters.
  * ------------------------------------------------------------------------- */
-
-/**
- * cosmos-native-view-mirror-surface-v1 (D5): a CONTENT key for the favorite mirror that ignores the
- * per-build requestId, so an unchanged native view never re-publishes the mirror in a loop. Captures
- * the active tab, the view kind, the channel id / query, the next cursor, and the row ids/timestamps
- * (which grow on load-more) — every change that should rebuild the mirror.
- */
-function slackMirrorKey(tabId: string, view: SlackMirrorView): string {
-  if (!view) {
-    return `${tabId}|none`
-  }
-  if (view.kind === 'history') {
-    return `${tabId}|history|${view.channelId}|${view.page.nextCursor ?? ''}|${view.page.items
-      .map((m) => m.ts)
-      .join(',')}`
-  }
-  if (view.kind === 'search') {
-    return `${tabId}|search|${view.query}|${view.page.items.map((m) => m.ts).join(',')}`
-  }
-  return `${tabId}|channels|${view.page.nextCursor ?? ''}|${view.page.items.map((c) => c.id).join(',')}`
-}
 
 /* ------------------------------------------------------------------------- *
  * Small shared sub-views (uniform across read surfaces — design §2.3)
@@ -405,8 +383,7 @@ function ConnectForm({
 function ChannelList({
   onOpen,
   onReconnect,
-  filter,
-  onData
+  filter
 }: {
   onOpen: (channel: SlackChannel) => void
   onReconnect: () => void
@@ -415,12 +392,6 @@ function ChannelList({
   // local Input here. Client-side only — a pure substring filter over the already-loaded
   // channels; no extra Slack read, no token, no IPC. Empty ⇒ the full browse list.
   filter: string
-  /**
-   * cosmos-native-view-mirror-surface-v1 (D5): lift the CURRENTLY DISPLAYED (name-filtered) channel
-   * rows + the next cursor up to the panel so a Home favorite can mirror the native channel list.
-   * The panel ignores it unless this tab is pinned.
-   */
-  onData?: (page: SlackPage<SlackChannel>) => void
 }): React.JSX.Element {
   const [items, setItems] = useState<SlackChannel[]>([])
   const [cursor, setCursor] = useState<string | undefined>(undefined)
@@ -494,18 +465,6 @@ function ChannelList({
       cancelled = true
     }
   }, [filtering])
-
-  // cosmos-native-view-mirror-surface-v1 (D5): lift the displayed (name-filtered) channel rows up
-  // to the panel for the favorite mirror, recomputing the SAME `visible` set the render derives.
-  // Before the early returns (rules of hooks); a no-op until the first load resolves.
-  useEffect(() => {
-    if (!loaded) {
-      return
-    }
-    const src = filtering && allChannels ? allChannels : items
-    const vis = filterChannelsByName(src, filter)
-    onData?.({ items: vis, ...(cursor ? { nextCursor: cursor } : {}) })
-  }, [onData, loaded, filtering, allChannels, items, filter, cursor])
 
   if (error?.kind === 'reconnect_needed') {
     return <ReconnectState onReconnect={onReconnect} />
@@ -596,7 +555,6 @@ function MessageList({
   onOpenThread,
   onReconnect,
   resolveNames,
-  onData,
   scroll = true,
   olderAbove = true
 }: {
@@ -605,14 +563,6 @@ function MessageList({
   onOpenThread?: (message: SlackMessage) => void
   onReconnect: () => void
   resolveNames: (messages: SlackMessage[]) => Promise<SlackMessage[]>
-  /**
-   * cosmos-native-view-mirror-surface-v1 (D5): lift the CURRENT (name-resolved, accumulated)
-   * messages + next cursor up to the panel so a Home favorite can mirror the native channel history.
-   * Passed ONLY by the channel-HISTORY instance (the thread-dock reply list omits it). The lifted
-   * rows already carry resolved `userName` (OQ-5 — `resolveNames` ran before `setItems`), so the
-   * mirror shows author names, not raw ids. The panel ignores it unless this tab is pinned.
-   */
-  onData?: (page: SlackPage<SlackMessage>) => void
   /**
    * Whether this list owns its own vertical scroll (bug slack-thread-unified-scroll-v1).
    * `true` (default) — history/search: wrap in a `ScrollArea h-full` that fills the column.
@@ -706,16 +656,6 @@ function MessageList({
     },
     [scrollRef, paginateRef]
   )
-
-  // cosmos-native-view-mirror-surface-v1 (D5): lift the resolved, accumulated messages + cursor up
-  // for the favorite mirror (only the history instance passes `onData`). Before the early returns
-  // (rules of hooks); a no-op until the first load resolves.
-  useEffect(() => {
-    if (!loaded) {
-      return
-    }
-    onData?.({ items, ...(cursor ? { nextCursor: cursor } : {}) })
-  }, [onData, loaded, items, cursor])
 
   if (error?.kind === 'reconnect_needed') {
     return <ReconnectState onReconnect={onReconnect} />
@@ -1118,18 +1058,10 @@ function SearchResults({
   query,
   onReconnect,
   resolveMatchNames,
-  onOpenThread,
-  onData
+  onOpenThread
 }: {
   query: string
   onReconnect: () => void
-  /**
-   * cosmos-native-view-mirror-surface-v1 (D5): lift the name-resolved search matches up to the panel
-   * for the favorite mirror (the rows already carry resolved `userName` — OQ-5). search.messages has
-   * no forward cursor here, so the mirror shows the first page (hasMore false). Panel ignores it
-   * unless this tab is pinned.
-   */
-  onData?: (page: SlackPage<SlackSearchMatch>) => void
   /**
    * Resolve author ids → display names on the search matches (bug slack-search-row-data-parity-v1).
    * search.messages does NOT return a display name, so without this the rows showed the raw
@@ -1171,15 +1103,6 @@ function SearchResults({
   useEffect(() => {
     void run()
   }, [run])
-
-  // cosmos-native-view-mirror-surface-v1 (D5): lift the resolved search matches up for the favorite
-  // mirror. Before the early returns (rules of hooks); a no-op until the first search resolves.
-  useEffect(() => {
-    if (!loaded) {
-      return
-    }
-    onData?.({ items })
-  }, [onData, loaded, items])
 
   if (error?.kind === 'reconnect_needed') {
     return <ReconnectState onReconnect={onReconnect} />
@@ -1318,8 +1241,13 @@ export function SlackPanel({ active }: { active: boolean }): React.JSX.Element {
     },
     [dropNav, closeTab]
   )
-  // Tab keyboard shortcuts act on THIS strip only while the Slack surface is active.
-  useTabShortcuts({ active, tabs, activeTabId, onActivate: setActive, onNewTab: newTab, onCloseTab: handleCloseTab })
+  // cosmos-favorite-live-panel-portal-v1: SUPPRESS this panel's tab strip while it is relocated into a
+  // Home favorite (the favorite shows only the active tab's body — no nested tab-list), and keep
+  // `tab:*` on the RAIL surface only (Home owns it while a favorite is shown).
+  const { onFocusTab, hostFor } = usePanelHost()
+  const favoriteHosted = hostFor('slack') === 'favorite'
+  // Tab keyboard shortcuts act on THIS strip only while it is the active RAIL surface.
+  useTabShortcuts({ active: active && !favoriteHosted, tabs, activeTabId, onActivate: setActive, onNewTab: newTab, onCloseTab: handleCloseTab })
   // The native channel/search browser is the base shown not only at zero tabs but also
   // whenever the active tab has not composed a surface yet (a fresh `+` "Untitled" tab),
   // so a new tab lands on the same base screen instead of a blank panel.
@@ -1347,61 +1275,11 @@ export function SlackPanel({ active }: { active: boolean }): React.JSX.Element {
   // Cache of resolved display names so author ids resolve once (FR-014).
   const nameCache = useRef<Map<string, string>>(new Map())
 
-  // cosmos-native-view-mirror-surface-v1 (D5): the ACTIVE tab's lifted native data, so a Home
-  // favorite can mirror the current native view (channel list / history / search). Reset on a tab
-  // switch so an inactive tab's data never bleeds into the active mirror (OQ-3).
-  const [nativeChannelsPage, setNativeChannelsPage] = useState<SlackPage<SlackChannel> | null>(null)
-  const [nativeHistoryPage, setNativeHistoryPage] = useState<SlackPage<SlackMessage> | null>(null)
-  const [nativeSearchPage, setNativeSearchPage] = useState<SlackPage<SlackSearchMatch> | null>(null)
-  useEffect(() => {
-    setNativeChannelsPage(null)
-    setNativeHistoryPage(null)
-    setNativeSearchPage(null)
-  }, [activeTabId])
-
-  // cosmos-native-view-mirror-surface-v1 (D5/D6): build + store the favorite NATIVE-VIEW mirror for
-  // the ACTIVE tab, ONLY while it is PINNED (the OQ-3 gate) and showing its native base. Keyed off
-  // the per-tab `view` (history / search / channels). When not pinned, or while a composed surface/
-  // spinner shows (mutual exclusivity — the publish projection also nulls the mirror whenever a
-  // `surface` is present), clear any stale mirror. A content key de-dupes so an unchanged view never
-  // re-publishes in a loop.
-  const pins = usePinnedSources()
-  const isActivePinned = activeTabId != null && pins.has(pinnedSourceKey('slack', activeTabId))
-  const lastMirrorKeyRef = useRef<string>('')
-  useEffect(() => {
-    if (!activeTabId) {
-      return
-    }
-    const mview: SlackMirrorView =
-      !isActivePinned || !showNativeBase
-        ? null
-        : view.kind === 'history'
-          ? nativeHistoryPage
-            ? { kind: 'history', channelId: view.channel.id, page: nativeHistoryPage }
-            : null
-          : view.kind === 'search'
-            ? nativeSearchPage
-              ? { kind: 'search', query: view.query, page: nativeSearchPage }
-              : null
-            : nativeChannelsPage
-              ? { kind: 'channels', page: nativeChannelsPage }
-              : null
-    const key = slackMirrorKey(activeTabId, mview)
-    if (key === lastMirrorKeyRef.current) {
-      return
-    }
-    lastMirrorKeyRef.current = key
-    update(activeTabId, { mirrorSurface: buildSlackMirror(mview) })
-  }, [
-    activeTabId,
-    isActivePinned,
-    showNativeBase,
-    view,
-    nativeChannelsPage,
-    nativeHistoryPage,
-    nativeSearchPage,
-    update
-  ])
+  // cosmos-favorite-live-panel-portal-v1 (FR-006): register the focus handler so a Home favorite of
+  // Slack focuses this LIVE panel onto the pinned source tab on activation (initial-focus-then-free).
+  const setActiveRef = useRef(setActive)
+  setActiveRef.current = setActive
+  useEffect(() => onFocusTab('slack', (tabId) => setActiveRef.current(tabId)), [onFocusTab])
 
   // A generated channel-row click navigates to that channel's native conversation
   // view. Handled renderer-locally (never sent to main). With PER-TAB nav state
@@ -1626,23 +1504,25 @@ export function SlackPanel({ active }: { active: boolean }): React.JSX.Element {
       aria-label="Slack"
     >
       {/* Terminal-unified layout: the tab strip is the topmost element (no title header).
-          The connection status moves to the footer; the not-connected CTA renders inside the
-          active tab's content region (FR-002). */}
-      <PanelTabStrip
-        tabs={stripTabs}
-        activeTabId={activeTabId}
-        onActivate={setActive}
-        onClose={handleCloseTab}
-        onNewTab={newTab}
-        onRename={(id, label) => update(id, { label, renamed: true, untitled: false })}
-        trailing={
-          <PanelRefreshButton
-            activeTab={refreshInputs.activeTab}
-            requestId={refreshInputs.requestId}
-          />
-        }
-        ariaLabel="Slack tabs"
-      />
+          cosmos-favorite-live-panel-portal-v1: SUPPRESSED while relocated into a Home favorite (the
+          favorite shows only the active tab's body — no nested tab-list). */}
+      {!favoriteHosted && (
+        <PanelTabStrip
+          tabs={stripTabs}
+          activeTabId={activeTabId}
+          onActivate={setActive}
+          onClose={handleCloseTab}
+          onNewTab={newTab}
+          onRename={(id, label) => update(id, { label, renamed: true, untitled: false })}
+          trailing={
+            <PanelRefreshButton
+              activeTab={refreshInputs.activeTab}
+              requestId={refreshInputs.requestId}
+            />
+          }
+          ariaLabel="Slack tabs"
+        />
+      )}
 
       {/* Content region (the active tab's content). */}
       <div className="flex min-h-0 flex-1 flex-col">
@@ -1765,7 +1645,6 @@ export function SlackPanel({ active }: { active: boolean }): React.JSX.Element {
                         // Input is in [Channels] mode; in [Messages] mode the text targets message
                         // search, so the channel list stays the full browse list.
                         filter={searchMode === 'channels' ? searchText : ''}
-                        onData={setNativeChannelsPage}
                       />
                     )}
                     {view.kind === 'history' && (
@@ -1796,7 +1675,6 @@ export function SlackPanel({ active }: { active: boolean }): React.JSX.Element {
                             }
                             onReconnect={() => void refreshStatus()}
                             resolveNames={resolveNames}
-                            onData={setNativeHistoryPage}
                           />
                         </div>
                         {/* Channel composer (slack-send-message-v1 §2.1): keyed by channel id so a
@@ -1818,7 +1696,6 @@ export function SlackPanel({ active }: { active: boolean }): React.JSX.Element {
                         onReconnect={() => void refreshStatus()}
                         resolveMatchNames={resolveMatchNames}
                         onOpenThread={openThreadFor}
-                        onData={setNativeSearchPage}
                       />
                     )}
                   </div>
@@ -1938,23 +1815,26 @@ export function SlackPanel({ active }: { active: boolean }): React.JSX.Element {
       {/* open-prompt-hoist-v1: the composer is now ONE App-level instance; this panel
           publishes its wiring (gated on isConnected) via usePublishComposer above. */}
 
-      {/* Connection bar is the panel footer (Terminal-unified layout). */}
-      <PanelFooter
-        surfaceName="Slack"
-        icon={SURFACE_ICON.slack}
-        activeTab={activeStripTab}
-        right={
-          <ConnectionStatus
-            status={status}
-            onDisconnect={() =>
-              confirmDisconnect.requestConfirm({ integration: 'slack', label: 'Slack' }, () =>
-                void disconnect()
-              )
-            }
-            onCancel={() => void cancelConnect()}
-          />
-        }
-      />
+      {/* Connection bar is the panel footer (Terminal-unified layout). cosmos-favorite-live-panel-
+          portal-v1: SUPPRESSED while relocated into a Home favorite (Home shows only its own footer). */}
+      {!favoriteHosted && (
+        <PanelFooter
+          surfaceName="Slack"
+          icon={SURFACE_ICON.slack}
+          activeTab={activeStripTab}
+          right={
+            <ConnectionStatus
+              status={status}
+              onDisconnect={() =>
+                confirmDisconnect.requestConfirm({ integration: 'slack', label: 'Slack' }, () =>
+                  void disconnect()
+                )
+              }
+              onCancel={() => void cancelConnect()}
+            />
+          }
+        />
+      )}
 
       <ConfirmDialog
         open={confirmDisconnect.state.open}

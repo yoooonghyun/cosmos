@@ -26,6 +26,7 @@ import {
   useActiveComposerConfig
 } from '../composer/ActiveComposerProvider'
 import { PanelTabsProvider } from '../panelTabs'
+import { PanelHostProvider } from '../panelHost'
 import { SessionProvider } from '../session/SessionProvider'
 import type { ComposerConfig } from '../composer/activeComposer'
 import type { AgentStatusPayload, AgentSubmitPayload, ConversationResult } from '../../shared/ipc'
@@ -90,8 +91,10 @@ function renderPanel(): { getConfig: () => ComposerConfig | null } {
       <SessionProvider snapshot={null}>
         <ActiveComposerProvider>
           <PanelTabsProvider>
-            <CosmosPanel active />
-            <CaptureComposer onConfig={(c) => (latest = c)} />
+            <PanelHostProvider>
+              <CosmosPanel active />
+              <CaptureComposer onConfig={(c) => (latest = c)} />
+            </PanelHostProvider>
           </PanelTabsProvider>
         </ActiveComposerProvider>
       </SessionProvider>

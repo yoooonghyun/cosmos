@@ -1,8 +1,10 @@
 /**
  * node-unit (HOME-FAVORITES-01) for the PURE Home-favorites derivations
- * (cosmos-home-favorite-tabs-v1). Framework-free — `findLiveTab` reads the live source surface,
- * `reconcileFavorites` relabels-on-rename / keeps-on-close, `validateFavorites` drops malformed +
- * secret-shaped entries, and the persistence projections round-trip.
+ * (cosmos-home-favorite-tabs-v1). Framework-free — `findLiveTab` reads the live source tab (used by
+ * the favorite for GONE-vs-live detection by tab EXISTENCE, the published list being label-only since
+ * cosmos-favorite-live-panel-portal-v1), `reconcileFavorites` relabels-on-rename / keeps-on-close,
+ * `validateFavorites` drops malformed + secret-shaped entries, and the persistence projections
+ * round-trip.
  */
 import { describe, it, expect, vi } from 'vitest'
 import {
@@ -16,33 +18,27 @@ import { appendFavorite, initialCosmosTabs, favoriteId } from './cosmosTabs'
 import type { PanelTabsRegistry } from '../panelTabs/panelTabs'
 import type { PanelTabGroup } from '../panelTabs/panelTabsTree'
 
-/** A minimal TabSurface-shaped value (non-secret spec only) for the live-mirror reads. */
-const surface = (surfaceId: string) =>
-  ({ requestId: `req-${surfaceId}`, spec: { surfaceId, components: [] } }) as never
-
 const registry: PanelTabsRegistry = {
   jira: {
     tabs: [
-      { id: 'j1', label: 'Sprint board', surface: surface('s-j1') },
-      { id: 'j2', label: 'PROJ-9', surface: null }
+      { id: 'j1', label: 'Sprint board' },
+      { id: 'j2', label: 'PROJ-9' }
     ],
     activeTabId: 'j1'
   },
-  slack: { tabs: [{ id: 'c1', label: '#general', surface: surface('s-c1') }], activeTabId: 'c1' }
+  slack: { tabs: [{ id: 'c1', label: '#general' }], activeTabId: 'c1' }
 }
 
 describe('findLiveTab (HOME-FAVORITES-01)', () => {
-  it('returns the live tab WITH its current surface (the live-mirror read)', () => {
+  it('returns the live tab (label-only) for the GONE-vs-live existence check', () => {
     const tab = findLiveTab(registry, 'jira', 'j1')
     expect(tab?.label).toBe('Sprint board')
-    expect(tab?.surface).not.toBeNull()
-    expect(tab?.surface?.spec.surfaceId).toBe('s-j1')
+    expect(tab?.id).toBe('j1')
   })
 
-  it('returns the live tab with a NULL surface (waiting/in-flight source)', () => {
+  it('returns a sibling live tab by id', () => {
     const tab = findLiveTab(registry, 'jira', 'j2')
     expect(tab?.label).toBe('PROJ-9')
-    expect(tab?.surface).toBeNull()
   })
 
   it('returns null for a missing panel or missing tab (gone source)', () => {

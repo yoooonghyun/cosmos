@@ -61,8 +61,7 @@ import { useRestoredGenerativePanel } from '../session/SessionProvider'
 import { surfaceSpinnerVisible } from '../composer/promptComposerLogic'
 import { usePerTabNav } from '../tabs/usePerTabNav'
 import { useTabShortcuts } from '../tabs/useTabShortcuts'
-import { usePinnedSources, pinnedSourceKey } from '../panelTabs'
-import { buildConfluenceMirror, type ConfluenceMirrorView } from '../cosmos/nativeMirror'
+import { usePanelHost } from '../panelHost'
 import { useConfirm } from '../confirm/useConfirm'
 import { ConfirmDialog } from '@/components/ui/confirm-dialog'
 import { confirmCopy } from '../confirm/confirmLogic'
@@ -153,23 +152,6 @@ const CONFLUENCE_NAV_DEFAULT: ConfluenceNav = {
  * ------------------------------------------------------------------------- */
 
 /**
- * cosmos-native-view-mirror-surface-v1 (D5): a CONTENT key for the favorite mirror that ignores the
- * per-build requestId, so an unchanged native view never re-publishes the mirror in a loop. Captures
- * the active tab, the view kind, the search query / page id, the next cursor, and the row ids (which
- * grow on load-more) — every change that should rebuild the mirror.
- */
-function confluenceMirrorKey(tabId: string, view: ConfluenceMirrorView): string {
-  if (!view) {
-    return `${tabId}|none`
-  }
-  if (view.kind === 'page') {
-    return `${tabId}|page|${view.detail.id}|${view.detail.webUrl ?? ''}`
-  }
-  const ids = view.page.items.map((i) => i.id).join(',')
-  return `${tabId}|${view.kind}|${view.kind === 'search' ? view.query : ''}|${view.page.nextCursor ?? ''}|${ids}`
-}
-
-/**
  * Generalized content list (confluence-default-feed v1, FR-002). Renders any paginated
  * `ConfluenceSearchResult` source — text search OR the default personal feed — via the
  * same five states, "Load more" pagination, and row-click drill-in. The source is
@@ -183,8 +165,7 @@ function ContentList({
   reloadKey,
   emptyLabel,
   onOpen,
-  onReconnect,
-  onData
+  onReconnect
 }: {
   fetcher: (
     cursor?: string
@@ -193,13 +174,6 @@ function ContentList({
   emptyLabel: string
   onOpen: (result: ConfluenceSearchResult) => void
   onReconnect: () => void
-  /**
-   * cosmos-native-view-mirror-surface-v1 (D5): lift this list's CURRENT (accumulated) page up to
-   * the panel so a Home favorite can mirror the native feed/search view. Fires on every load
-   * (first page + each load-more) with the displayed rows + the next cursor. Read-only; the
-   * panel ignores it unless this tab is pinned.
-   */
-  onData?: (page: ConfluencePage<ConfluenceSearchResult>) => void
 }): React.JSX.Element {
   const [items, setItems] = useState<ConfluenceSearchResult[]>([])
   const [cursor, setCursor] = useState<string | undefined>(undefined)
@@ -207,8 +181,8 @@ function ContentList({
   const [loadingMore, setLoadingMore] = useState(false)
   const [error, setError] = useState<ConfluenceError | null>(null)
   const [loaded, setLoaded] = useState(false)
-  // Accumulated rows mirror of `items`, so `onData` can carry the FULL displayed page without a
-  // side effect inside the `setItems` updater (StrictMode-safe). Resets with the component remount.
+  // Accumulated rows mirror of `items` so a load-more merge reads the full set without a side effect
+  // inside the `setItems` updater (StrictMode-safe). Resets with the component remount.
   const itemsRef = useRef<ConfluenceSearchResult[]>([])
 
   const run = useCallback(
@@ -226,14 +200,13 @@ function ContentList({
         setItems(merged)
         setCursor(result.data.nextCursor)
         setLoaded(true)
-        onData?.({ items: merged, ...(result.data.nextCursor ? { nextCursor: result.data.nextCursor } : {}) })
       } else {
         setError(result)
       }
       setLoading(false)
       setLoadingMore(false)
     },
-    [fetcher, onData]
+    [fetcher]
   )
 
   useEffect(() => {
@@ -314,8 +287,7 @@ function ContentList({
 function PageDetail({
   pageId,
   onReconnect,
-  onWebUrl,
-  onData
+  onWebUrl
 }: {
   pageId: string
   onReconnect: () => void
@@ -326,12 +298,6 @@ function PageDetail({
    * to omit) once the page read resolves, and clears (undefined) while loading/on error/unmount.
    */
   onWebUrl?: (webUrl: string | undefined) => void
-  /**
-   * cosmos-native-view-mirror-surface-v1 (D5): lift the fetched page detail up to the panel so a
-   * Home favorite can mirror the open page. Fires with the resolved detail; the panel ignores it
-   * unless this tab is pinned. (Cleared at the panel level when the dock closes.)
-   */
-  onData?: (detail: ConfluencePageDetail) => void
 }): React.JSX.Element {
   const [detail, setDetail] = useState<ConfluencePageDetail | null>(null)
   const [loading, setLoading] = useState(true)
@@ -343,12 +309,11 @@ function PageDetail({
     const result = await window.cosmos.confluence.getPage({ pageId })
     if (result.ok) {
       setDetail(result.data)
-      onData?.(result.data)
     } else {
       setError(result)
     }
     setLoading(false)
-  }, [pageId, onData])
+  }, [pageId])
 
   useEffect(() => {
     void run()
@@ -450,18 +415,6 @@ export function ConfluencePanel({ active }: { active: boolean }): React.JSX.Elem
     setGenUiPage(null)
   }, [activeTabId])
 
-  // cosmos-native-view-mirror-surface-v1 (D5): the ACTIVE tab's lifted native data, so a Home
-  // favorite can mirror the current native view (feed/search list + the open page detail). Reset
-  // on a tab switch so an inactive tab's data never bleeds into the active mirror (OQ-3: the mirror
-  // is fresh for the active source tab; an inactive tab keeps its last-known mirror until re-active).
-  const [nativeListPage, setNativeListPage] = useState<ConfluencePage<ConfluenceSearchResult> | null>(
-    null
-  )
-  const [nativePageDetail, setNativePageDetail] = useState<ConfluencePageDetail | null>(null)
-  useEffect(() => {
-    setNativeListPage(null)
-    setNativePageDetail(null)
-  }, [activeTabId])
   // confluence-link-404-v1 #100: the open page detail's canonical web URL, lifted out of
   // `PageDetail` so the "Open in Confluence" external-link affordance renders on the DETAIL'S
   // TOP TITLE (the back-row header) rather than the body title. Only one detail header is on
@@ -496,8 +449,27 @@ export function ConfluencePanel({ active }: { active: boolean }): React.JSX.Elem
     },
     [dropNav, closeTab]
   )
-  // Tab keyboard shortcuts act on THIS strip only while the Confluence surface is active.
-  useTabShortcuts({ active, tabs, activeTabId, onActivate: setActive, onNewTab: newTab, onCloseTab: handleCloseTab })
+  // cosmos-favorite-live-panel-portal-v1: when this panel is relocated into a Home favorite, the
+  // favorite renders ONLY the active tab's BODY — the panel's OWN tab strip is SUPPRESSED so the user
+  // never sees a tab-list nested inside a Home tab (user feedback, OQ-1 reversal). Derived from the
+  // panel-host selector (the panel reads its own host). The strip stays in the rail slot.
+  const { onFocusTab, hostFor } = usePanelHost()
+  const favoriteHosted = hostFor('confluence') === 'favorite'
+
+  // Tab keyboard shortcuts act on THIS strip only while it is the active RAIL surface — NOT while
+  // hosted in a favorite (the strip is suppressed there, so Home keeps `tab:*` to navigate Home tabs).
+  useTabShortcuts({ active: active && !favoriteHosted, tabs, activeTabId, onActivate: setActive, onNewTab: newTab, onCloseTab: handleCloseTab })
+
+  // FR-006: register the focus handler so that when a Home favorite of this panel becomes active,
+  // CosmosPanel's one-shot `focusSourceTab('confluence', tabId)` focuses this LIVE panel onto the
+  // pinned source tab — so the suppressed-strip favorite shows the PINNED tab's body. `setActive` is
+  // read through a ref so the registration is stable.
+  const setActiveRef = useRef(setActive)
+  setActiveRef.current = setActive
+  useEffect(
+    () => onFocusTab('confluence', (tabId) => setActiveRef.current(tabId)),
+    [onFocusTab]
+  )
   // The native search/page browser is the base shown not only at zero tabs but also
   // whenever the active tab has not composed a surface yet (a fresh `+` "Untitled" tab),
   // so a new tab lands on the same base screen instead of a blank panel.
@@ -513,50 +485,6 @@ export function ConfluencePanel({ active }: { active: boolean }): React.JSX.Elem
   // The native search/page browser is the base; while a submitted compose is in flight the
   // send-spinner takes the region instead (it lands a surface or error there next).
   const showNativeBase = (!activeTab || (!activeTab.surface && !activeTab.error)) && !showSpinner
-
-  // cosmos-native-view-mirror-surface-v1 (D5/D6): build + store the favorite NATIVE-VIEW mirror for
-  // the ACTIVE tab, ONLY while it is PINNED (the OQ-3 gate). Select the current native view (an open
-  // page in the dock wins, else the active search list, else the default feed). When not pinned, or
-  // while a composed surface/spinner is showing (mutual exclusivity — the publish projection also
-  // nulls the mirror whenever a `surface` is present), clear any stale mirror. A content key (which
-  // ignores the per-build requestId) de-dupes so an unchanged view never re-publishes in a loop.
-  const pins = usePinnedSources()
-  const isActivePinned = activeTabId != null && pins.has(pinnedSourceKey('confluence', activeTabId))
-  const lastMirrorKeyRef = useRef<string>('')
-  useEffect(() => {
-    if (!activeTabId) {
-      return
-    }
-    const view: ConfluenceMirrorView =
-      !isActivePinned || !showNativeBase
-        ? null
-        : genUiPage
-          ? nativePageDetail
-            ? { kind: 'page', detail: nativePageDetail }
-            : null
-          : query !== ''
-            ? nativeListPage
-              ? { kind: 'search', query, page: nativeListPage }
-              : null
-            : nativeListPage
-              ? { kind: 'feed', page: nativeListPage }
-              : null
-    const key = confluenceMirrorKey(activeTabId, view)
-    if (key === lastMirrorKeyRef.current) {
-      return
-    }
-    lastMirrorKeyRef.current = key
-    update(activeTabId, { mirrorSurface: buildConfluenceMirror(view) })
-  }, [
-    activeTabId,
-    isActivePinned,
-    showNativeBase,
-    genUiPage,
-    nativePageDetail,
-    query,
-    nativeListPage,
-    update
-  ])
 
   // Always keep ≥1 tab (Terminal-unified layout): seed one on mount and reopen a fresh
   // tab if the collection ever empties, so the tab strip is always the topmost element.
@@ -698,22 +626,26 @@ export function ConfluencePanel({ active }: { active: boolean }): React.JSX.Elem
     >
       {/* Terminal-unified layout: the tab strip is the topmost element (no title header).
           The connection status moves to the footer; the not-connected CTA renders inside the
-          active tab's content region (FR-002). */}
-      <PanelTabStrip
-        tabs={stripTabs}
-        activeTabId={activeTabId}
-        onActivate={setActive}
-        onClose={handleCloseTab}
-        onNewTab={newTab}
-        onRename={(id, label) => update(id, { label, renamed: true, untitled: false })}
-        trailing={
-          <PanelRefreshButton
-            activeTab={refreshInputs.activeTab}
-            requestId={refreshInputs.requestId}
-          />
-        }
-        ariaLabel="Confluence tabs"
-      />
+          active tab's content region (FR-002). cosmos-favorite-live-panel-portal-v1: SUPPRESSED while
+          this panel is relocated into a Home favorite — the favorite shows only the active tab's body
+          (no tab-list nested inside a Home tab). */}
+      {!favoriteHosted && (
+        <PanelTabStrip
+          tabs={stripTabs}
+          activeTabId={activeTabId}
+          onActivate={setActive}
+          onClose={handleCloseTab}
+          onNewTab={newTab}
+          onRename={(id, label) => update(id, { label, renamed: true, untitled: false })}
+          trailing={
+            <PanelRefreshButton
+              activeTab={refreshInputs.activeTab}
+              requestId={refreshInputs.requestId}
+            />
+          }
+          ariaLabel="Confluence tabs"
+        />
+      )}
 
       {/* Content region (the active tab's content). */}
       <div className="flex min-h-0 flex-1 flex-col">
@@ -782,7 +714,6 @@ export function ConfluencePanel({ active }: { active: boolean }): React.JSX.Elem
                           setGenUiPage({ pageId: result.id, title: result.title })
                         }
                         onReconnect={() => void refreshStatus()}
-                        onData={setNativeListPage}
                       />
                     ) : (
                       <ContentList
@@ -799,7 +730,6 @@ export function ConfluencePanel({ active }: { active: boolean }): React.JSX.Elem
                           setGenUiPage({ pageId: result.id, title: result.title })
                         }
                         onReconnect={() => void refreshStatus()}
-                        onData={setNativeListPage}
                       />
                     )}
                 </div>
@@ -894,7 +824,6 @@ export function ConfluencePanel({ active }: { active: boolean }): React.JSX.Elem
                       pageId={genUiPage.pageId}
                       onReconnect={() => void refreshStatus()}
                       onWebUrl={setDetailWebUrl}
-                      onData={setNativePageDetail}
                     />
                   </div>
                 </GlassDock>
@@ -907,24 +836,28 @@ export function ConfluencePanel({ active }: { active: boolean }): React.JSX.Elem
       {/* open-prompt-hoist-v1: the composer is now ONE App-level instance; this panel
           publishes its wiring (gated on isConnected) via usePublishComposer above. */}
 
-      {/* Connection bar is the panel footer (Terminal-unified layout). */}
-      <PanelFooter
-        surfaceName="Confluence"
-        icon={SURFACE_ICON.confluence}
-        activeTab={activeStripTab}
-        right={
-          <ConnectionStatus
-            status={status}
-            onDisconnect={() =>
-              confirmDisconnect.requestConfirm(
-                { integration: 'confluence', label: 'Confluence' },
-                () => void disconnect()
-              )
-            }
-            onCancel={() => void cancelConnect()}
-          />
-        }
-      />
+      {/* Connection bar is the panel footer (Terminal-unified layout). cosmos-favorite-live-panel-
+          portal-v1: SUPPRESSED while relocated into a Home favorite — Home shows only its OWN footer,
+          so the panel's footer would otherwise stack a second one (user feedback). */}
+      {!favoriteHosted && (
+        <PanelFooter
+          surfaceName="Confluence"
+          icon={SURFACE_ICON.confluence}
+          activeTab={activeStripTab}
+          right={
+            <ConnectionStatus
+              status={status}
+              onDisconnect={() =>
+                confirmDisconnect.requestConfirm(
+                  { integration: 'confluence', label: 'Confluence' },
+                  () => void disconnect()
+                )
+              }
+              onCancel={() => void cancelConnect()}
+            />
+          }
+        />
+      )}
 
       <ConfirmDialog
         open={confirmDisconnect.state.open}

@@ -7,9 +7,5 @@ export { toPanelTabGroups, reconcileSelectedContext } from './panelTabsTree'
 export {
   PanelTabsProvider,
   usePublishPanelTabs,
-  useAllPanelTabs,
-  usePublishPins,
-  usePinnedSources,
-  pinnedSourceKey
+  useAllPanelTabs
 } from './PanelTabsProvider'
-export type { PinnedSourceKey } from './PanelTabsProvider'

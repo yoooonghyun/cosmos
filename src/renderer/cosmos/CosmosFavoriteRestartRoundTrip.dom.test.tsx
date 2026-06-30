@@ -58,6 +58,7 @@ import {
   usePublishPanelTabs,
   type LivePanelTabs
 } from '../panelTabs'
+import { PanelHostProvider } from '../panelHost'
 import {
   SessionProvider,
   useReportPanel,
@@ -157,9 +158,11 @@ function appTree(snapshot: SessionSnapshot | null, cosmosKey = 'cosmos'): React.
       <SessionProvider snapshot={snapshot}>
         <ActiveComposerProvider>
           <PanelTabsProvider>
-            <CosmosPanel key={cosmosKey} active />
-            <JiraSource />
-            <JiraComposerPublisher />
+            <PanelHostProvider>
+              <CosmosPanel key={cosmosKey} active />
+              <JiraSource />
+              <JiraComposerPublisher />
+            </PanelHostProvider>
           </PanelTabsProvider>
         </ActiveComposerProvider>
       </SessionProvider>
@@ -257,7 +260,14 @@ describe('Home favorites survive a restart round-trip (favorites-lost-on-restart
     await settle()
     expect(within(strip()).getByRole('tab', { name: /Sprint board/ })).toBeInTheDocument()
     activateStripTab('Sprint board')
-    expect(screen.getByTestId('fav-surface'), 'favorite re-binds to a POPULATED source').toHaveTextContent('s-board')
+    // cosmos-favorite-live-panel-portal-v1: the favorite re-binds to a POPULATED (live) source — NOT
+    // the gone-source state. The live view is the reparented panel via the portal; this persistence
+    // harness publishes the source tab but does not mount the panel, so the POPULATED binding is
+    // asserted by the favorite being active + the ABSENCE of the gone-source placeholder.
+    expect(within(strip()).getByRole('tab', { name: /Sprint board/ })).toHaveAttribute(
+      'aria-selected',
+      'true'
+    )
     expect(screen.queryByText('This tab is no longer open')).not.toBeInTheDocument()
   })
 

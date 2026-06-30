@@ -24,6 +24,8 @@ import {
 } from './app/railVisibility'
 import { PanelTabsProvider } from './panelTabs'
 import { OpenFilesProvider } from './fileExplorer'
+import { PanelHostProvider, usePanelHost } from './panelHost'
+import { InPortal, OutPortal } from 'react-reverse-portal'
 import { SURFACE_ICON, type RailIcon } from './app/surfaceIcons'
 import './App.css'
 
@@ -98,7 +100,14 @@ export function App(): React.JSX.Element {
                 terminal favorite's mirror explorer) — both `forceMount`ed — so the two explorer views
                 of one pane read+write ONE open-files selection. Renderer-only; never persisted/IPC'd. */}
             <OpenFilesProvider>
-              <AppShell />
+              {/* cosmos-favorite-live-panel-portal-v1: the App-root host for the four generative
+                  panels' stable reverse-portal nodes + the synchronous (visibleSurface,
+                  activeFavoriteSource) host signals. Sibling to the other cross-panel registries;
+                  wraps AppShell so the rail OutPortals AND CosmosPanel's FavoriteSurface read ONE
+                  consistent host state (the ONE-CLAIMER invariant). */}
+              <PanelHostProvider>
+                <AppShell />
+              </PanelHostProvider>
             </OpenFilesProvider>
           </PanelTabsProvider>
         </ActiveComposerProvider>
@@ -151,7 +160,12 @@ function useConnectedStatus(): {
 }
 
 function AppShell(): React.JSX.Element {
-  const [surface, setSurface] = useState<SurfaceId>('cosmos')
+  // cosmos-favorite-live-panel-portal-v1: the visible rail surface is now owned by the App-root
+  // PanelHostProvider (lifted from AppShell's former local `surface` state) so the rail OutPortals and
+  // CosmosPanel's favorite slot read the SAME value. `node`/`hostFor`/`panelVisible` drive the
+  // reparenting portal (which mount point hosts each generative panel + whether it is "visible").
+  const { visibleSurface: surface, setVisibleSurface: setSurface, node, hostFor, panelVisible } =
+    usePanelHost()
   const [settingsOpen, setSettingsOpen] = useState(false)
   const connected = useConnectedStatus()
   const { enabled, setEnabled } = useEnabledIntegrations()
@@ -326,28 +340,49 @@ function AppShell(): React.JSX.Element {
             >
               <CosmosPanel active={surface === 'cosmos'} />
             </TabsContent>
+            {/* cosmos-favorite-live-panel-portal-v1: the four generative panels are rendered ONCE
+                into their stable reverse-portal nodes via the InPortals below (App root, off-DOM) and
+                mounted by exactly one OutPortal at a time. Each rail slot mounts its node ONLY while
+                `hostFor(id) === 'rail'` (the panel is NOT relocated into the active Home favorite); the
+                `data-[state=inactive]:hidden` hide still hides a rail-hosted-but-inactive panel. When a
+                favorite of the panel is the active Home tab, the rail OutPortal renders nothing and
+                CosmosPanel's FavoriteSurface mounts the SAME node (the ONE-CLAIMER handoff). */}
             <TabsContent value="slack" forceMount className="app__ui data-[state=inactive]:hidden">
-              <SlackPanel active={surface === 'slack'} />
+              {hostFor('slack') === 'rail' && <OutPortal node={node('slack')} />}
             </TabsContent>
             <TabsContent value="jira" forceMount className="app__ui data-[state=inactive]:hidden">
-              {/* Jira generative-UI v2 (D4): the panel is force-mounted, so it learns
-                  it became the active rail surface from this prop and triggers the
-                  per-switch default-view refresh AND scopes its tab shortcuts. */}
-              <JiraPanel active={surface === 'jira'} />
+              {hostFor('jira') === 'rail' && <OutPortal node={node('jira')} />}
             </TabsContent>
             <TabsContent value="confluence" forceMount className="app__ui data-[state=inactive]:hidden">
-              <ConfluencePanel active={surface === 'confluence'} />
+              {hostFor('confluence') === 'rail' && <OutPortal node={node('confluence')} />}
             </TabsContent>
             <TabsContent
               value="google-calendar"
               forceMount
               className="app__ui data-[state=inactive]:hidden"
             >
-              {/* Google Calendar integration v1 (FR-014): force-mounted, so it learns it
-                  became the active rail surface from this prop and triggers the per-switch
-                  default-view refresh AND scopes its tab shortcuts. */}
-              <GoogleCalendarPanel active={surface === 'google-calendar'} />
+              {hostFor('google-calendar') === 'rail' && (
+                <OutPortal node={node('google-calendar')} />
+              )}
             </TabsContent>
+
+            {/* The four generative panels live HERE (mounted ONCE, never unmounted by a surface/
+                favorite change), so their `useGenerativePanelTabs` state, MCP/IPC subscriptions, and
+                native chrome are permanent. `active` is the redefined "visible" signal (rail-active OR
+                hosted in the active Home favorite) — it drives render/scroll/resize, the default-view
+                fetch, and the panel's own `useTabShortcuts`. */}
+            <InPortal node={node('slack')}>
+              <SlackPanel active={panelVisible('slack')} />
+            </InPortal>
+            <InPortal node={node('jira')}>
+              <JiraPanel active={panelVisible('jira')} />
+            </InPortal>
+            <InPortal node={node('confluence')}>
+              <ConfluencePanel active={panelVisible('confluence')} />
+            </InPortal>
+            <InPortal node={node('google-calendar')}>
+              <GoogleCalendarPanel active={panelVisible('google-calendar')} />
+            </InPortal>
 
             {/* The ONE hoisted Open-Prompt composer, routed to the active surface. */}
             <SharedComposer surface={surface} surfaceRef={surfaceRef} />
