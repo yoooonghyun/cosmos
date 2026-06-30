@@ -10,6 +10,11 @@
  * Tab map (see `ShortcutCommand`): tab:new → onNewTab; tab:close → onCloseTab(active);
  * tab:next/prev → activate neighbour with wrap-around; tab:jump → activate index;
  * tab:last → activate the final tab.
+ *
+ * `onNewTab` / `onCloseTab` are OPTIONAL: a panel MAY omit either, making `tab:new` /
+ * `tab:close` an intrinsic no-op for that surface (cosmos-home-keyboard-tab-nav-v1 — the
+ * Home/Cosmos panel has no new-tab affordance and defers close, so it omits both and still
+ * gets navigation). The four generative panels + terminal pass both, unchanged.
  */
 
 import { useEffect, useRef } from 'react'
@@ -24,10 +29,10 @@ export interface TabShortcutOps {
   activeTabId: string | null
   /** Activate the tab with this id (Ctrl+Tab / Cmd+Opt+arrow / Cmd+N / Cmd+9). */
   onActivate: (id: string) => void
-  /** Open a new tab (Cmd+T). */
-  onNewTab: () => void
-  /** Close the tab with this id (Cmd+W). */
-  onCloseTab: (id: string) => void
+  /** Open a new tab (Cmd+T). OPTIONAL — omit ⇒ `tab:new` is a no-op for this surface. */
+  onNewTab?: () => void
+  /** Close the tab with this id (Cmd+W). OPTIONAL — omit ⇒ `tab:close` is a no-op for this surface. */
+  onCloseTab?: (id: string) => void
   /**
    * Optional focus-aware `tab:close` routing (terminal-focus-aware-close-tab-v1, FR-001/FR-008).
    * Only the Terminal panel passes these; other panels omit them and keep the panel-tab close.
@@ -76,16 +81,18 @@ export function useTabShortcuts(ops: TabShortcutOps): void {
       }
       switch (payload.command) {
         case 'tab:new':
-          onNewTab()
+          // cosmos-home-keyboard-tab-nav-v1: a panel that omits onNewTab (Home) treats tab:new as a no-op.
+          onNewTab?.()
           break
         case 'tab:close':
           // terminal-focus-aware-close-tab-v1: when the active pane's file viewer holds focus and
           // has an open file, close that file tab instead of the panel tab (FR-001/FR-002). The
           // resolver is only wired by the Terminal panel; every other panel falls straight through.
+          // cosmos-home-keyboard-tab-nav-v1: a panel that omits onCloseTab (Home) treats tab:close as a no-op.
           if (resolveClose?.() === 'file-tab' && onCloseFileTab) {
             onCloseFileTab()
           } else if (activeTabId) {
-            onCloseTab(activeTabId)
+            onCloseTab?.(activeTabId)
           }
           break
         case 'tab:next':

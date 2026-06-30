@@ -25,7 +25,7 @@
 import '@testing-library/jest-dom/vitest'
 import { act } from 'react'
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
-import { render, screen } from '@testing-library/react'
+import { render, screen, within } from '@testing-library/react'
 import { TooltipProvider } from '@/components/ui/tooltip'
 import { CosmosPanel } from './CosmosPanel'
 import {
@@ -68,6 +68,8 @@ beforeEach(() => {
       ui: {
         onRender: () => () => {}
       },
+      // cosmos-home-keyboard-tab-nav-v1: CosmosPanel subscribes to global tab shortcuts on mount.
+      shortcuts: { onTrigger: () => () => {} },
       // CosmosPanel now reads enabled integrations (cross-panel tree) → SessionProvider needs a save.
       session: { save: () => {} }
     }
@@ -143,7 +145,8 @@ describe('Cosmos cross-panel live context (cosmos-context-chip-crosspanel-and-hi
     expect(screen.getByText('Jira')).toBeInTheDocument()
     expect(screen.getByText('PROJ-123')).toBeInTheDocument()
     // Regression lock: the old cosmos-only default ("Cosmos") must NOT be the chip's panel.
-    expect(screen.queryByText('Cosmos')).not.toBeInTheDocument()
+    // Scope to the chip — the strip's default tab is also labeled "Cosmos" (Home > Cosmos).
+    expect(within(chip).queryByText('Cosmos')).not.toBeInTheDocument()
   })
 
   it('a Slack cross-panel submit shows the Slack channel context', async () => {
@@ -168,6 +171,7 @@ describe('Cosmos cross-panel live context (cosmos-context-chip-crosspanel-and-hi
 
     expect(screen.getByText('Slack')).toBeInTheDocument()
     expect(screen.getByText('#general')).toBeInTheDocument()
-    expect(screen.queryByText('Cosmos')).not.toBeInTheDocument()
+    // Scope to the chip — the strip's default tab is also labeled "Cosmos".
+    expect(within(screen.getByRole('note')).queryByText('Cosmos')).not.toBeInTheDocument()
   })
 })

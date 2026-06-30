@@ -10,19 +10,51 @@
  * OUT OF SCOPE for step 3 (only the accommodating shape is required).
  *
  * NO React/DOM import — pure functions + the immutable default, unit-tested in node.
+ *
+ * cosmos-home-favorite-tabs-v1 wires the forward-compat `favorite` seam: a favorite tab is a LIVE
+ * shortcut to another generative panel's open tab. It records its `source` ({panelId, tabId}); the
+ * panel renders its source's live A2UI surface inline through the shared `ActiveTabSurface` host.
  */
 
-/** A Cosmos tab. `default` is the pinned, undeletable conversation tab; `favorite` is forward-compat. */
+import type { GateableIntegration } from '../../shared/ipc'
+
+/**
+ * The generative panels whose tabs can be pinned as Home favorites — terminal is NOT pinnable
+ * (a PTY tab has no A2UI surface, FR-040), so a favorite's `source.panelId` is always one of the
+ * four gateable integrations. Equals the cross-panel ids minus `terminal`.
+ */
+export type FavoritePanelId = GateableIntegration
+
+/** A Cosmos tab. `default` is the pinned, undeletable conversation tab; `favorite` is a pinned shortcut. */
 export interface CosmosTab {
-  /** Stable tab id. The default tab's id is the fixed {@link DEFAULT_TAB_ID}. */
+  /** Stable tab id. The default tab's id is the fixed {@link DEFAULT_TAB_ID}; a favorite's is {@link favoriteId}. */
   id: string
-  /** Display label. */
+  /** Display label. For a favorite this is the source tab's (relabel-on-rename) label. */
   label: string
   /**
    * The tab's role: `'default'` = the pinned, undeletable default-session conversation
-   * (exactly one); `'favorite'` = a future appended, closeable tab (none built in step 3).
+   * (exactly one); `'favorite'` = a closeable pinned shortcut to a source panel+tab.
    */
   kind: 'default' | 'favorite'
+  /**
+   * Favorite-only (cosmos-home-favorite-tabs-v1): the source panel+tab this favorite mirrors.
+   * Absent on the default tab. Non-secret ids only (the panel id + the stable generative tab id).
+   */
+  source?: { panelId: FavoritePanelId; tabId: string }
+}
+
+/** The stable, idempotent favorite tab id for a source panel+tab (de-dupes a repeat pin). */
+export function favoriteId(source: { panelId: FavoritePanelId; tabId: string }): string {
+  return `fav:${source.panelId}:${source.tabId}`
+}
+
+/** True when a favorite for this source panel+tab is already pinned (drives the Pin vs Unpin menu). */
+export function isPinned(
+  state: CosmosTabsState,
+  source: { panelId: FavoritePanelId; tabId: string }
+): boolean {
+  const id = favoriteId(source)
+  return state.tabs.some((t) => t.kind === 'favorite' && t.id === id)
 }
 
 /** The fixed id of the pinned default conversation tab (one per panel — FR-114). */
@@ -70,16 +102,21 @@ export function closeCosmosTab(state: CosmosTabsState, tabId: string): CosmosTab
 }
 
 /**
- * Append a favorited tab (FR-115). The forward-compat additive op: a closeable `favorite`
- * tab is appended AFTER the pinned default, which stays first. Not wired into the UI in
- * step 3 (no favorites built) — present so favorites are a pure additive change later.
+ * Append a favorited tab and activate it (cosmos-home-favorite-tabs-v1, FR-010/FR-013). A closeable
+ * `favorite` tab keyed by {@link favoriteId} is appended AFTER the pinned default, which stays first.
+ * IDEMPOTENT / de-duped by source: if a favorite for this source is already pinned, the state is
+ * returned UNCHANGED (same reference — no duplicate, no-op render).
  */
 export function appendFavorite(
   state: CosmosTabsState,
-  favorite: { id: string; label: string }
+  favorite: { source: { panelId: FavoritePanelId; tabId: string }; label: string }
 ): CosmosTabsState {
-  const tab: CosmosTab = { id: favorite.id, label: favorite.label, kind: 'favorite' }
-  return { tabs: [...state.tabs, tab], activeTabId: favorite.id }
+  const id = favoriteId(favorite.source)
+  if (state.tabs.some((t) => t.id === id)) {
+    return state // FR-013: already pinned — idempotent no-op.
+  }
+  const tab: CosmosTab = { id, label: favorite.label, kind: 'favorite', source: favorite.source }
+  return { tabs: [...state.tabs, tab], activeTabId: id }
 }
 
 /** Set the active tab (only to a tab that exists). */

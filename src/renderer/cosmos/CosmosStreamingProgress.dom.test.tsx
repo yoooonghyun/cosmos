@@ -67,6 +67,7 @@ beforeEach(() => {
         }
       },
       ui: { onRender: () => () => {} },
+      shortcuts: { onTrigger: () => () => {} },
       session: { save: () => {} }
     }
   })

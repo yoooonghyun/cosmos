@@ -5,11 +5,11 @@
  * and group expand/collapse.
  */
 import '@testing-library/jest-dom/vitest'
-import { describe, it, expect, vi } from 'vitest'
-import { render, screen, fireEvent } from '@testing-library/react'
+import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { render, screen, fireEvent, within } from '@testing-library/react'
 import { TooltipProvider } from '@/components/ui/tooltip'
 import { PanelTabTree, type PanelTabSelection } from './PanelTabTree'
-import type { PanelTabGroup } from '../panelTabs'
+import type { PanelTabGroup, CrossPanelId, LivePanelTab } from '../panelTabs'
 
 const groups: PanelTabGroup[] = [
   { panelId: 'terminal', label: 'Terminal', tabs: [{ id: 't1', label: 'Terminal' }], activeTabId: 't1' },
@@ -103,5 +103,68 @@ describe('PanelTabTree (PANEL-TABS-TREE-UI-01)', () => {
       </TooltipProvider>
     )
     expect(container.querySelector('.bg-brand-accent')).toBeNull()
+  })
+})
+
+describe('PanelTabTree right-click Pin/Unpin menu (cosmos-home-favorite-tabs-v1)', () => {
+  beforeEach(() => {
+    // Radix Menu touches these jsdom-missing APIs.
+    Element.prototype.scrollIntoView = vi.fn()
+    Element.prototype.hasPointerCapture = vi.fn(() => false) as never
+    Element.prototype.setPointerCapture = vi.fn() as never
+    Element.prototype.releasePointerCapture = vi.fn() as never
+  })
+
+  function renderWithMenu(opts?: { pinned?: ReadonlySet<string> }): {
+    onPin: ReturnType<typeof vi.fn<(g: PanelTabGroup, t: LivePanelTab) => void>>
+    onUnpin: ReturnType<typeof vi.fn<(g: PanelTabGroup, t: LivePanelTab) => void>>
+  } {
+    const onPin = vi.fn<(g: PanelTabGroup, t: LivePanelTab) => void>()
+    const onUnpin = vi.fn<(g: PanelTabGroup, t: LivePanelTab) => void>()
+    const pinned = opts?.pinned ?? new Set<string>()
+    render(
+      <TooltipProvider>
+        <PanelTabTree
+          groups={groups}
+          selected={null}
+          onActivate={() => {}}
+          isPinned={(panelId: CrossPanelId, tabId: string) => pinned.has(`${panelId}:${tabId}`)}
+          onPin={onPin}
+          onUnpin={onUnpin}
+        />
+      </TooltipProvider>
+    )
+    return { onPin, onUnpin }
+  }
+
+  function rightClick(label: string): void {
+    // The level-2 TAB row (not the level-1 group header — both can carry "Terminal").
+    const row = within(screen.getByRole('tree'))
+      .getAllByRole('treeitem')
+      .find((r) => r.getAttribute('aria-level') === '2' && r.textContent?.includes(label))!
+    fireEvent.contextMenu(row, { clientX: 5, clientY: 5 })
+  }
+
+  it('an unpinned generative row offers Pin → fires onPin (FR-001/FR-002)', async () => {
+    const { onPin } = renderWithMenu()
+    rightClick('Sprint board')
+    fireEvent.click(await screen.findByRole('menuitem', { name: /Pin/ }))
+    expect(onPin).toHaveBeenCalledTimes(1)
+    expect(onPin).toHaveBeenCalledWith(groups[1], { id: 'j1', label: 'Sprint board' })
+  })
+
+  it('a pinned generative row offers Unpin → fires onUnpin (FR-002/FR-004)', async () => {
+    const { onUnpin } = renderWithMenu({ pinned: new Set(['jira:j1']) })
+    rightClick('Sprint board')
+    fireEvent.click(await screen.findByRole('menuitem', { name: /Unpin/ }))
+    expect(onUnpin).toHaveBeenCalledTimes(1)
+  })
+
+  it("a terminal row's Pin is DISABLED with a discoverable reason (FR-040)", async () => {
+    renderWithMenu()
+    rightClick('Terminal')
+    const pin = await screen.findByRole('menuitem', { name: /Pin/ })
+    expect(pin).toHaveAttribute('data-disabled')
+    expect(screen.getByText(/Terminal tabs can't be pinned/)).toBeInTheDocument()
   })
 })

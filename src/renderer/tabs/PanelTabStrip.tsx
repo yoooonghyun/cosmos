@@ -17,12 +17,13 @@
  * FR-015 (error CircleAlert + destructive tint + tooltip message).
  */
 
-import { useEffect, useRef, useState, type KeyboardEvent } from 'react'
+import { Fragment, useEffect, useRef, useState, type KeyboardEvent } from 'react'
 import { CircleAlert, Loader2, Plus, SquareTerminal, X } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { cn } from '@/lib/utils'
 import { renameCommitDecision } from './panelTabs'
+import type { RailIcon } from '../app/surfaceIcons'
 
 /** A tab's lifecycle status as surfaced on the strip (design §3). */
 export type PanelTabStatus = 'idle' | 'in-flight' | 'error'
@@ -51,6 +52,20 @@ export interface PanelTab {
    * additive: the four generative panels + terminal omit it ⇒ closeable, unchanged.
    */
   closeable?: boolean
+  /**
+   * An optional leading glyph for the tab (cosmos-home-favorite-tabs-v1, FR-014). A Home FAVORITE
+   * tab passes its source panel's `SURFACE_ICON` so the strip reads "shortcut to elsewhere". Rendered
+   * in the SAME leading slot the terminal glyph uses (so alignment/gap are unchanged), and ONLY when
+   * the tab is idle + not a terminal tab (the in-flight spinner / error glyph still win). Purely
+   * additive: the four generative panels + terminal omit it ⇒ no leading glyph, unchanged.
+   */
+  icon?: RailIcon
+  /**
+   * An optional per-tab context-menu wrapper (cosmos-home-favorite-tabs-v1, FR-004). When present the
+   * strip wraps this tab's button as the menu's trigger (a favorite passes an Unpin menu). Receives
+   * the tab's trigger element; returns it wrapped. Purely additive: omit ⇒ no right-click menu.
+   */
+  contextMenu?: (trigger: React.ReactNode) => React.ReactNode
 }
 
 export interface PanelTabStripProps {
@@ -259,14 +274,14 @@ export function PanelTabStrip({
           const kind = t.kind ?? 'generative'
           const status = t.status ?? 'idle'
           const isTerminal = kind === 'terminal'
+          // cosmos-home-favorite-tabs-v1: a favorite's optional leading glyph (idle, non-terminal).
+          const LeadingIcon = t.icon
           const tooltip =
             status === 'error' && t.errorMessage
               ? `Run failed: ${t.errorMessage}`
               : t.label
 
-          return (
-            <Tooltip key={t.id}>
-              <TooltipTrigger asChild>
+          const cell = (
                 <button
                   type="button"
                   role="tab"
@@ -309,6 +324,10 @@ export function PanelTabStrip({
                       className="size-3.5 shrink-0 text-muted-foreground group-data-[state=active]/tab:text-foreground"
                       aria-hidden="true"
                     />
+                  ) : LeadingIcon ? (
+                    // cosmos-home-favorite-tabs-v1 (FR-014): a favorite's source panel glyph, in the
+                    // SAME leading slot/treatment the terminal glyph uses (muted → foreground active).
+                    <LeadingIcon className="size-3.5 shrink-0 text-muted-foreground group-data-[state=active]/tab:text-foreground" />
                   ) : null}
 
                   {/* Label — truncates with ellipsis (FR-010); Untitled is italic-muted
@@ -413,8 +432,28 @@ export function PanelTabStrip({
                     </span>
                   </Button>
                   )}
+
+                  {/* cosmos-home-keyboard-tab-nav-v1 (Task B): a NON-closeable tab (the Cosmos pinned
+                      default — FR-114) has no close `X`, so it would lack the trailing space the `X`'s
+                      `icon-xs` slot reserves and read cramped beside closeable tabs. Reserve the SAME
+                      slot with an inert spacer sized to the `icon-xs` button (`size-6`) — it inherits
+                      the cell's `gap-1.5` exactly like the `X`, so a glyph+label tab stays balanced.
+                      Closeable tabs render the `X` above and skip this. */}
+                  {t.closeable === false && (
+                    <span aria-hidden="true" className="size-6 shrink-0" />
+                  )}
                 </button>
-              </TooltipTrigger>
+          )
+
+          // cosmos-home-favorite-tabs-v1 (FR-004): when a tab supplies a context menu (a favorite's
+          // Unpin), the strip wraps its button as the menu's trigger — the button keeps its native
+          // `title` hover hint, so no Radix Tooltip is needed on that path. Otherwise the existing
+          // Tooltip wraps the cell. Either way the array element carries the stable `key`.
+          return t.contextMenu ? (
+            <Fragment key={t.id}>{t.contextMenu(cell)}</Fragment>
+          ) : (
+            <Tooltip key={t.id}>
+              <TooltipTrigger asChild>{cell}</TooltipTrigger>
               <TooltipContent side="bottom">{tooltip}</TooltipContent>
             </Tooltip>
           )

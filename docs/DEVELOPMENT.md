@@ -883,6 +883,25 @@ single new `window.cosmos.session` namespace in `src/shared/ipc.ts` (`session:lo
     a typecheck error. Add `import '@testing-library/jest-dom/vitest'` at the top of the test file
     to register the `Assertion` type augmentation. (Most existing dom tests sidestep this by using
     plain `expect(...).toBe(...)`/DOM-property assertions; only use the jest-dom matchers with the import.)
+  - **Radix `ContextMenu`/`DropdownMenu`/`Select` (portalled menus) in jsdom** (cosmos-home-favorite-tabs-v1):
+    two things bite. (1) jsdom ships no `Element.prototype.scrollIntoView` / pointer-capture
+    (`hasPointerCapture`/`setPointerCapture`/`releasePointerCapture`), which the Radix menu touches on
+    open/focus — stub them in a `beforeEach` (`Element.prototype.scrollIntoView = vi.fn()`, etc.) or the
+    menu throws on open. (2) the menu CONTENT portals into `document.body`, OUTSIDE the rendered
+    container — do NOT manually `document.body.innerHTML = ''` in `afterEach` (a common copy-paste from
+    older tests): it races React's portal removal and throws `NotFoundError: The node to be removed is
+    not a child of this node` whenever a menu is left open at test end. Rely on RTL's auto-cleanup
+    (registered when `globals: true`), which unmounts the React root + its portals correctly. Open a
+    menu with `fireEvent.contextMenu(trigger, { clientX, clientY })` (or `pointerDown`/click for
+    Dropdown/Select), then find items by `getByRole('menuitem', { name })`; a disabled item carries
+    `data-disabled`. To assert a STATE-reflective menu (Pin vs Unpin) without re-opening the same
+    trigger twice (the re-open is flaky under jsdom), SEED the already-pinned state (e.g. via the
+    restored `favorites` snapshot) and open once.
+  - **Right-click menu on a tree/strip row that is ALSO a Tooltip trigger**: nest the two Radix
+    `asChild` trigger slots onto the SAME DOM element (`<Tooltip><TooltipTrigger asChild><ContextMenuTrigger
+    asChild>{row}</…></…></Tooltip>` inside a `<ContextMenu>…`) so the single roving-tabindex row stays the
+    anchor for both — the slots merge props/refs down to the one element. Do not wrap the Tooltip.Root in
+    a ContextMenuTrigger (it is not a DOM node, so `asChild` can't forward to it).
 
 ## Terminal key bindings (macOS readline chords)
 

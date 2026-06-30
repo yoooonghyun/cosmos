@@ -24,16 +24,40 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { PanelTabStrip, type PanelTab } from '../tabs/PanelTabStrip'
+import { useTabShortcuts } from '../tabs/useTabShortcuts'
 import {
   usePublishComposer,
   useRecordSubmitContext,
-  useLastSubmitContextRef
+  useLastSubmitContextRef,
+  useActiveComposerConfig
 } from '../composer/ActiveComposerProvider'
+import { PromptComposer } from '../composer/PromptComposer'
+import {
+  ContextMenu,
+  ContextMenuContent,
+  ContextMenuItem,
+  ContextMenuTrigger
+} from '@/components/ui/context-menu'
 import { CosmosTimelineEntry } from './CosmosTimelineEntry'
 import { reconcileTimeline, type LiveInFlight } from './cosmosConversation'
-import { initialCosmosTabs, setActiveCosmosTab, closeCosmosTab } from './cosmosTabs'
+import {
+  initialCosmosTabs,
+  setActiveCosmosTab,
+  closeCosmosTab,
+  appendFavorite,
+  favoriteId,
+  isPinned
+} from './cosmosTabs'
+import {
+  reconcileFavorites,
+  toFavoriteStripTab,
+  toHomeFavorites,
+  favoritesToTabs
+} from './homeFavorites'
+import { FavoriteSurface } from './FavoriteSurface'
 import { PanelTabTree } from './PanelTabTree'
 import { panelTabChipFor } from './cosmosSelectedContext'
+import { SURFACE_ICON } from '../app/surfaceIcons'
 // Import the divider from its OWN module, not the `../fileExplorer` barrel — the barrel re-exports
 // the Monaco-backed FileViewer, which crashes jsdom on import (queryCommandSupported). The divider
 // is a self-contained pointer/keyboard handle.
@@ -47,7 +71,11 @@ import {
   type PanelTabGroup
 } from '../panelTabs'
 import { RAIL_LABEL, visibleSurfaceIds } from '../app/railVisibility'
-import { useEnabledIntegrations } from '../session/SessionProvider'
+import {
+  useEnabledIntegrations,
+  useRestoredFavorites,
+  useSessionRegistry
+} from '../session/SessionProvider'
 import type { Conversation } from '../../shared/types/conversation'
 import { buildAgentSubmitWithMarker } from '../../shared/promptContext/buildAgentSubmit'
 import type { PromptContext } from '../../shared/promptContext/promptContext'
@@ -79,8 +107,16 @@ function toReadState(result: ConversationResult): ReadState {
 }
 
 export function CosmosPanel({ active }: { active: boolean }): React.JSX.Element {
+  // cosmos-home-favorite-tabs-v1 (FR-030): the restored favorites seed the tab state ONCE on mount
+  // (re-bound to live source tabs by their stable ids as panels restore). The pinned default tab is
+  // always first + active; favorites are appended in pinned order.
+  const restoredFavorites = useRestoredFavorites()
   // FR-114: the pinned-default tab state (purpose-built; NOT useGenerativePanelTabs).
-  const [tabsState, setTabsState] = useState(initialCosmosTabs)
+  const [tabsState, setTabsState] = useState(() => {
+    const base = initialCosmosTabs()
+    const favTabs = favoritesToTabs(restoredFavorites ?? [])
+    return favTabs.length > 0 ? { ...base, tabs: [...base.tabs, ...favTabs] } : base
+  })
 
   // The transcript-sourced conversation read state (FR-112).
   const [read, setRead] = useState<ReadState>({ phase: 'loading' })
@@ -107,6 +143,21 @@ export function CosmosPanel({ active }: { active: boolean }): React.JSX.Element 
   const tabsStateRef = useRef(tabsState)
   tabsStateRef.current = tabsState
   const scrollRef = useRef<HTMLDivElement>(null)
+
+  // cosmos-home-keyboard-tab-nav-v1 (FR-001..FR-006/FR-014): Home participates in the SHARED global
+  // tab-cycle shortcuts (tab:next/prev = Ctrl+Tab / Cmd+Opt+Arrow; tab:jump = mod+1..8; tab:last =
+  // mod+9), gated on the `active` rail-surface prop, cycling `cosmosTabs` order (default first, then
+  // favorites in pin order, wrap-around) via the SAME pure `setActiveCosmosTab` op the strip uses — no
+  // parallel nav helper (the hook owns the wrap/jump math). `onNewTab`/`onCloseTab` are OMITTED so
+  // tab:new (Q5) and tab:close (Q4) are structural no-ops in Home. The roving strip-focus arrow nav on
+  // PanelTabStrip stays intact (additive). FR-008 (no stray char in a focused composer) is guaranteed
+  // by main-side preventDefault (§4.12) — main consumes the keystroke before the DOM sees it.
+  useTabShortcuts({
+    active,
+    tabs: tabsState.tabs,
+    activeTabId: tabsState.activeTabId,
+    onActivate: (id) => setTabsState((s) => setActiveCosmosTab(s, id))
+  })
 
   // cosmos-panel-tab-list-v1: the timeline | tree split. Session-only width (mirrors the Terminal
   // split's renderer-local `treeWidth`; NOT persisted — OQ-1 resolved). The row owns the clamp.
@@ -141,6 +192,46 @@ export function CosmosPanel({ active }: { active: boolean }): React.JSX.Element 
   useEffect(() => {
     setSelectedContext((prev) => reconcileSelectedContext(prev, groups))
   }, [groups])
+
+  // cosmos-home-favorite-tabs-v1 (FR-041): keep each favorite's label honest as its source tab
+  // renames; KEEP a favorite whose source closed (graceful degrade — never auto-dropped, FR-031).
+  // `reconcileFavorites` returns the SAME state reference when nothing changed (no-op render).
+  useEffect(() => {
+    setTabsState((prev) => reconcileFavorites(prev, groups))
+  }, [groups])
+
+  // FR-030: report the favorites list to the debounced save coordinator on every change (the NON-panel
+  // path, mirrors openPromptPosition). Non-secret references only — never an A2UI surface (FR-023).
+  const sessionRegistry = useSessionRegistry()
+  useEffect(() => {
+    sessionRegistry.setFavorites(toHomeFavorites(tabsState))
+  }, [tabsState, sessionRegistry])
+
+  // FR-001/FR-010: pin a source tab as a favorite (idempotent/de-duped) + activate it. Terminal is
+  // not pinnable (FR-040) — the tree disables its Pin item, and this guard narrows the panel id.
+  const handlePin = useCallback((group: PanelTabGroup, tab: LivePanelTab): void => {
+    if (group.panelId === 'terminal') {
+      return
+    }
+    const source = { panelId: group.panelId, tabId: tab.id }
+    setTabsState((s) => appendFavorite(s, { source, label: tab.label }))
+  }, [])
+
+  // FR-004: unpin a source tab's favorite (from the tree's Unpin menu); active favorite → default.
+  const handleUnpin = useCallback((group: PanelTabGroup, tab: LivePanelTab): void => {
+    if (group.panelId === 'terminal') {
+      return
+    }
+    const id = favoriteId({ panelId: group.panelId, tabId: tab.id })
+    setTabsState((s) => closeCosmosTab(s, id))
+  }, [])
+
+  // FR-002: drives the tree row menu's Pin vs Unpin (terminal is never pinned).
+  const isSourcePinned = useCallback(
+    (panelId: CrossPanelId, tabId: string): boolean =>
+      panelId !== 'terminal' && isPinned(tabsState, { panelId, tabId }),
+    [tabsState]
+  )
 
   // The tree's selection marker (panel id + tab id) derived from the selected context.
   const treeSelection = useMemo(
@@ -270,15 +361,35 @@ export function CosmosPanel({ active }: { active: boolean }): React.JSX.Element 
     }
   }, [])
 
+  // cosmos-home-favorite-tabs-v1 (FR-020/FR-021): the active tab decides Home's content + composer.
+  // The default tab shows the conversation timeline + the docked Cosmos composer; a FAVORITE tab is a
+  // full-width live mirror of its source panel+tab — INCLUDING the source's own floating Open Prompt,
+  // which submits to the SOURCE target (jira/slack/…), not the Cosmos conversation. So on a favorite
+  // tab Home HIDES its docked composer (publishes a null 'cosmos' config) and renders the SOURCE's
+  // already-published composer config (read by key from the shared registry) as a floating composer.
+  const activeTab = tabsState.tabs.find((t) => t.id === tabsState.activeTabId)
+  const activeFavoriteSource =
+    activeTab?.kind === 'favorite' && activeTab.source ? activeTab.source : null
+  // The source panel's published composer wiring (it publishes unconditionally while connected, so it
+  // is in the registry even though Home — not the source — is the active rail surface). Read by key;
+  // the fallback key when no favorite is active is harmless (its result is only used when a favorite is).
+  const favoriteComposerConfig = useActiveComposerConfig(activeFavoriteSource?.panelId ?? 'cosmos')
+
   // open-prompt-hoist-v1: publish this panel's composer under the RAIL id 'cosmos' so the
   // ONE App-level composer routes here. Submitting starts a default-agent run exactly as
   // today — the composer threads the wire target 'generated-ui' via the agent submit path
-  // (FR-113); the step-2 persistent session is unchanged.
+  // (FR-113); the step-2 persistent session is unchanged. cosmos-home-favorite-tabs-v1: publish
+  // `null` while a favorite tab is active so the docked Cosmos composer (+ its footer) hides — the
+  // favorite shows the SOURCE's floating composer instead (rendered below).
   const showSpinner = live?.phase === 'generating'
+  const favoriteActive = activeFavoriteSource !== null
   usePublishComposer(
     'cosmos',
     useMemo(
-      () => ({
+      () =>
+        favoriteActive
+          ? null
+          : {
         onSubmit: (utterance: string, options?: { contextDismiss: 'none' | 'thread' | 'all' }) => {
           // cosmos-panel-tab-list-v1 (FR-015/FR-016): if a tree row is selected, the captured
           // PromptContext is that SELECTED panel + tab (no dock — FR-018); dismissing the chip
@@ -322,12 +433,12 @@ export function CosmosPanel({ active }: { active: boolean }): React.JSX.Element 
           // disappears for the next compose (a fresh compose, matching the view-context chip).
           setSelectedContext(null)
         },
-        placeholder: 'Describe the UI you want…',
-        ariaLabel: 'Compose generated UI',
-        contextChip,
-        busy: showSpinner
-      }),
-      [showSpinner, recordSubmitContext, contextChip]
+              placeholder: 'Describe the UI you want…',
+              ariaLabel: 'Compose generated UI',
+              contextChip,
+              busy: showSpinner
+            },
+      [favoriteActive, showSpinner, recordSubmitContext, contextChip]
     )
   )
 
@@ -344,17 +455,36 @@ export function CosmosPanel({ active }: { active: boolean }): React.JSX.Element 
     }
   }, [timeline.length, active])
 
-  // FR-114: the tab strip with the pinned default tab. PanelTabStrip renders a close `X`
-  // only when `onClose` would act — the default tab is never closeable (closeCosmosTab is a
-  // no-op for it), and we mark it via the strip's `closeable` discriminator below.
-  const stripTabs: PanelTab[] = tabsState.tabs.map((t) => ({
-    id: t.id,
-    label: t.label,
-    kind: 'generative' as const,
-    status: 'idle' as const,
-    // The pinned default tab has NO close affordance (FR-114).
-    closeable: t.kind !== 'default'
-  }))
+  // FR-114/FR-014: the tab strip — the pinned default tab (no close `X`) then favorites appended in
+  // pin order, each carrying its source panel glyph + a right-click Unpin menu (the close `X` unpins
+  // too). PanelTabStrip renders a close `X` only when `closeable` is not false.
+  const stripTabs: PanelTab[] = tabsState.tabs.map((t) => {
+    if (t.kind === 'favorite' && t.source) {
+      const favId = t.id
+      return toFavoriteStripTab(t, SURFACE_ICON[t.source.panelId], (trigger) => (
+        <ContextMenu>
+          <ContextMenuTrigger asChild>{trigger}</ContextMenuTrigger>
+          <ContextMenuContent>
+            <ContextMenuItem onSelect={() => setTabsState((s) => closeCosmosTab(s, favId))}>
+              Unpin
+            </ContextMenuItem>
+          </ContextMenuContent>
+        </ContextMenu>
+      ))
+    }
+    return {
+      id: t.id,
+      label: t.label,
+      kind: 'generative' as const,
+      status: 'idle' as const,
+      // The pinned default tab has NO close affordance (FR-114).
+      closeable: t.kind !== 'default',
+      // cosmos-home-keyboard-tab-nav-v1 (Task B): the pinned default "Cosmos" tab carries the SAME
+      // rail Cosmos glyph (SURFACE_ICON.cosmos, D-10) as a leading mark — favorites already show their
+      // source glyph, so without this the default tab read glyphless + (with no `X`) visually cramped.
+      icon: SURFACE_ICON.cosmos
+    }
+  })
 
   const hasLiveOrTurns = timeline.length > 0
 
@@ -371,48 +501,89 @@ export function CosmosPanel({ active }: { active: boolean }): React.JSX.Element 
         ariaLabel="Cosmos tabs"
       />
 
-      {/* cosmos-panel-tab-list-v1 (design §1): the panel body is a horizontal SPLIT — the
-          conversation timeline LEFT, the cross-panel `PanelTabTree` RIGHT, a `ResizeDivider`
-          between. The docked Open-Prompt composer band (App-level, below this `<section>`) is
-          unchanged (DESIGN.md D-3). Both columns are `min-h-0` so they scroll independently. */}
-      <div ref={splitRowRef} className="flex min-h-0 flex-1 flex-row">
-        <div
-          ref={scrollRef}
-          className="min-h-0 min-w-0 flex-1 space-y-3 overflow-auto p-3 text-card-foreground"
-          role="tabpanel"
-        >
-          {read.phase === 'loading' && (
-            <p className="text-[13px] text-muted-foreground">Loading conversation…</p>
-          )}
-          {read.phase === 'error' && (
-            <p
-              className="rounded-md border border-destructive/40 bg-destructive/15 px-2.5 py-2 text-[13px] text-destructive"
-              role="alert"
+      {/* cosmos-panel-tab-list-v1 (design §1) + cosmos-home-favorite-tabs-v1: on the DEFAULT tab the
+          body is a horizontal SPLIT — the conversation timeline LEFT, the cross-panel `PanelTabTree`
+          RIGHT, a `ResizeDivider` between — with the docked Open-Prompt composer band below (App-level
+          `SharedComposer`). On a FAVORITE tab the body is a SINGLE FULL-WIDTH pane: the source tab's
+          live surface mirror — NO tree, NO divider — overlaid with the SOURCE panel's own floating
+          Open Prompt (which submits to the SOURCE target, not the Cosmos conversation; the docked
+          Cosmos composer is hidden by publishing a null 'cosmos' config above). `relative` anchors the
+          floating composer overlay. */}
+      <div ref={splitRowRef} className="relative flex min-h-0 flex-1 flex-row">
+        {activeFavoriteSource ? (
+          // FR-020: a favorite tab is a full-width live mirror of its source tab's surface.
+          <FavoriteSurface
+            source={activeFavoriteSource}
+            onUnpin={() => setTabsState((s) => closeCosmosTab(s, tabsState.activeTabId))}
+          />
+        ) : (
+          <>
+            <div
+              ref={scrollRef}
+              className="min-h-0 min-w-0 flex-1 space-y-3 overflow-auto p-3 text-card-foreground"
+              role="tabpanel"
             >
-              Could not read the conversation transcript. You can still describe a UI below.
-            </p>
-          )}
-          {(read.phase === 'empty' || read.phase === 'populated') &&
-            !hasLiveOrTurns && (
-              <p className="text-[13px] text-muted-foreground">
-                Describe a UI below and Claude will build it here — your conversation will appear in
-                this timeline.
-              </p>
-            )}
-          {timeline.map((entry, i) => (
-            <CosmosTimelineEntry key={entryKey(entry, i)} entry={entry} />
-          ))}
-        </div>
+              {read.phase === 'loading' && (
+                <p className="text-[13px] text-muted-foreground">Loading conversation…</p>
+              )}
+              {read.phase === 'error' && (
+                <p
+                  className="rounded-md border border-destructive/40 bg-destructive/15 px-2.5 py-2 text-[13px] text-destructive"
+                  role="alert"
+                >
+                  Could not read the conversation transcript. You can still describe a UI below.
+                </p>
+              )}
+              {(read.phase === 'empty' || read.phase === 'populated') &&
+                !hasLiveOrTurns && (
+                  <p className="text-[13px] text-muted-foreground">
+                    Describe a UI below and Claude will build it here — your conversation will appear in
+                    this timeline.
+                  </p>
+                )}
+              {timeline.map((entry, i) => (
+                <CosmosTimelineEntry key={entryKey(entry, i)} entry={entry} />
+              ))}
+            </div>
 
-        <ResizeDivider onResize={handleTreeResize} ariaLabel="Resize timeline and panel tabs" />
+            <ResizeDivider onResize={handleTreeResize} ariaLabel="Resize timeline and panel tabs" />
 
-        <aside
-          className="flex min-h-0 flex-col border-l border-border"
-          style={treeWidth !== null ? { flex: `0 0 ${treeWidth}px` } : { flex: '0 0 30%' }}
-          aria-label="Open panel tabs"
-        >
-          <PanelTabTree groups={groups} selected={treeSelection} onActivate={handleActivateTab} />
-        </aside>
+            <aside
+              className="flex min-h-0 flex-col border-l border-border"
+              style={treeWidth !== null ? { flex: `0 0 ${treeWidth}px` } : { flex: '0 0 30%' }}
+              aria-label="Open panel tabs"
+            >
+              <PanelTabTree
+                groups={groups}
+                selected={treeSelection}
+                onActivate={handleActivateTab}
+                isPinned={isSourcePinned}
+                onPin={handlePin}
+                onUnpin={handleUnpin}
+              />
+            </aside>
+          </>
+        )}
+
+        {/* cosmos-home-favorite-tabs-v1 (FR — favorite shows the source view "as-is" incl. its Open
+            Prompt): the SOURCE panel's already-published floating composer, surfaced over the Home
+            favorite pane. Its `onSubmit` is the source panel's own — so a submit routes to the SOURCE
+            target (jira/slack/confluence/google-calendar) and lands in the source tab, which this
+            favorite mirrors. Reuses the shared `PromptComposer` (floating) — no new contract. */}
+        {activeFavoriteSource && favoriteComposerConfig && (
+          <div className="pointer-events-none absolute inset-0 flex flex-col justify-end">
+            <PromptComposer
+              mode="floating"
+              onSubmit={favoriteComposerConfig.onSubmit}
+              placeholder={favoriteComposerConfig.placeholder}
+              ariaLabel={favoriteComposerConfig.ariaLabel}
+              {...(favoriteComposerConfig.contextChip
+                ? { contextChip: favoriteComposerConfig.contextChip }
+                : {})}
+              busy={favoriteComposerConfig.busy ?? false}
+            />
+          </div>
+        )}
       </div>
 
       {/* cosmos-open-prompt-pinned-v1 (design §1.3): the bottom chrome of the Cosmos panel is

@@ -18,6 +18,7 @@ import type {
   GateableIntegration,
   GenerativePanelKey,
   GenerativePanelSnapshot,
+  HomeFavorite,
   SessionSnapshot,
   TerminalPanelSnapshot
 } from '../../shared/ipc'
@@ -95,6 +96,17 @@ export function useRestoredOpenPromptPosition():
   | undefined {
   const { snapshot } = useSessionContext()
   return snapshot?.openPromptPosition
+}
+
+/**
+ * The restored Home favorites (cosmos-home-favorite-tabs-v1, FR-030), or undefined for a clean /
+ * pre-feature session. `CosmosPanel` seeds its favorite tabs from this on mount, then re-binds them
+ * to the live source tabs (ids are stable across relaunch). Validated at the main boundary, so the
+ * renderer trusts the shape (non-secret `{panelId, tabId, label}` only).
+ */
+export function useRestoredFavorites(): HomeFavorite[] | undefined {
+  const { snapshot } = useSessionContext()
+  return snapshot?.favorites
 }
 
 /**

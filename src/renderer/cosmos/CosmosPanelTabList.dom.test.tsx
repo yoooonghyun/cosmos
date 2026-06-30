@@ -53,6 +53,7 @@ beforeEach(() => {
         submit: (payload: AgentSubmitPayload) => cap.submits.push(payload)
       },
       ui: { onRender: () => () => {} },
+      shortcuts: { onTrigger: () => () => {} },
       session: { save: () => {} }
     }
   })

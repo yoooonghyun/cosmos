@@ -16,9 +16,16 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { AppWindow, ChevronDown, ChevronRight, PanelsTopLeft } from 'lucide-react'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
+import {
+  ContextMenu,
+  ContextMenuContent,
+  ContextMenuItem,
+  ContextMenuLabel,
+  ContextMenuTrigger
+} from '@/components/ui/context-menu'
 import { cn } from '@/lib/utils'
 import { SURFACE_ICON } from '../app/surfaceIcons'
-import type { LivePanelTab, PanelTabGroup } from '../panelTabs'
+import type { CrossPanelId, LivePanelTab, PanelTabGroup } from '../panelTabs'
 import type { PromptPanelId } from '../../shared/promptContext/promptContext'
 
 /** The currently context-selected tab (FR-016), or null. */
@@ -45,12 +52,27 @@ const TAB_INDENT = 3 * 12 + 8
 export function PanelTabTree({
   groups,
   selected,
-  onActivate
+  onActivate,
+  isPinned,
+  onPin,
+  onUnpin
 }: {
   groups: PanelTabGroup[]
   selected: PanelTabSelection | null
   onActivate: (group: PanelTabGroup, tab: LivePanelTab) => void
+  /**
+   * cosmos-home-favorite-tabs-v1 (FR-001/FR-002): whether the source panel+tab is currently pinned
+   * as a Home favorite (drives the row's right-click menu Pin vs Unpin). Optional — when omitted (no
+   * pin handlers wired) tab rows carry no menu. Terminal rows are never pinnable (FR-040).
+   */
+  isPinned?: (panelId: CrossPanelId, tabId: string) => boolean
+  /** Pin a source tab as a favorite (FR-001/FR-010). */
+  onPin?: (group: PanelTabGroup, tab: LivePanelTab) => void
+  /** Unpin a source tab's favorite (FR-001/FR-004). */
+  onUnpin?: (group: PanelTabGroup, tab: LivePanelTab) => void
 }): React.JSX.Element {
+  // The right-click Pin/Unpin menu is wired only when the panel passes pin handlers.
+  const menuEnabled = Boolean(onPin && onUnpin)
   // Renderer-local expand/collapse, default EXPANDED (survey-first; not persisted — out of scope).
   // We track the COLLAPSED set so a newly-published panel defaults to expanded.
   const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(() => new Set())
@@ -194,6 +216,16 @@ export function PanelTabTree({
                         focused={effectiveActive === tabKey(group.panelId, tab.id)}
                         onActivate={() => onActivate(group, tab)}
                         onFocus={() => setActiveKey(tabKey(group.panelId, tab.id))}
+                        menu={
+                          menuEnabled
+                            ? renderRowMenu({
+                                panelId: group.panelId,
+                                pinned: isPinned?.(group.panelId, tab.id) ?? false,
+                                onPin: () => onPin?.(group, tab),
+                                onUnpin: () => onUnpin?.(group, tab)
+                              })
+                            : undefined
+                        }
                       />
                     ))
                   )}
@@ -204,6 +236,38 @@ export function PanelTabTree({
         })}
       </div>
     </ScrollArea>
+  )
+}
+
+/**
+ * Build a tab row's right-click menu CONTENT (cosmos-home-favorite-tabs-v1, design §2.2/§2.3). A
+ * terminal row gets a DISABLED "Pin" + a quiet reason (FR-040); a generative row gets a single
+ * state-reflective item: "Unpin" when pinned, "Pin" when not (FR-001/FR-002).
+ */
+function renderRowMenu(opts: {
+  panelId: CrossPanelId
+  pinned: boolean
+  onPin: () => void
+  onUnpin: () => void
+}): React.ReactNode {
+  if (opts.panelId === 'terminal') {
+    return (
+      <ContextMenuContent>
+        <ContextMenuItem disabled aria-label="Pin — Terminal tabs can't be pinned">
+          Pin
+        </ContextMenuItem>
+        <ContextMenuLabel>Terminal tabs can&apos;t be pinned</ContextMenuLabel>
+      </ContextMenuContent>
+    )
+  }
+  return (
+    <ContextMenuContent>
+      {opts.pinned ? (
+        <ContextMenuItem onSelect={opts.onUnpin}>Unpin</ContextMenuItem>
+      ) : (
+        <ContextMenuItem onSelect={opts.onPin}>Pin</ContextMenuItem>
+      )}
+    </ContextMenuContent>
   )
 }
 
@@ -265,13 +329,20 @@ function TabRow({
   isSelected,
   focused,
   onActivate,
-  onFocus
+  onFocus,
+  menu
 }: {
   label: string
   isSelected: boolean
   focused: boolean
   onActivate: () => void
   onFocus: () => void
+  /**
+   * cosmos-home-favorite-tabs-v1: the row's right-click Pin/Unpin menu CONTENT (a `ContextMenuContent`)
+   * — when present the row is also a `ContextMenuTrigger` (native right-click + Shift+F10, FR-003).
+   * Composed with the Tooltip via nested `asChild` slots so the roving-tabindex row stays the trigger.
+   */
+  menu?: React.ReactNode
 }): React.JSX.Element {
   const ref = useRef<HTMLDivElement | null>(null)
   useEffect(() => {
@@ -303,10 +374,26 @@ function TabRow({
       <span className="min-w-0 truncate">{label}</span>
     </div>
   )
+  // No menu → the existing Tooltip-only row.
+  if (!menu) {
+    return (
+      <Tooltip>
+        <TooltipTrigger asChild>{row}</TooltipTrigger>
+        <TooltipContent side="right">{label}</TooltipContent>
+      </Tooltip>
+    )
+  }
+  // With a menu → nest the two Radix `asChild` triggers (Tooltip + ContextMenu) onto the SAME row
+  // div so it stays the roving-tabindex element AND gains native right-click / Shift+F10 (FR-003).
   return (
-    <Tooltip>
-      <TooltipTrigger asChild>{row}</TooltipTrigger>
-      <TooltipContent side="right">{label}</TooltipContent>
-    </Tooltip>
+    <ContextMenu>
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <ContextMenuTrigger asChild>{row}</ContextMenuTrigger>
+        </TooltipTrigger>
+        <TooltipContent side="right">{label}</TooltipContent>
+      </Tooltip>
+      {menu}
+    </ContextMenu>
   )
 }

@@ -274,6 +274,90 @@ export interface SessionSnapshot {
    * is clamped/dropped at the main boundary (validateOpenPromptPosition).
    */
   openPromptPosition?: { xFrac: number; yFrac: number }
+  /**
+   * The Home panel's pinned FAVORITES (cosmos-home-favorite-tabs-v1, FR-030), in pinned order.
+   * Each entry references a source generative-panel tab BY identity — `{panelId, tabId, label}` —
+   * so on relaunch the favorite re-binds to the restored source tab (ids are stable across
+   * relaunch) and re-acquires its LIVE surface; a favorite whose source is gone still renders a
+   * calm "no longer open" state and is never auto-dropped (FR-031). ADDITIVE + OPTIONAL (NO schema
+   * bump — mirrors `openPromptPosition`): absent ⇒ no favorites on restore. NON-SECRET: only the
+   * panel id, the source tab id, and the source tab's display label — never a token, OAuth secret,
+   * credential, path, transcript line, or any A2UI surface spec (the surface is NEVER persisted;
+   * it is re-acquired live). Malformed/secret-shaped entries are dropped at the main boundary
+   * (validateFavorites, FR-033).
+   */
+  favorites?: HomeFavorite[]
+}
+
+/**
+ * One persisted Home favorite (cosmos-home-favorite-tabs-v1): a non-secret reference to a source
+ * generative panel+tab. `panelId` is a {@link GateableIntegration} (terminal is NOT pinnable —
+ * FR-040), `tabId` is the source's stable generative tab id, `label` is its display label.
+ */
+export interface HomeFavorite {
+  panelId: GateableIntegration
+  tabId: string
+  label: string
+}
+
+/** The gateable panel ids a favorite may reference (terminal excluded — not pinnable, FR-040). */
+const FAVORITE_PANEL_IDS: readonly GateableIntegration[] = [
+  'slack',
+  'jira',
+  'confluence',
+  'google-calendar'
+]
+
+/**
+ * Validate the inbound persisted `favorites` list at the main boundary (cosmos-home-favorite-tabs-v1,
+ * FR-033). KEEPS only entries that are a `{ panelId, tabId, label }` object whose `panelId` is a
+ * known gateable panel and whose `tabId`/`label` are non-empty strings; every other entry (malformed,
+ * extra/secret-shaped keys, unknown panel id, terminal id, non-string fields) is DROPPED with a warn —
+ * never fatal. Returns ONLY the three whitelisted fields, so a secret-bearing persisted entry can
+ * never carry an unexpected field through. Pure (no electron/fs) so it is the SINGLE source reused by
+ * both the main `validateSnapshot` boundary and the renderer favorites code; node-testable.
+ */
+export function validateFavorites(
+  value: unknown,
+  warn: (message: string) => void = (m) => console.warn(m)
+): HomeFavorite[] {
+  if (value === undefined) {
+    return []
+  }
+  if (!Array.isArray(value)) {
+    warn('[session] favorites is not an array; dropping')
+    return []
+  }
+  const out: HomeFavorite[] = []
+  const seen = new Set<string>()
+  for (const raw of value) {
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+      warn('[session] favorites: dropping a non-object entry')
+      continue
+    }
+    const { panelId, tabId, label } = raw as Record<string, unknown>
+    if (!FAVORITE_PANEL_IDS.includes(panelId as GateableIntegration)) {
+      warn(`[session] favorites: dropping entry with invalid panelId "${String(panelId)}"`)
+      continue
+    }
+    if (typeof tabId !== 'string' || tabId.length === 0) {
+      warn('[session] favorites: dropping entry with a missing/empty tabId')
+      continue
+    }
+    if (typeof label !== 'string' || label.length === 0) {
+      warn('[session] favorites: dropping entry with a missing/empty label')
+      continue
+    }
+    // Idempotent: a duplicate (panelId, tabId) is the same favorite — keep the first only.
+    const key = `${panelId}:${tabId}`
+    if (seen.has(key)) {
+      continue
+    }
+    seen.add(key)
+    // Whitelist-rebuild: emit ONLY the three known fields (drops any extra/secret-shaped key).
+    out.push({ panelId: panelId as GateableIntegration, tabId, label })
+  }
+  return out
 }
 
 /** The four generative render targets that own a persisted panel. */

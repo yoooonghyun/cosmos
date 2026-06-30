@@ -91,7 +91,12 @@ Entry/shell files stay at the root; everything else is grouped by domain/feature
 - `atlassian/` — `atlassianPanelBits.tsx` (shared Jira + Confluence panel bits)
 - `calendar/` — `GoogleCalendarPanel.tsx`, `calendarNavLogic.ts` + nested `googleCalendarCatalog/`
 - `cosmos/` — `CosmosPanel.tsx`, `cosmosConversation.ts`, `cosmosTabs.ts`, `CosmosTimelineEntry.tsx`,
-  `PromptContextChip.tsx` (the read-only timeline prompt-context breadcrumb chip)
+  `PromptContextChip.tsx` (the read-only timeline prompt-context breadcrumb chip), `PanelTabTree.tsx`
+  (the cross-panel tab survey + right-click Pin/Unpin menu), and the Home-favorites trio
+  (cosmos-home-favorite-tabs-v1): `homeFavorites.ts` (pure: `findLiveTab`/`reconcileFavorites`/
+  `toFavoriteStripTab`/`toHomeFavorites`/`favoritesToTabs`, re-exports the shared `validateFavorites`),
+  `favoriteCatalogHosts.tsx` (`panelId → {catalog,catalogId,panelName}` + the swallow-local-actions
+  `favoriteOnAction`), `FavoriteSurface.tsx` (the inline live mirror + waiting/gone/error states)
 - `confirm/` — `confirmLogic.ts`, `useConfirm.ts`
 - `fileExplorer/` — the per-tab 3-column terminal/viewer/tree layout (the `useExplorerPanes` hook +
   `FileTree`/`FileViewer`/`FileTabStrip`/`ResizeDivider` components, the `useFileExplorer` hook, the

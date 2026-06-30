@@ -16,6 +16,7 @@
  */
 
 import type { SurfaceId } from '../app/railVisibility'
+import type { TabSurface } from '../tabs/useGenerativePanelTabs'
 
 /**
  * The panels the Cosmos tree lists — every rail surface EXCEPT the Cosmos panel itself (it never
@@ -28,6 +29,22 @@ export type CrossPanelId = Exclude<SurfaceId, 'cosmos'>
 export interface LivePanelTab {
   id: string
   label: string
+  /**
+   * The tab's CURRENT live A2UI surface (cosmos-home-favorite-tabs-v1): the same {@link TabSurface}
+   * the source panel renders — spec + live requestId + descriptor/bindings/dataModel. Carried so a
+   * Home FAVORITE can mirror this tab's surface through the SAME `ActiveTabSurface` host, sharing the
+   * live `requestId`/`surfaceId` (a true live mirror, not a snapshot).
+   *
+   * NON-SECRET by the A2UI render contract — the SAME whitelist as the label/id above (never a
+   * token, OAuth secret, credential, file path, `~/.claude` location, or transcript line). It is a
+   * renderer-only REFERENCE pass: {@link PanelTabsProvider} is in-renderer (no IPC), so carrying it
+   * is cheap, and it is NEVER persisted or sent over IPC by this seam (favorites persist by
+   * reference only — `{panelId, tabId, label}` — and re-acquire the live surface on restore).
+   *
+   * Absent/`null` for a tab with no surface yet (untitled / in-flight source) and for terminal tabs
+   * (a PTY tab has no A2UI surface to mirror).
+   */
+  surface?: TabSurface | null
 }
 
 /** One panel's FULL live tab list + which tab is active (FR-008). */

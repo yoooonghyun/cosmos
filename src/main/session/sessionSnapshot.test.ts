@@ -498,3 +498,45 @@ describe('validateSnapshot — openPromptPosition (draggable-open-prompt-button-
     expect(out).not.toHaveProperty('openPromptPosition')
   })
 })
+
+describe('validateSnapshot — favorites (cosmos-home-favorite-tabs-v1, FR-030/FR-033)', () => {
+  it('round-trips a valid favorites list (non-secret refs only, additive — NO schema bump)', () => {
+    const warn = vi.fn()
+    const snap = {
+      ...goodSnapshot(),
+      favorites: [
+        { panelId: 'jira', tabId: 'j1', label: 'Sprint board' },
+        { panelId: 'slack', tabId: 'c1', label: '#general' }
+      ]
+    }
+    const out = validateSnapshot(snap, warn)
+    expect(warn).not.toHaveBeenCalled()
+    expect(out!.schemaVersion).toBe(8) // still 8 — NO bump (additive-optional)
+    expect(out!.favorites).toEqual([
+      { panelId: 'jira', tabId: 'j1', label: 'Sprint board' },
+      { panelId: 'slack', tabId: 'c1', label: '#general' }
+    ])
+  })
+
+  it('DROPS malformed / secret-shaped / terminal / unknown-panel entries, keeping the good (FR-033)', () => {
+    const snap = {
+      ...goodSnapshot(),
+      favorites: [
+        { panelId: 'jira', tabId: 'j1', label: 'Kept', token: 'SECRET-shaped-extra' },
+        { panelId: 'terminal', tabId: 't1', label: 'Terminal' }, // not pinnable
+        { panelId: 'evil', tabId: 'x', label: 'x' }, // unknown panel
+        { tabId: 'no-panel', label: 'x' }, // missing panelId
+        'a string' // not an object
+      ]
+    }
+    const out = validateSnapshot(snap)
+    // Only the good entry survives, rebuilt to the {panelId,tabId,label} whitelist (no `token`).
+    expect(out!.favorites).toEqual([{ panelId: 'jira', tabId: 'j1', label: 'Kept' }])
+  })
+
+  it('OMITS favorites entirely when the list is empty / all-dropped (so an old snapshot stays clean)', () => {
+    const snap = { ...goodSnapshot(), favorites: [{ panelId: 'terminal', tabId: 't', label: 'x' }] }
+    expect(validateSnapshot(snap)).not.toHaveProperty('favorites')
+    expect(validateSnapshot(goodSnapshot())).not.toHaveProperty('favorites') // pre-feature
+  })
+})

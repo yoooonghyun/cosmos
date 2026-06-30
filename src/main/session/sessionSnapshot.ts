@@ -15,6 +15,7 @@
 
 import {
   SESSION_SCHEMA_VERSION,
+  validateFavorites,
   type A2uiSurfaceUpdate,
   type EnabledIntegrations,
   type GateableIntegration,
@@ -367,6 +368,10 @@ export function validateSnapshot(value: unknown, warn: WarnFn = defaultWarn): Se
   // draggable-open-prompt-button-v1 (FR-008): additive OPTIONAL global field. Set only
   // when present + well-formed; absent/malformed ⇒ omit so restore uses the default.
   const openPromptPosition = validateOpenPromptPosition(value.openPromptPosition)
+  // cosmos-home-favorite-tabs-v1 (FR-030/FR-033): additive OPTIONAL top-level field (NO schema
+  // bump — mirrors openPromptPosition). The shared pure validator drops malformed/secret-shaped
+  // entries + rebuilds each to the {panelId,tabId,label} whitelist; omit when there are none.
+  const favorites = validateFavorites(value.favorites, (m) => warn(m))
   return {
     schemaVersion: SESSION_SCHEMA_VERSION,
     panels: {
@@ -378,6 +383,7 @@ export function validateSnapshot(value: unknown, warn: WarnFn = defaultWarn): Se
       'google-calendar': generative['google-calendar']
     },
     enabled: validateEnabled(value.enabled),
-    ...(openPromptPosition ? { openPromptPosition } : {})
+    ...(openPromptPosition ? { openPromptPosition } : {}),
+    ...(favorites.length ? { favorites } : {})
   }
 }

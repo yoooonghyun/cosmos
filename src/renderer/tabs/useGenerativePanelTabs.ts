@@ -320,7 +320,13 @@ export function useGenerativePanelTabs(
     () =>
       panelTabsPanelId === null
         ? null
-        : { tabs: tabs.map((t) => ({ id: t.id, label: t.label })), activeTabId },
+        : {
+            // cosmos-home-favorite-tabs-v1: carry each tab's CURRENT live `surface` so a Home favorite
+            // can MIRROR it through the shared `ActiveTabSurface` host (renderer-only ref pass, NO IPC,
+            // NON-SECRET by the A2UI render contract — never a token/path/transcript, never persisted).
+            tabs: tabs.map((t) => ({ id: t.id, label: t.label, surface: t.surface })),
+            activeTabId
+          },
     [panelTabsPanelId, tabs, activeTabId]
   )
   usePublishPanelTabs(panelTabsPanelId, livePanelTabs)

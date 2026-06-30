@@ -79,6 +79,8 @@ beforeEach(() => {
         // No live surface in this test — just record/return a no-op unsubscribe.
         onRender: () => () => {}
       },
+      // cosmos-home-keyboard-tab-nav-v1: CosmosPanel subscribes to global tab shortcuts on mount.
+      shortcuts: { onTrigger: () => () => {} },
       // CosmosPanel now reads enabled integrations (cross-panel tree) → SessionProvider needs a save.
       session: { save: () => {} }
     }

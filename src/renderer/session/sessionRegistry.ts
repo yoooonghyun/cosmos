@@ -21,6 +21,7 @@ import {
   type EnabledIntegrations,
   type GenerativePanelKey,
   type GenerativePanelSnapshot,
+  type HomeFavorite,
   type SessionSnapshot,
   type TerminalPanelSnapshot
 } from '../../shared/ipc'
@@ -65,6 +66,12 @@ export function assembleSnapshot(contributions: {
    * default applies; present once a drag has reported one.
    */
   openPromptPosition?: { xFrac: number; yFrac: number }
+  /**
+   * cosmos-home-favorite-tabs-v1: the Home panel's pinned favorites. A NON-panel
+   * contribution (mirrors `openPromptPosition`). Omitted when there are none so an older
+   * snapshot stays favorite-free; present (in pinned order) once Home reports any.
+   */
+  favorites?: HomeFavorite[]
 }): SessionSnapshot {
   const terminalDraft = contributions.terminal
   const terminal = (terminalDraft
@@ -82,7 +89,11 @@ export function assembleSnapshot(contributions: {
     },
     enabled: contributions.enabled ?? emptyEnabled(),
     // Additive OPTIONAL top-level field: only present when the registry holds one.
-    ...(contributions.openPromptPosition ? { openPromptPosition: contributions.openPromptPosition } : {})
+    ...(contributions.openPromptPosition ? { openPromptPosition: contributions.openPromptPosition } : {}),
+    // cosmos-home-favorite-tabs-v1: additive OPTIONAL top-level field; omitted when empty.
+    ...(contributions.favorites && contributions.favorites.length
+      ? { favorites: contributions.favorites }
+      : {})
   }
 }
 
@@ -148,6 +159,17 @@ export class SessionRegistry {
    */
   setOpenPromptPosition(position: { xFrac: number; yFrac: number }): void {
     this.contributions.openPromptPosition = position
+    this.schedule()
+  }
+
+  /**
+   * Record the latest Home favorites list (cosmos-home-favorite-tabs-v1, FR-030). The NON-panel
+   * contribution path (mirrors {@link setOpenPromptPosition}): Home reports on every pin/unpin/
+   * relabel, the list merges into the assembled snapshot and trailing-debounces a save. NON-secret
+   * references only (`{panelId, tabId, label}`) — never an A2UI surface (FR-023/FR-033).
+   */
+  setFavorites(favorites: HomeFavorite[]): void {
+    this.contributions.favorites = favorites
     this.schedule()
   }
 

@@ -111,7 +111,12 @@ per-tab close `X`, trailing `+` new-tab, horizontal overflow scroll). The rail s
 is UNCHANGED and there is **no global cross-panel NAVIGATION tab bar** — every tab strip lives
 inside its panel. (The Cosmos panel does host a **read-only cross-panel tab LIST** — a survey /
 context-picker, not a navigation bar; clicking a row attaches that panel+tab as the next prompt's
-context, it never switches surfaces — see §4.14.) When a panel has zero tabs it shows its native
+context, it never switches surfaces — see §4.14.) **Home (Cosmos) is itself a small multi-tab
+container** (cosmos-home-favorite-tabs-v1): the undeletable default conversation-timeline tab PLUS
+user-pinned **favorite** tabs — each a live shortcut that renders another panel's open tab's A2UI
+surface INLINE in Home as a FULL-WIDTH mirror "as-is", INCLUDING the source panel's own Open Prompt
+(no rail navigation; the cross-panel tab tree shows ONLY on the default tab); favorites persist
+across relaunch by reference (§4.14). When a panel has zero tabs it shows its native
 base (Slack/Jira/Confluence native browser) or idle placeholder (Generated UI); the Terminal panel
 always keeps ≥1 tab.
 
@@ -1030,6 +1035,43 @@ submits still capture dock).
   read; persistence stays its own concern.
 - **No reach-in.** The Cosmos panel never reads another panel's internal hook/component state — every
   panel pushes its own tab list; the tree only consumes the shared registry.
+- **Seam evolution — labels → labels + LIVE surface (cosmos-home-favorite-tabs-v1).** The published
+  per-tab payload now ALSO carries the tab's CURRENT live `TabSurface` (`LivePanelTab.surface` — the
+  same spec + live `requestId` + descriptor/bindings/dataModel the source panel renders). It remains
+  a **renderer-only reference pass** (no IPC) and **non-secret** by the A2UI render contract (never a
+  token/path/transcript), and is **never persisted** by this seam. The tree *survey* stays
+  **label-only** (`toPanelTabGroups` ignores `surface`); a NEW pure reader `findLiveTab(registry,
+  panelId, tabId)` reads the live surface for a Home **favorite** to mirror. This is the one accepted
+  change to the seam's purpose: it is still the immediate, full, lossless live read, now able to hand
+  a foreign panel's live surface to Home for an in-place live mirror (see §3, "Home is a multi-tab
+  container").
+
+**Home favorites (cosmos-home-favorite-tabs-v1).** From the tree, a user **right-clicks** a generative
+panel's tab row → **Pin** (shared shadcn/Radix `ContextMenu`); Pin appends a `kind:'favorite'`
+`CosmosTab` (recording the source `{panelId,tabId}`, idempotent/de-duped by `favoriteId`) AFTER the
+undeletable default "Cosmos" tab. Clicking a favorite makes Home a **FULL-WIDTH source mirror**: the
+cross-panel tab **tree renders ONLY on the default "Cosmos" tab** (a favorite tab is a single
+full-width pane — no tree, no divider), and the favorite renders the SOURCE tab's live A2UI surface
+**inline in Home** through the SAME `ActiveTabSurface` host — under the source panel's own catalog (a
+`favoriteCatalogHosts` registry maps `panelId → {catalog, catalogId}`) and sharing the source
+`requestId`/`surfaceId`, so it is a **true live mirror** (receives the same `updateDataModel` pushes;
+bound/deterministic actions round-trip through the existing `UiBridge`, which warn-ignores a duplicate
+resolve — no new cross-panel contract). The favorite shows the source view **"as-is", INCLUDING the
+source panel's own floating Open Prompt**: while a favorite tab is active Home publishes a **null
+`'cosmos'` composer config** (so the App-level `SharedComposer` hides the docked Cosmos conversation
+composer + footer) and renders the SOURCE panel's already-published composer config — read by key from
+the `ActiveComposerProvider` registry (the generative panels publish it unconditionally while
+connected) — as a floating `PromptComposer`. Its submit routes to the **SOURCE target** (jira/slack/…)
+via the source panel's OWN `onSubmit` (the right layer — NO new cross-target mechanism) and lands in
+the source tab the favorite mirrors. The App-level "one hoisted composer routes to the active rail
+surface" invariant is preserved (Home's null config → `SharedComposer` renders nothing; the favorite's
+floating composer is a second, Home-scoped instance only while a favorite is active). v1 SWALLOWS
+panel-internal renderer-local navigation (Slack open-channel, Jira/Calendar open-detail) inside Home.
+Terminal tabs are **not pinnable** (no A2UI surface). Favorites persist by reference only — a top-level additive-optional `SessionSnapshot.favorites`
+(`{panelId,tabId,label}`, NON-SECRET, **NO schema bump** — mirrors `openPromptPosition`, validated by
+the shared `validateFavorites` at the main boundary) — and **re-bind** to the restored source tab on
+relaunch (stable generative tab ids); a favorite whose source is gone shows a calm "no longer open"
+state and is NEVER auto-dropped.
 
 ---
 
