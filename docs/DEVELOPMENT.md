@@ -81,13 +81,17 @@ catalogue of conventions and hard-won gotchas. The file-by-file source map lives
   (render only REAL fetched data; on not-connected/error render a single Notice). To add a panel:
   extend the `UiRenderTarget` union, add a scoped render entry under `src/mcp/` (+ rollup input +
   `embeddedMcpConfig` wiring), add `mcpConfig.ts` branches, add a `src/renderer/<x>Catalog/`, and
-  give the panel a composer + target-filtered `SurfaceBridge`. **The Slack and Confluence generative
-  panels are READ-ONLY** — their generative runs grant only read tools and have no deterministic
-  action dispatcher (only Jira's panel writes). Confluence is read-only *as a generative panel* but
-  the `cosmos-confluence` MCP server exposes **model-mediated write tools** (interactive-TUI-only:
-  registered via `embeddedMcpConfig` but deliberately NOT in `CONFLUENCE_TOOL_GRANTS`, so the panel
-  never gets them) — the agent calls them directly and main attaches the token; there is no Confluence
-  surface form or dispatcher. The write set (confluence-mcp-write-v1) is `confluence_create_page`
+  give the panel a composer + target-filtered `SurfaceBridge`. **The Slack and Google Calendar
+  generative panels are READ-ONLY** (no write tools/bridge ops exist; their runs grant only reads).
+  **The Confluence panel is now curated-WRITE-capable** (cosmos-agent-surgical-write-access-v1):
+  `allowedToolForTarget('confluence')` adds `CONFLUENCE_WRITE_TOOL_GRANTS` (the 3 model-mediated
+  writes the `cosmos-confluence` server already exposes) alongside `CONFLUENCE_TOOL_GRANTS`, and the
+  grounding gains a sanctioned-write clause. The writes are still **model-mediated** (the agent calls
+  the MCP tool, main attaches the token, auto-approved under `--permission-mode dontAsk` exactly like
+  Jira's write grant) — there is NO client-side surface form/dispatcher (only Jira has the
+  deterministic UI-control→re-compose dispatch). Keep the read grant + write grant as TWO separate
+  named lists so the read/write split stays reviewable; the write set MUST stay non-destructive (no
+  delete tool — OQ-5). The write set (confluence-mcp-write-v1) is `confluence_create_page`
   (POST `/wiki/api/v2/pages`), `confluence_update_page` (PUT `/wiki/api/v2/pages/{id}`), and
   `confluence_create_comment` (POST `/wiki/api/v2/footer-comments`). Page create/update are gated by
   `write:page:confluence`; the comment tool is gated by a SEPARATE `write:comment:confluence` scope
@@ -100,6 +104,22 @@ catalogue of conventions and hard-won gotchas. The file-by-file source map lives
   `version_conflict` `ConfluenceErrorKind` (recoverable "re-read and retry"). Two write patterns
   therefore coexist: Jira's deterministic action dispatch (UI control → main re-composes) and
   Confluence's model-mediated MCP writes (agent calls a tool).
+- **The Home (`generated-ui`) run is broad-but-CONNECTED-ONLY** (cosmos-agent-surgical-write-access-v1).
+  Unlike the least-privilege per-panel targets, a Home run is granted EACH currently-connected
+  integration's DATA tools — reads + curated writes (Jira read+write; Confluence reads + 3 writes;
+  Slack reads; Calendar read) — and registers each connected integration's TOOLS server, so the user
+  can read/act on any connected integration from Home. It renders GENERICALLY via `render_ui` and does
+  NOT get the per-integration render tools (`render_jira_ui` etc. would route a surface into the wrong
+  panel — a cross-target leak; OQ-7). The connected set is computed PER RUN from the four managers'
+  live `getStatus().state === 'connected'`, injected into `AgentRunner` as a **booleans-only**
+  `getConnectedIntegrations` provider (a closure over the manager singletons in `index.ts`), so
+  connect/disconnect changes the NEXT run's grant with no restart. **Gotcha:** only the booleans cross
+  into `AgentRunner` — never a token/scope/identity; `ConnectedIntegrations` is MAIN-ONLY and never
+  serialized over IPC. The three builders (`allowedToolForTarget`/`renderMcpConfigJsonForTarget`/
+  `groundingPromptForTarget`) take an optional `connected` arg defaulting to `NO_INTEGRATIONS_CONNECTED`
+  (all-false), so an empty connected set is byte-identical to the pre-feature render-only Home grant —
+  the same mapping (`integrationDataToolGrants`) feeds both the allow-list and the mcp-config so they
+  cannot drift. An unconnected integration is simply not granted; the grounding instructs a Notice.
 - **A composer run also carries the active panel's view context (open-prompt-view-context-v1).**
   When a `PromptComposer` utterance is sent, the panel's CURRENT non-secret selection (open Jira
   ticket / Slack channel+thread / Confluence page / Calendar event) rides along as an optional
@@ -764,6 +784,21 @@ single new `window.cosmos.session` namespace in `src/shared/ipc.ts` (`session:lo
   Drive such state from React instead (e.g. `surface === id`) and apply the active classes
   conditionally; don't rely on `data-[state=active]` on a tooltip-wrapped tab. Symptom: hover
   styling works (real `:hover`) but the selected/active styling does nothing.
+- **A Radix `ContextMenu`/`DropdownMenu` whose item OPENS an inline editor must set
+  `onCloseAutoFocus={(e) => e.preventDefault()}` on the menu Content.** On close, Radix's
+  `DismissableLayer`/`FocusScope` RESTORES focus to the menu trigger by default — and that restore
+  runs on a LATER tick than a `setTimeout(0)`-deferred "begin edit", so it lands AFTER the editor
+  input has mounted + auto-focused, BLURRING it. If the input commits on blur
+  (`onBlur={onCommit}`), the editor closes the instant it opens — "Rename does nothing / flashes and
+  closes" (cosmos-tree-rename-not-working-v1, `PanelTabTree.tsx`). Prevent the close-auto-focus at
+  the source; do NOT band-aid `onBlur` (suppressing the first blur). When the component already owns
+  its own roving focus, Radix's restore is redundant so preventing it is free. WATCH OUT in tests:
+  this is jsdom-INVISIBLE if you query the input via `findBy*` polling right after the menuitem
+  click (the deferred mount wins the macrotask race → false green) — the deterministic guard is to
+  assert the `onCloseAutoFocus` prop wiring directly (`renderRowMenu(...).props.onCloseAutoFocus`
+  calls `preventDefault`); a behavioral guard needs an explicit `await new Promise(r=>setTimeout(r,0))`
+  flush after the click to reproduce the close→commit, and the real-browser timing still warrants a
+  manual `npm run dev` check.
 - **lucide stroke icons render optically smaller than brand-fill icons at the same `size-N`.** The
   rail mixes `react-icons/si` brand logos (filled glyphs that fill their viewBox) with lucide
   (thin-stroke, internal padding). At a shared `size-5` the lucide marks (Settings gear, CalendarDays)

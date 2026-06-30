@@ -2444,7 +2444,17 @@ function createWindow(): void {
       sandboxDir,
       defaultSessionId: defaultSession.sessionId,
       sessionAlreadyExists: !defaultSession.minted,
-      sessionLockEnv: claudeSessionLockEnv
+      sessionLockEnv: claudeSessionLockEnv,
+      // cosmos-agent-surgical-write-access-v1: the live connected-integration provider. Evaluated
+      // ONCE per run (a closure over the four manager singletons), so connecting/disconnecting an
+      // integration changes the NEXT Home run's grant with no restart. Returns booleans ONLY —
+      // no token/scope/identity ever crosses into the AgentRunner (security baseline / FR-013).
+      getConnectedIntegrations: () => ({
+        jira: jiraManager?.getStatus().state === 'connected',
+        confluence: confluenceManager?.getStatus().state === 'connected',
+        slack: slackManager?.getStatus().state === 'connected',
+        googleCalendar: googleCalendarManager?.getStatus().state === 'connected'
+      })
     }
   )
 

@@ -28,6 +28,14 @@ import { EventEmitter } from 'node:events'
 import { AgentRunner, type AgentRunnerSinks, type SpawnFn } from './agentRunner'
 import { RESUME_RETRY_BACKOFF_MS, type SessionLockEnv } from '../pty/sessionLockRecovery'
 import type { AgentStatusPayload } from '../../shared/ipc'
+import {
+  CONFLUENCE_TOOL_GRANTS,
+  CONFLUENCE_WRITE_TOOL_GRANTS,
+  JIRA_TOOL_GRANTS,
+  SLACK_TOOL_GRANTS,
+  GOOGLE_CALENDAR_TOOL_GRANTS,
+  type ConnectedIntegrations
+} from '../mcpConfig'
 
 // ---------------------------------------------------------------------------
 // Shared test infrastructure
@@ -94,6 +102,24 @@ function getResume(args: string[]): string | undefined {
 /** Retrieve `-p` utterance from a spawn call's args array. */
 function getUtterance(args: string[]): string | undefined {
   const idx = args.indexOf('-p')
+  return idx >= 0 ? args[idx + 1] : undefined
+}
+
+/** Retrieve the `--allowedTools` grant string from a spawn call's args array. */
+function getAllowedTools(args: string[]): string | undefined {
+  const idx = args.indexOf('--allowedTools')
+  return idx >= 0 ? args[idx + 1] : undefined
+}
+
+/** Retrieve the `--mcp-config` JSON string from a spawn call's args array. */
+function getMcpConfig(args: string[]): string | undefined {
+  const idx = args.indexOf('--mcp-config')
+  return idx >= 0 ? args[idx + 1] : undefined
+}
+
+/** Retrieve the `--append-system-prompt` grounding string from a spawn call's args array. */
+function getAppendSystemPrompt(args: string[]): string | undefined {
+  const idx = args.indexOf('--append-system-prompt')
   return idx >= 0 ? args[idx + 1] : undefined
 }
 
@@ -647,5 +673,162 @@ describe('AgentRunner integration — create-once-then-resume contract (agent-se
     // Drained run must CONTINUE the session via --resume (session was created by run #1).
     expect(getResume(drainedArgs)).toBe(SESSION_ID)
     expect(getSessionId(drainedArgs)).toBeUndefined()
+  })
+})
+
+// ---------------------------------------------------------------------------
+// 6. cosmos-agent-surgical-write-access-v1 — connected-integration argv
+//
+// The Home (generated-ui) run grants exactly the CONNECTED integrations' tools +
+// servers + grounding, computed per run from an injected getConnectedIntegrations
+// provider. Unconnected integrations are not granted (the agent surfaces a Notice).
+// A no-integration-connected run is byte-identical to the pre-feature Home run.
+// ---------------------------------------------------------------------------
+
+/** Build a runner whose getConnectedIntegrations returns a fixed connected set. */
+function makeConnectedHarness(connected: ConnectedIntegrations) {
+  const children: FakeChild[] = []
+  const spawn = vi.fn(() => {
+    const c = makeFakeChild()
+    children.push(c)
+    return c
+  }) as unknown as ReturnType<typeof vi.fn>
+  const statuses: AgentStatusPayload[] = []
+  const sinks: AgentRunnerSinks = { onStatus: (p) => statuses.push(p) }
+  const runner = new AgentRunner(sinks, {
+    sandboxDir: SANDBOX,
+    spawn: spawn as unknown as SpawnFn,
+    resolveExecutable: vi.fn(() => true),
+    defaultSessionId: SESSION_ID,
+    getConnectedIntegrations: () => connected
+  })
+  return { runner, statuses, spawn, children }
+}
+
+const ALL_DISCONNECTED: ConnectedIntegrations = {
+  jira: false,
+  confluence: false,
+  slack: false,
+  googleCalendar: false
+}
+
+describe('AgentRunner integration — connected-integration grant (cosmos-agent-surgical-write-access-v1)', () => {
+  it('Home run with {confluence} → allowedTools carries confluence reads + 3 writes; mcp-config has the tool server NOT the render server; grounding mentions Confluence + writes; NO jira/slack/calendar', () => {
+    const h = makeConnectedHarness({
+      jira: false,
+      confluence: true,
+      slack: false,
+      googleCalendar: false
+    })
+    h.runner.run('create a confluence page', 'generated-ui')
+
+    const args = h.spawn.mock.calls[0][1] as string[]
+    const allowed = getAllowedTools(args) ?? ''
+    const allowedTools = allowed.split(',')
+    // Reads + the three curated writes are granted.
+    for (const t of [...CONFLUENCE_TOOL_GRANTS, ...CONFLUENCE_WRITE_TOOL_GRANTS]) {
+      expect(allowedTools).toContain(t)
+    }
+    // No other integration's tools.
+    for (const t of [...JIRA_TOOL_GRANTS, ...SLACK_TOOL_GRANTS, ...GOOGLE_CALENDAR_TOOL_GRANTS]) {
+      expect(allowedTools).not.toContain(t)
+    }
+    // Generic render only — no per-integration render tool (OQ-7).
+    expect(
+      allowedTools.some((t) => /cosmos-(jira|slack|confluence|google-calendar)-render-ui__/.test(t))
+    ).toBe(false)
+
+    // mcp-config registers the confluence TOOL server, not the render server.
+    const mcp = getMcpConfig(args) ?? ''
+    const keys = Object.keys(
+      (JSON.parse(mcp) as { mcpServers: Record<string, unknown> }).mcpServers
+    )
+    expect(keys.sort()).toEqual(['cosmos-confluence', 'cosmos-render-ui'])
+    expect(mcp).not.toContain('cosmos-confluence-render-ui')
+
+    // Grounding mentions Confluence + the writes.
+    const grounding = getAppendSystemPrompt(args) ?? ''
+    expect(grounding).toContain('Confluence')
+    expect(grounding).toMatch(/confluence_create_page/)
+  })
+
+  it('Home run with NO integration connected → argv identical to the pre-feature Home run (regression guard)', () => {
+    const connectedH = makeConnectedHarness(ALL_DISCONNECTED)
+    connectedH.runner.run('hello', 'generated-ui')
+    const connectedArgs = connectedH.spawn.mock.calls[0][1] as string[]
+
+    // A plain serial harness has NO provider (defaults to all-false) — must produce identical argv.
+    const plainH = makeSerialHarness()
+    plainH.runner.run('hello', 'generated-ui')
+    const plainArgs = plainH.spawn.mock.calls[0][1] as string[]
+
+    expect(getAllowedTools(connectedArgs)).toBe(getAllowedTools(plainArgs))
+    expect(getMcpConfig(connectedArgs)).toBe(getMcpConfig(plainArgs))
+    expect(getAppendSystemPrompt(connectedArgs)).toBe(getAppendSystemPrompt(plainArgs))
+
+    // And concretely: only render_ui + its catalog, only the cosmos-render-ui server.
+    const allowedTools = (getAllowedTools(connectedArgs) ?? '').split(',')
+    expect(allowedTools).toEqual([
+      'mcp__cosmos-render-ui__get_ui_catalog',
+      'mcp__cosmos-render-ui__render_ui'
+    ])
+    const keys = Object.keys(
+      (JSON.parse(getMcpConfig(connectedArgs) ?? '{"mcpServers":{}}') as {
+        mcpServers: Record<string, unknown>
+      }).mcpServers
+    )
+    expect(keys).toEqual(['cosmos-render-ui'])
+  })
+
+  it('Confluence-panel run → allowedTools now includes the three confluence writes (per-panel surgical writes)', () => {
+    const h = makeConnectedHarness(ALL_DISCONNECTED)
+    h.runner.run('create a page', 'confluence')
+    const allowedTools = (getAllowedTools(h.spawn.mock.calls[0][1] as string[]) ?? '').split(',')
+    for (const w of CONFLUENCE_WRITE_TOOL_GRANTS) {
+      expect(allowedTools).toContain(w)
+    }
+  })
+
+  it('Home run with all four connected → registers all four tool servers + render-ui; jira read+write granted', () => {
+    const h = makeConnectedHarness({
+      jira: true,
+      confluence: true,
+      slack: true,
+      googleCalendar: true
+    })
+    h.runner.run('do everything', 'generated-ui')
+    const args = h.spawn.mock.calls[0][1] as string[]
+    const keys = Object.keys(
+      (JSON.parse(getMcpConfig(args) ?? '') as { mcpServers: Record<string, unknown> }).mcpServers
+    )
+    expect(keys.sort()).toEqual([
+      'cosmos-confluence',
+      'cosmos-google-calendar',
+      'cosmos-jira',
+      'cosmos-render-ui',
+      'cosmos-slack'
+    ])
+    const allowedTools = (getAllowedTools(args) ?? '').split(',')
+    for (const t of JIRA_TOOL_GRANTS) {
+      expect(allowedTools).toContain(t)
+    }
+  })
+
+  it('NO secret/token string appears anywhere in the composed argv (the provider returns booleans only)', () => {
+    const h = makeConnectedHarness({
+      jira: true,
+      confluence: true,
+      slack: true,
+      googleCalendar: true
+    })
+    h.runner.run('secret-safety check', 'generated-ui')
+    const args = h.spawn.mock.calls[0][1] as string[]
+    const joined = args.join(' ')
+    // No token/secret/credential markers anywhere in argv.
+    expect(joined).not.toMatch(/Bearer\s/)
+    expect(joined).not.toMatch(/access[_-]?token/i)
+    expect(joined).not.toMatch(/refresh[_-]?token/i)
+    expect(joined).not.toMatch(/client[_-]?secret/i)
+    expect(joined).not.toMatch(/authorization/i)
   })
 })

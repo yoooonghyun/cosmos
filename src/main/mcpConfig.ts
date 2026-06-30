@@ -39,6 +39,33 @@ export interface McpStdioServerEntry {
 }
 
 /**
+ * The set of currently-connected integrations (cosmos-agent-surgical-write-access-v1).
+ * MAIN-ONLY, booleans ONLY — this descriptor is the live connection signal threaded from the
+ * four managers' `getStatus().state === 'connected'` into the per-target grant builders so the
+ * Home (`generated-ui`) run grants ONLY the connected integrations' tools + servers (OQ-1). It
+ * carries NO token, scope, or identity and is NEVER serialized over IPC, a bridge frame, or an
+ * MCP result — only the booleans cross into {@link AgentRunner} (security baseline / FR-013).
+ */
+export interface ConnectedIntegrations {
+  jira: boolean
+  confluence: boolean
+  slack: boolean
+  googleCalendar: boolean
+}
+
+/**
+ * The all-false {@link ConnectedIntegrations} — the DEFAULT for every builder so a run with no
+ * connected integrations (and the pre-feature, un-wired path) is BYTE-IDENTICAL to today's
+ * render-only Home grant. Frozen so the shared default is never mutated.
+ */
+export const NO_INTEGRATIONS_CONNECTED: ConnectedIntegrations = Object.freeze({
+  jira: false,
+  confluence: false,
+  slack: false,
+  googleCalendar: false
+})
+
+/**
  * The render_ui stdio server entry — `node out/main/mcp/renderUiServer.js` with
  * `COSMOS_BRIDGE_SOCKET` pointing at the EXISTING `UiBridge` socket for
  * `sandboxDir`. Identical for the interactive PTY and the headless runner so a
@@ -228,6 +255,22 @@ export const CONFLUENCE_TOOL_GRANTS: readonly string[] = [
 ]
 
 /**
+ * The fully-qualified CURATED Confluence WRITE tool grants for `--allowedTools`
+ * (cosmos-agent-surgical-write-access-v1, FR-006/FR-007). The three NON-DESTRUCTIVE writes the
+ * Confluence MCP server already exposes — create a page, update a page, add a footer comment. NO
+ * delete/purge tool (none exists; the curated set MUST stay non-destructive — OQ-5). Granted to
+ * BOTH the `confluence` per-panel target AND the Home (`generated-ui`) run when Confluence is
+ * connected. Kept separate from {@link CONFLUENCE_TOOL_GRANTS} (the reads) so the read/write split
+ * stays reviewable. Tokens never reach the agent — each write relays over the confluence bridge to
+ * main, which attaches the credential; a scope gap returns a structured `write_not_authorized`.
+ */
+export const CONFLUENCE_WRITE_TOOL_GRANTS: readonly string[] = [
+  `mcp__${CONFLUENCE_TOOLS_SERVER_NAME}__${ConfluenceTool.CreatePage}`,
+  `mcp__${CONFLUENCE_TOOLS_SERVER_NAME}__${ConfluenceTool.UpdatePage}`,
+  `mcp__${CONFLUENCE_TOOLS_SERVER_NAME}__${ConfluenceTool.CreateComment}`
+]
+
+/**
  * The read-only Confluence stdio server entry — `node out/main/mcp/confluenceMcpServer.js`
  * with its OWN bridge socket (`COSMOS_CONFLUENCE_BRIDGE_SOCKET`). Identical to the
  * interactive PTY's `cosmos-confluence` registration so a confluence-target generative
@@ -315,16 +358,46 @@ export function googleCalendarRenderUiMcpServerEntry(sandboxDir: string): McpStd
 }
 
 /**
+ * The flat DATA-tool grant list for the CONNECTED integrations
+ * (cosmos-agent-surgical-write-access-v1) — the Home (`generated-ui`) run appends these to its
+ * render grant so it can READ and (curated-)WRITE every connected integration's data. Jira =
+ * read+write; Confluence = reads + the three curated writes; Slack / Google Calendar = read-only
+ * (no write tools exist). The SAME mapping feeds both {@link allowedToolForTarget} (the names) and
+ * {@link renderMcpConfigJsonForTarget} (the servers) so the allow-list and the registered servers
+ * can never drift. Does NOT include any per-integration render/get_ui_catalog tool — Home renders
+ * generically via `render_ui` only (OQ-7). Empty connected set → `[]` (byte-identical to today).
+ */
+function integrationDataToolGrants(connected: ConnectedIntegrations): string[] {
+  const grants: string[] = []
+  if (connected.jira) {
+    grants.push(...JIRA_TOOL_GRANTS)
+  }
+  if (connected.confluence) {
+    grants.push(...CONFLUENCE_TOOL_GRANTS, ...CONFLUENCE_WRITE_TOOL_GRANTS)
+  }
+  if (connected.slack) {
+    grants.push(...SLACK_TOOL_GRANTS)
+  }
+  if (connected.googleCalendar) {
+    grants.push(...GOOGLE_CALENDAR_TOOL_GRANTS)
+  }
+  return grants
+}
+
+/**
  * The headless runner's `--mcp-config` JSON for a given render `target` (D2): for
  * `'jira'`, the jira render server + read/write tools; for `'slack'`/`'confluence'`,
- * that integration's render server + its READ-ONLY tools (FR-008..FR-010); for
- * `'generated-ui'`, ONLY `cosmos-render-ui`. Least-privilege per run — each target's run
- * cannot reach another integration's tools or the generic render tool. Pairs with
+ * that integration's render server + its tools (Confluence also exposes the writes — the
+ * server already registers them); for `'generated-ui'` (Home), `cosmos-render-ui` PLUS each
+ * CONNECTED integration's TOOLS server only (no per-integration render server — OQ-7), so an
+ * empty connected set is identical to today's render-only config. Least-privilege per run — a
+ * per-panel run cannot reach another integration's tools or the generic render tool. Pairs with
  * {@link allowedToolForTarget}.
  */
 export function renderMcpConfigJsonForTarget(
   sandboxDir: string,
-  target: UiRenderTarget = DEFAULT_UI_RENDER_TARGET
+  target: UiRenderTarget = DEFAULT_UI_RENDER_TARGET,
+  connected: ConnectedIntegrations = NO_INTEGRATIONS_CONNECTED
 ): string {
   if (target === 'jira') {
     // A jira-target run gets the render tool PLUS the cosmos-jira read+write tools so it can
@@ -367,7 +440,27 @@ export function renderMcpConfigJsonForTarget(
       }
     })
   }
-  return renderUiMcpConfigJson(sandboxDir)
+  // generated-ui (Home): the generic render server PLUS each CONNECTED integration's TOOLS server
+  // (cosmos-agent-surgical-write-access-v1, FR-001/OQ-7). The integration tool servers connect to
+  // the SAME already-running per-sandboxDir bridges the panels use (no new bridge wiring). NO
+  // per-integration render server — Home renders generically via `render_ui`. Empty connected set
+  // → ONLY `cosmos-render-ui` (identical to `renderUiMcpConfigJson`, today's behaviour).
+  const mcpServers: Record<string, McpStdioServerEntry> = {
+    'cosmos-render-ui': renderUiMcpServerEntry(sandboxDir)
+  }
+  if (connected.jira) {
+    mcpServers[JIRA_TOOLS_SERVER_NAME] = jiraToolsMcpServerEntry(sandboxDir)
+  }
+  if (connected.confluence) {
+    mcpServers[CONFLUENCE_TOOLS_SERVER_NAME] = confluenceToolsMcpServerEntry(sandboxDir)
+  }
+  if (connected.slack) {
+    mcpServers[SLACK_TOOLS_SERVER_NAME] = slackToolsMcpServerEntry(sandboxDir)
+  }
+  if (connected.googleCalendar) {
+    mcpServers[GOOGLE_CALENDAR_TOOLS_SERVER_NAME] = googleCalendarToolsMcpServerEntry(sandboxDir)
+  }
+  return JSON.stringify({ mcpServers })
 }
 
 /**
@@ -418,8 +511,101 @@ const GET_UI_CATALOG_STEERING =
   'render_confluence_ui / render_google_calendar_ui) to get the component catalog and authoring ' +
   'rules — you cannot author a valid surface without it.'
 
+/**
+ * The sanctioned-write clause appended to the Confluence per-panel grounding
+ * (cosmos-agent-surgical-write-access-v1, FR-010). Permits the three curated writes when the
+ * user EXPLICITLY asks, keeps anti-fabrication for the result, and routes any failure to a single
+ * Notice — never a fabricated success. The read-rendered values stay verbatim (the read-first
+ * clause above is unchanged).
+ */
+const CONFLUENCE_WRITE_STEERING = [
+  'When the user EXPLICITLY asks to create or update a page or add a comment, you MAY call',
+  'confluence_create_page, confluence_update_page, or confluence_create_comment. Use ONLY the',
+  'real, user-provided values — never invent a space, page id, title, or body. If the write is not',
+  'authorized or fails (write_not_authorized, not-connected, or a version conflict), render a',
+  'single Notice (reconnect Confluence to grant write access, or re-read the page and retry) —',
+  'never claim a fabricated success.'
+].join(' ')
+
+/**
+ * Build the SINGLE combined integration-grounding clause for the Home (`generated-ui`) run from
+ * the CONNECTED set (cosmos-agent-surgical-write-access-v1, OQ-8/FR-003). Names only the connected
+ * integrations (so the prompt stays bounded), restates read-first anti-fabrication, grants the
+ * curated writes (Jira + Confluence) when explicitly asked, marks Slack/Calendar read-only, and
+ * routes a not-connected/error/unauthorized result to a single Notice. Returns `undefined` when no
+ * integration is connected (Home then keeps today's catalog-pull-only grounding).
+ */
+function homeIntegrationGroundingClause(connected: ConnectedIntegrations): string | undefined {
+  const names: string[] = []
+  const readTools: string[] = []
+  if (connected.jira) {
+    names.push('Jira')
+    readTools.push('jira_search_issues / jira_get_issue')
+  }
+  if (connected.confluence) {
+    names.push('Confluence')
+    readTools.push('confluence_search_content / confluence_get_page')
+  }
+  if (connected.slack) {
+    names.push('Slack')
+    readTools.push(
+      'slack_list_channels / slack_read_history / slack_read_thread / ' +
+        'slack_search_messages / slack_lookup_user'
+    )
+  }
+  if (connected.googleCalendar) {
+    names.push('Google Calendar')
+    readTools.push('google_calendar_list_events')
+  }
+  if (names.length === 0) {
+    return undefined
+  }
+  const writeSets: string[] = []
+  if (connected.jira) {
+    writeSets.push(
+      'Jira (jira_transition_issue, jira_add_comment, jira_create_issue, jira_update_issue)'
+    )
+  }
+  if (connected.confluence) {
+    writeSets.push(
+      'Confluence (confluence_create_page, confluence_update_page, confluence_create_comment)'
+    )
+  }
+  const readOnlyNames: string[] = []
+  if (connected.slack) {
+    readOnlyNames.push('Slack')
+  }
+  if (connected.googleCalendar) {
+    readOnlyNames.push('Google Calendar')
+  }
+  const parts: string[] = [
+    `You are the cosmos Home assistant. You can READ and ACT on these CONNECTED integrations: ${names.join(', ')}.`,
+    `Fetch real data with their read tools (${readTools.join('; ')}) and render EVERY value verbatim`,
+    'from a tool result in THIS conversation — never invent, guess, paraphrase, or copy an example',
+    'value from a tool description. Render every integration surface with the GENERIC render_ui tool',
+    '(you do NOT have the per-panel render_jira_ui / render_slack_ui / render_confluence_ui /',
+    'render_google_calendar_ui tools).'
+  ]
+  if (writeSets.length > 0) {
+    parts.push(
+      `When the user EXPLICITLY asks to mutate, you MAY perform the curated writes for ${writeSets.join(' and ')}, using ONLY real, user-provided values.`
+    )
+  }
+  if (readOnlyNames.length > 0) {
+    parts.push(`${readOnlyNames.join(' and ')} ${readOnlyNames.length === 1 ? 'is' : 'are'} READ-ONLY (no write tools).`)
+  }
+  parts.push(
+    'If the user names an integration that is NOT in the connected list above, or a tool returns a',
+    'not-connected / write_not_authorized / error result, render a SINGLE Notice telling the user to',
+    'connect or reconnect that integration in cosmos — never fabricate data and never claim a write',
+    'that did not succeed.'
+  )
+  return parts.join(' ')
+}
+
 export function groundingPromptForTarget(
-  target: UiRenderTarget = DEFAULT_UI_RENDER_TARGET
+  target: UiRenderTarget = DEFAULT_UI_RENDER_TARGET,
+  connected: ConnectedIntegrations = NO_INTEGRATIONS_CONNECTED
 ): string | undefined {
   if (target === 'jira') {
     return [
@@ -466,6 +652,9 @@ export function groundingPromptForTarget(
       'Notice component explaining that (and to connect/reconnect Confluence in cosmos) INSTEAD',
       'of fabricating any pages. If a read returns no results, convey "nothing found" rather',
       'than inventing rows.',
+      // cosmos-agent-surgical-write-access-v1 (FR-010): the Confluence panel is no longer
+      // read-only — it MAY perform the three curated writes when the user explicitly asks.
+      CONFLUENCE_WRITE_STEERING,
       BINDINGS_FIRST_STEERING
     ].join(' ')
   }
@@ -486,10 +675,13 @@ export function groundingPromptForTarget(
       BINDINGS_FIRST_STEERING
     ].join(' ')
   }
-  // generated-ui: previously had no grounding (returned undefined). It now returns the catalog-pull
-  // ordering clause so the generic render run ALSO pulls get_ui_catalog first (FR-009). The
-  // AgentRunner only skips `--append-system-prompt` when this is undefined; a short prompt is fine.
-  return GET_UI_CATALOG_STEERING
+  // generated-ui (Home): the catalog-pull ordering clause so the generic render run pulls
+  // get_ui_catalog first (FR-009). cosmos-agent-surgical-write-access-v1 (OQ-8): when ≥1
+  // integration is connected, ALSO append the SINGLE combined integration clause assembled from
+  // the connected set (read-first + sanctioned writes + Notice-on-not-connected). Empty connected
+  // set → just the catalog-pull clause (today's behaviour, byte-identical).
+  const homeClause = homeIntegrationGroundingClause(connected)
+  return homeClause ? [GET_UI_CATALOG_STEERING, homeClause].join(' ') : GET_UI_CATALOG_STEERING
 }
 
 /**
@@ -499,7 +691,8 @@ export function groundingPromptForTarget(
  * accepts), so the run can read real tickets and mutate when asked.
  */
 export function allowedToolForTarget(
-  target: UiRenderTarget = DEFAULT_UI_RENDER_TARGET
+  target: UiRenderTarget = DEFAULT_UI_RENDER_TARGET,
+  connected: ConnectedIntegrations = NO_INTEGRATIONS_CONNECTED
 ): string {
   // ui-catalog-pull-spinner-signal-v1 (FR-009): every target ALSO grants its server's
   // `get_ui_catalog` tool — the agent must pull the catalog (the early spinner signal) before
@@ -512,11 +705,13 @@ export function allowedToolForTarget(
     return [SLACK_GET_UI_CATALOG_TOOL, SLACK_RENDER_UI_TOOL, ...SLACK_TOOL_GRANTS].join(',')
   }
   if (target === 'confluence') {
-    // Confluence render tool + the two read-only Confluence tools; NO writes.
+    // Confluence render tool + the two reads + the three CURATED WRITES
+    // (cosmos-agent-surgical-write-access-v1, FR-008): the panel is no longer read-only.
     return [
       CONFLUENCE_GET_UI_CATALOG_TOOL,
       CONFLUENCE_RENDER_UI_TOOL,
-      ...CONFLUENCE_TOOL_GRANTS
+      ...CONFLUENCE_TOOL_GRANTS,
+      ...CONFLUENCE_WRITE_TOOL_GRANTS
     ].join(',')
   }
   if (target === 'google-calendar') {
@@ -527,5 +722,9 @@ export function allowedToolForTarget(
       ...GOOGLE_CALENDAR_TOOL_GRANTS
     ].join(',')
   }
-  return [GET_UI_CATALOG_TOOL, RENDER_UI_TOOL].join(',')
+  // generated-ui (Home): the generic render + catalog tools, PLUS each CONNECTED integration's
+  // DATA-tool grants (reads + curated writes — cosmos-agent-surgical-write-access-v1, FR-002/OQ-7).
+  // NO per-integration render/get_ui_catalog tool (Home renders generically). Empty connected set
+  // → exactly `get_ui_catalog,render_ui` (byte-identical to today).
+  return [GET_UI_CATALOG_TOOL, RENDER_UI_TOOL, ...integrationDataToolGrants(connected)].join(',')
 }

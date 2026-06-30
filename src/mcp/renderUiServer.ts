@@ -191,7 +191,7 @@ class BridgeClient {
  * UI-generation spinner signal). Only a one-line pointer + the bare argument shape remain.
  */
 const A2UI_TOOL_DESCRIPTION = [
-  'Render a rich, interactive UI surface in the cosmos Generated-UI panel and',
+  'Render a rich, interactive UI surface in the cosmos Home (Cosmos) surface and',
   "return the user's interaction. Use this whenever a request is best answered",
   'with a form, list, card, choices, or other interactive UI rather than text.',
   '',

@@ -308,8 +308,10 @@ event.** This is a behavior contract, not an optimization:
 - **Multiple A2UI panels** coexist over the SAME `ui:render` / `ui:action` channels. Each panel
   hosts its **own `A2UIProvider` with its own catalog** and **filters incoming `ui:render` by
   `target`** (§4.3), rendering only the frames addressed to it and ignoring the rest:
-  - the **Generated-UI panel** — general-purpose, renders `target: 'generated-ui'` surfaces with
-    the A2UI **standard catalog**;
+  - the **Home / Cosmos surface** — general-purpose, renders `target: 'generated-ui'` surfaces with
+    the A2UI **standard catalog** (`'generated-ui'` is the Home agent's WIRE TARGET — the
+    `DEFAULT_UI_RENDER_TARGET` a frame gets when `render_ui` omits `target` — not a separate
+    standalone panel);
   - the **Jira panel** (`src/renderer/JiraPanel.tsx`, §4.9) — renders `target: 'jira'` surfaces
     with the **Jira custom catalog** (`src/renderer/jiraCatalog/`); and
   - the **Slack panel** (`src/renderer/SlackPanel.tsx`, §4.8) and **Confluence panel**
@@ -390,8 +392,9 @@ gotchas are in [`DEVELOPMENT.md`](./DEVELOPMENT.md).
 - **renderer** (`src/renderer/`) — React app; `App.tsx` is the shell (left icon-rail
   single-surface switcher, §3) and stays at the renderer root with the other entry/shell files
   (`main.tsx`, `index.html`, `index.css`, `App.css`, `vite-env.d.ts`). `terminal/TerminalPanel.tsx`
-  hosts xterm.js + FitAddon, the Generated-UI panel renders `target: 'generated-ui'` A2UI
-  (standard catalog), and `jira/JiraPanel.tsx`, `slack/SlackPanel.tsx`,
+  hosts xterm.js + FitAddon, the Home / Cosmos surface renders `target: 'generated-ui'` A2UI
+  (standard catalog — `'generated-ui'` is the Home agent's wire target, not a standalone panel),
+  and `jira/JiraPanel.tsx`, `slack/SlackPanel.tsx`,
   `confluence/ConfluencePanel.tsx` are generative surfaces each rendering their own `target` A2UI
   with their own custom catalog nested under the domain folder (`jira/jiraCatalog/`,
   `slack/slackCatalog/`, `confluence/confluenceCatalog/`; §4.8/§4.9). The renderer is grouped into
@@ -687,10 +690,15 @@ serving **both** surfaces:
   are gated INDEPENDENTLY; every not-authorized / loading / empty / error / not-connected state degrades
   gracefully in the dock — never crash, never leak a token. After a successful add the section re-fetches
   the page's comments (no optimistic insert in v1); comments load on dock open + reload on retarget, and a
-  stale in-flight result for a no-longer-open page is discarded. **The Confluence generative panel stays
-  read-only** (no write control/dispatcher, and the page-create
-  tool is intentionally NOT in the panel's `--allowedTools` grant — `CONFLUENCE_TOOL_GRANTS`); the
-  `confluence_create_page` write lives only on the MCP server for the interactive TUI. Both panels
+  stale in-flight result for a no-longer-open page is discarded. **The Confluence generative panel is
+  now curated-WRITE-capable** (`cosmos-agent-surgical-write-access-v1`): its `--allowedTools` grant adds
+  `CONFLUENCE_WRITE_TOOL_GRANTS` — the three non-destructive writes the `cosmos-confluence` MCP server
+  already exposes (`confluence_create_page`, `confluence_update_page`, `confluence_create_comment`) —
+  alongside the reads in `CONFLUENCE_TOOL_GRANTS`, and its grounding gains a sanctioned-write clause
+  (write ONLY on an explicit ask, with real values; a scope gap / failure renders a single Notice, never a
+  fabricated success). There is still **no client-side write control/dispatcher** (writes are
+  model-mediated via the MCP tool, auto-approved under `--permission-mode dontAsk` exactly like the Jira
+  write grant); the read/write split stays reviewable as two separate named grant lists. Both panels
   render the not-connected / loading / idle-empty / error / reconnect-needed states and reuse the
   shared Tailwind + shadcn/ui design system and the Slack panel's chrome. The design system's
   authoritative canon is **`docs/DESIGN.md`** (design-foundation-v1): the named scale system
@@ -793,20 +801,40 @@ status — never tokens or transcript).
   `~/.claude` login automatically (no API key / OAuth token injected). It reuses the interactive
   path's binary pre-check so a missing/un-resolvable `claude` fails fast with a clear error status
   rather than hanging.
-- The run is granted **only the tools for its target** via `--mcp-config` + `--allowedTools`
-  (least privilege; `renderMcpConfigJsonForTarget` / `allowedToolForTarget` in
-  `src/main/mcpConfig.ts`): `render_ui` for `'generated-ui'`; for an integration target, that
-  target's render tool **PLUS that integration's READ tools** — `render_jira_ui` + the
-  `cosmos-jira` read/write tools for `'jira'`, `render_slack_ui` + the five `cosmos-slack` reads
-  for `'slack'`, `render_confluence_ui` + the two `cosmos-confluence` reads for `'confluence'`
-  (§4.3) — and nothing else (a `'slack'` run cannot reach Confluence/Jira/generic tools, and
-  symmetrically). For any non-default target the run also appends an anti-fabrication grounding
-  system prompt (`groundingPromptForTarget`) via `--append-system-prompt`: fetch REAL data with the
-  read tools first, render every value verbatim from a tool result, never copy the render tool's
-  example, and on not-connected/error render a single Notice. All render to the shared `UiBridge`,
-  and each run's surface lands in the matching panel via `target` routing (§4.4). The run is driven
-  with `--permission-mode dontAsk` and `--output-format json` so completion/error are detectable
-  from parsed stdout + exit code.
+- The run's grant is computed per target via `--mcp-config` + `--allowedTools`
+  (`renderMcpConfigJsonForTarget` / `allowedToolForTarget` in `src/main/mcpConfig.ts`):
+  - **Per-panel targets stay least-privilege** — that target's render tool **PLUS that integration's
+    data tools** and nothing else (a `'slack'` run cannot reach Confluence/Jira/generic tools, and
+    symmetrically): `render_jira_ui` + the `cosmos-jira` read/write tools for `'jira'`;
+    `render_slack_ui` + the five `cosmos-slack` reads for `'slack'`; `render_confluence_ui` + the two
+    `cosmos-confluence` reads **AND the three curated `cosmos-confluence` writes** for `'confluence'`
+    (`cosmos-agent-surgical-write-access-v1` — Confluence is no longer read-only, §4.9);
+    `render_google_calendar_ui` + the one `cosmos-google-calendar` read for `'google-calendar'`.
+  - **The Home / Cosmos target (`'generated-ui'`) is broad-but-connected-only.** Beyond the generic
+    `render_ui` + `get_ui_catalog`, the Home run is granted **each CURRENTLY-CONNECTED integration's
+    DATA tools** — reads + curated writes (Jira read+write; Confluence reads + the three writes; Slack
+    reads; Calendar read) — and registers each connected integration's TOOLS server (`cosmos-jira` /
+    `cosmos-confluence` / `cosmos-slack` / `cosmos-google-calendar`, connecting to the same per-sandbox
+    bridges the panels use). It does **NOT** get the per-integration render tools — Home renders
+    GENERICALLY via `render_ui` (granting `render_jira_ui` would let a Home run push a surface into the
+    Jira panel, a cross-target routing leak). The connected set is computed **per run** from the four
+    managers' live `getStatus().state === 'connected'`, injected into `AgentRunner` as a
+    booleans-only `getConnectedIntegrations` provider (closure over the manager singletons in
+    `index.ts`), so connect/disconnect changes the NEXT run's grant with no restart. With nothing
+    connected the Home grant is byte-identical to the pre-feature render-only config. **Secrets are
+    unaffected** — only booleans cross into `AgentRunner`; no token/scope/identity ever enters the
+    args, the agent, or the timeline (the bridge still attaches credentials in main).
+  - The Home run appends ONE combined integration-grounding clause assembled from the connected set
+    (read-first anti-fabrication + sanctioned writes + a Notice when the user names an unconnected
+    integration); each per-panel target appends its own anti-fabrication grounding
+    (`groundingPromptForTarget`) via `--append-system-prompt`: fetch REAL data with the read tools
+    first, render every value verbatim from a tool result, never copy the render tool's example, and
+    on not-connected/error/unauthorized render a single Notice. All render to the shared `UiBridge`,
+    and each run's surface lands in the matching panel via `target` routing (§4.4). The run is driven
+    with `--permission-mode dontAsk` and `--output-format json` so completion/error are detectable
+    from parsed stdout + exit code, and a granted write auto-runs with no per-action confirm (the
+    curated, non-destructive allow-list + full timeline auditability are the mitigation, not a prompt;
+    `bypassPermissions` is never used).
 - **The Home timeline STREAMS the run's progress.** `claude` appends to the default-session
   transcript jsonl incrementally during a run, so main WATCHES that file while a run is in flight
   (`TranscriptWatcher`, polled + change-deduped) and pushes `conversation:update` on each change —

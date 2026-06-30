@@ -34,7 +34,13 @@
 
 import { spawn as nodeSpawn, type ChildProcess } from 'node:child_process'
 import { isExecutableResolvable } from '../pty/ptyManager'
-import { allowedToolForTarget, groundingPromptForTarget, renderMcpConfigJsonForTarget } from '../mcpConfig'
+import {
+  allowedToolForTarget,
+  groundingPromptForTarget,
+  renderMcpConfigJsonForTarget,
+  NO_INTEGRATIONS_CONNECTED,
+  type ConnectedIntegrations
+} from '../mcpConfig'
 import { viewContextGroundingClause } from '../generative/viewContextGrounding'
 import { decideSubmit, sessionFlagForRun } from './agentSessionQueue'
 import {
@@ -115,6 +121,17 @@ export interface AgentRunnerOptions {
    * `index.ts` so production gets the registry-release retry.
    */
   sessionLockEnv?: SessionLockEnv
+  /**
+   * cosmos-agent-surgical-write-access-v1: the live CONNECTED-integration provider. Read ONCE
+   * per run in {@link AgentRunner.spawnRun} (a closure over the four managers' live
+   * `getStatus().state === 'connected'` in `index.ts`) and threaded — booleans ONLY — into the
+   * three per-target grant builders so the Home (`generated-ui`) run grants exactly the currently
+   * connected integrations' tools + servers + grounding (OQ-1). Defaults to
+   * {@link NO_INTEGRATIONS_CONNECTED} (all-false), so an un-wired runner's behaviour is
+   * byte-identical to the pre-feature render-only Home grant. NO token/scope/identity crosses this
+   * boundary — only the booleans (security baseline / FR-013).
+   */
+  getConnectedIntegrations?: () => ConnectedIntegrations
 }
 
 /** One queued submit (any target), awaiting the in-flight run to finish. */
@@ -160,6 +177,12 @@ export class AgentRunner {
   private sessionExists: boolean
   /** Injected registry env for the registry-release retry (defaults to a no-op empty registry). */
   private readonly sessionLockEnv: SessionLockEnv
+  /**
+   * cosmos-agent-surgical-write-access-v1: the live connected-integration provider (booleans
+   * only). Read once per run in {@link spawnRun}; defaults to all-false so an un-wired runner is
+   * byte-identical to the pre-feature render-only Home grant.
+   */
+  private readonly getConnectedIntegrations: () => ConnectedIntegrations
 
   /** The in-flight child, or null when idle (single-run state). */
   private child: ChildProcess | null = null
@@ -184,6 +207,8 @@ export class AgentRunner {
     this.defaultSessionId = options.defaultSessionId
     this.sessionExists = options.sessionAlreadyExists ?? false
     this.sessionLockEnv = options.sessionLockEnv ?? NOOP_SESSION_LOCK_ENV
+    this.getConnectedIntegrations =
+      options.getConnectedIntegrations ?? (() => NO_INTEGRATIONS_CONNECTED)
   }
 
   /** True while a headless run is in flight. */
@@ -253,12 +278,18 @@ export class AgentRunner {
       return
     }
 
+    // cosmos-agent-surgical-write-access-v1: read the live connected set ONCE per run and thread
+    // the booleans into all three (now connected-aware) builders. For a per-panel target the
+    // builders ignore it (except the static Confluence write grant); a Home run uses it to grant
+    // exactly the connected integrations' tools + servers + grounding. Booleans only — no secret.
+    const connected = this.getConnectedIntegrations()
+
     const args = [
       '-p',
       utterance,
       '--mcp-config',
-      // D2: register ONLY the render server for this target (jira vs generated-ui).
-      renderMcpConfigJsonForTarget(this.sandboxDir, target),
+      // D2: the render server for this target, plus (Home) each connected integration's tool server.
+      renderMcpConfigJsonForTarget(this.sandboxDir, target, connected),
       // Only use servers from --mcp-config — ignore any global MCP config so the
       // headless run is isolated to the one render tool (least-privilege; FR-013).
       '--strict-mcp-config',
@@ -266,9 +297,10 @@ export class AgentRunner {
       // in --allowedTools.
       '--permission-mode',
       'dontAsk',
-      // Least-privilege: grant ONLY the render tool for this target (D2 / FR-013).
+      // Least-privilege: grant the render tool for this target plus (Home) the connected
+      // integrations' read + curated-write data tools (D2 / FR-013 / FR-002).
       '--allowedTools',
-      allowedToolForTarget(target),
+      allowedToolForTarget(target, connected),
       // Single result JSON on stdout so completion/error are detectable.
       '--output-format',
       'json'
@@ -295,7 +327,7 @@ export class AgentRunner {
     // (the open ticket/channel/thread/page/event) to the SAME system prompt so deictic
     // utterances resolve — the user's literal `-p` utterance above is left untouched.
     const groundingPrompt = composeGroundingPrompt(
-      groundingPromptForTarget(target),
+      groundingPromptForTarget(target, connected),
       viewContextGroundingClause(target, viewContext)
     )
     if (groundingPrompt) {

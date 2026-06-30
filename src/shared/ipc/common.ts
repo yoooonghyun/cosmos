@@ -16,9 +16,11 @@
  * `ui:render` by `target` (rendering only payloads whose `target` matches its own
  * panel, ignoring the rest). No dedicated Jira channel set is added.
  *
- *  - `'generated-ui'` — the generic Generated-UI panel (standard catalog). The
- *    DEFAULT when a render frame omits `target` (backward-compatible with the
- *    unchanged standard `render_ui`).
+ *  - `'generated-ui'` — the Home agent's WIRE TARGET: `target: 'generated-ui'`
+ *    frames render into the Home / Cosmos surface with the A2UI standard catalog
+ *    (not a separate standalone panel). The DEFAULT a render frame gets when
+ *    `render_ui` omits `target` (backward-compatible with the unchanged standard
+ *    `render_ui`).
  *  - `'jira'` — the native Jira rail panel (the `catalogId: 'jira'` custom catalog).
  *    Set by the deterministic default-view + post-write re-pushes and by the
  *    Jira-scoped `render_jira_ui` tool.
