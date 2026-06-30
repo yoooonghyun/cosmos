@@ -71,8 +71,10 @@ Entry/shell files stay at the root; everything else is grouped by domain/feature
 - `session/` — `SessionProvider.tsx`, `sessionRegistry.ts`, `sessionSnapshot.ts`
 - `tabs/` — VS Code-style tab/nav plumbing: `panelTabs.ts` (pure open/close/label logic),
   `usePanelTabs.ts` (generic controller), `PanelTabStrip.tsx` (reusable strip),
-  `useGenerativePanelTabs.ts` (originating-tab correlation), `perTabNav.ts` / `usePerTabNav.ts`
-  (per-tab native-base browser nav), `closeTabRouting.ts`, `useTabShortcuts.ts`,
+  `useGenerativePanelTabs.ts` (originating-tab correlation), `tabIconRegistry.tsx` (the
+  per-tab random "cosmos" glyph id→lucide-component map + `tabIconComponent` resolver,
+  cosmos-random-tab-icons-v1 — vocabulary lives in `shared/tabIcons.ts`), `perTabNav.ts` /
+  `usePerTabNav.ts` (per-tab native-base browser nav), `closeTabRouting.ts`, `useTabShortcuts.ts`,
   `TerminalTabNavRouting.dom.test.tsx`
 - `composer/` — open-prompt composer: `PromptComposer.tsx`, `promptComposerLogic.ts`,
   `activeComposer.ts`, `ActiveComposerProvider.tsx`, `OpenPromptPositionProvider.tsx`,
@@ -141,6 +143,11 @@ stay stable (rollup input keys + `mcpConfig.ts` runtime `join(__dirname, 'mcp/<n
   payload types), `validate.ts` (pure IPC payload validators), `bridge.ts` (NDJSON socket
   framing) (+ `bridge.test.ts` and the top-level `validate*.test.ts` files that exercise the
   `ipc/` barrels next to `validate.ts`)
+- `tabIcons.ts` — the PURE, React-free per-tab "cosmos" glyph vocabulary
+  (cosmos-random-tab-icons-v1): the single 14-id SET (`TAB_ICON_IDS`), `TabIconId`, `isTabIconId`,
+  the event-time `randomTabIconId()` (mint sites only), and the DETERMINISTIC `tabIconIdFromKey()`
+  (hydrate/initializer fallback, no `Math.random`). Imported by BOTH the main snapshot validator
+  and the renderer registry (`tabs/tabIconRegistry.tsx` owns the lucide components) (+ `.test.ts`)
 - `ipc/` — the per-domain IPC contract modules behind the same-path barrels
   (`common`/`pty`/`ui`/`agent`/`shortcut`/`slack`/`jira`/`confluence`/`googleCalendar`/`session`/
   `settings`/`conversation`, each with a sibling `*.validate.ts`) — UNCHANGED grouping

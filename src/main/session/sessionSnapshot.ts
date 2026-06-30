@@ -27,6 +27,7 @@ import {
   type TerminalTabSnapshot
 } from '../../shared/ipc'
 import { validateAdapterBindings, validateAdapterDescriptor } from '../../shared/validate'
+import { isTabIconId } from '../../shared/tabIcons'
 
 /** Optional structured warning sink (defaults to console.warn) — mirrors validate.ts. */
 export type WarnFn = (message: string, ...rest: unknown[]) => void
@@ -202,6 +203,9 @@ function validateTerminalTab(value: unknown, warn: WarnFn): TerminalTabSnapshot 
     cwd: value.cwd
   }
   if (value.renamed === true) tab.renamed = true
+  // cosmos-random-tab-icons-v1 (FR-007): keep a KNOWN glyph id; DROP an unknown/malformed one
+  // (benign — hydrate's deterministic fallback then assigns a stable glyph). Never throws.
+  if (isTabIconId(value.iconId)) tab.iconId = value.iconId
   if (typeof value.scrollback === 'string') tab.scrollback = value.scrollback
   // persist-workdir-open-files-v1 (FR-003/FR-009/FR-012): an absent/malformed slice
   // normalizes to undefined (omitted) — additive, never affecting required fields.
@@ -231,6 +235,9 @@ function validateGenerativeTab(value: unknown, warn: WarnFn): GenerativeTabSnaps
     untitled: value.untitled === true
   }
   if (value.renamed === true) tab.renamed = true
+  // cosmos-random-tab-icons-v1 (FR-007): keep a KNOWN glyph id; DROP an unknown/malformed one
+  // (benign — hydrate's deterministic fallback then assigns a stable glyph). Never throws.
+  if (isTabIconId(value.iconId)) tab.iconId = value.iconId
   // Only a composed surface with a real spec object survives (FR-012/FR-015).
   if (value.composed === true && isObject(value.surface) && isObject(value.surface.spec)) {
     tab.composed = true

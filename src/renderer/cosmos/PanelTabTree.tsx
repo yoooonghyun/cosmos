@@ -23,7 +23,8 @@ import {
   ContextMenuTrigger
 } from '@/components/ui/context-menu'
 import { cn } from '@/lib/utils'
-import { SURFACE_ICON } from '../app/surfaceIcons'
+import { SURFACE_ICON, type RailIcon } from '../app/surfaceIcons'
+import { tabIconComponent } from '../tabs/tabIconRegistry'
 import type { CrossPanelId, LivePanelTab, PanelTabGroup } from '../panelTabs'
 import type { PromptPanelId } from '../../shared/promptContext/promptContext'
 
@@ -216,6 +217,9 @@ export function PanelTabTree({
                         <TabRow
                           key={tab.id}
                           label={tab.label}
+                          // cosmos-random-tab-icons-v1 (FR-010): the leaf glyph is this tab's
+                          // per-tab random glyph; an absent/unknown id falls back to AppWindow.
+                          Icon={tabIconComponent(tab.iconId)}
                           pinned={pinned}
                           isSelected={
                             selected?.panelId === group.panelId && selected?.tabId === tab.id
@@ -326,6 +330,7 @@ function GroupHeaderRow({
  */
 function TabRow({
   label,
+  Icon,
   pinned,
   isSelected,
   focused,
@@ -334,6 +339,12 @@ function TabRow({
   menu
 }: {
   label: string
+  /**
+   * cosmos-random-tab-icons-v1 (FR-010): this tab's per-tab glyph (resolved from its `iconId`),
+   * or `undefined` ⇒ the uniform `AppWindow` fallback. Only the glyph SOURCE changes — the D-15
+   * pinned `text-primary` tint + bold label and the selected/focus states are unchanged (FR-011).
+   */
+  Icon?: RailIcon
   /**
    * cosmos-home-favorite-tabs-v1 (D-15): this source tab ALREADY has a Home favorite. An additive,
    * purely-visual mark so the user can see which tabs are pinned — the leading icon takes the brand
@@ -359,6 +370,8 @@ function TabRow({
       ref.current?.focus()
     }
   }, [focused])
+  // cosmos-random-tab-icons-v1 (FR-010): the per-tab glyph, else the uniform AppWindow fallback.
+  const LeafGlyph = Icon ?? AppWindow
   const row = (
     <div
       ref={ref}
@@ -379,10 +392,12 @@ function TabRow({
         'focus-visible:ring-[1.5px] focus-visible:ring-ring focus-visible:ring-inset'
       )}
     >
-      <AppWindow
+      <LeafGlyph
         // A pinned row's icon carries the brand accent (D-15). The row's hover/focus states recolor
         // only the BACKGROUND (`hover:bg-accent`) / ring — never the icon — so `text-primary` has no
         // competing icon-color state to flip against: a selected/hovered pinned row still reads pinned.
+        // cosmos-random-tab-icons-v1 (FR-011): only the glyph SOURCE changes (per-tab vs uniform);
+        // the pinned tint + every state class still applies to WHATEVER glyph renders.
         className={cn('size-3.5 shrink-0', pinned ? 'text-primary' : 'text-muted-foreground')}
         aria-hidden="true"
       />

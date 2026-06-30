@@ -31,6 +31,8 @@ import type { PtyExitPayload } from '../../shared/ipc'
 import { Button } from '@/components/ui/button'
 import { useExplorerPanes, ResizeDivider, type RestoredOpenFiles } from '../fileExplorer'
 import { PanelTabStrip, type PanelTab } from '../tabs/PanelTabStrip'
+import { tabIconComponent } from '../tabs/tabIconRegistry'
+import { randomTabIconId, tabIconIdFromKey } from '../../shared/tabIcons'
 import { PanelFooter } from '../app/PanelFooter'
 import { SURFACE_ICON } from '../app/surfaceIcons'
 import { usePanelTabs } from '../tabs/usePanelTabs'
@@ -64,6 +66,13 @@ interface TerminalTab {
    * (FR-009): the field exists so any future terminal-relabel path can respect it.
    */
   renamed?: boolean
+  /**
+   * This tab's per-tab "cosmos" glyph id (cosmos-random-tab-icons-v1, FR-002). A bounded enum
+   * string from the 14-icon set; assigned at the event-time `mintTab()` (random) or, for the pure
+   * lazy-initializer seed tab, deterministically from its id (no Math.random in the initializer —
+   * the StrictMode-impure-initializer gotcha). Stable for the tab's life; persisted on the draft.
+   */
+  iconId?: string
 }
 
 
@@ -688,7 +697,8 @@ export function TerminalPanel({ active }: { active: boolean }): React.JSX.Elemen
   const mintTab = (): TerminalTab => {
     const index = nextTerminalIndex(everOpened.current)
     everOpened.current = index
-    return { id: crypto.randomUUID(), label: terminalLabel(index) }
+    // cosmos-random-tab-icons-v1 (FR-002): assign a RANDOM glyph at the event-time mint.
+    return { id: crypto.randomUUID(), label: terminalLabel(index), iconId: randomTabIconId() }
   }
   // Lazy initial state — PURE: hydrate the restored tabs, or derive the single seed
   // tab's label directly from its index. No `mintTab()`, no ref mutation, so a
@@ -699,9 +709,14 @@ export function TerminalPanel({ active }: { active: boolean }): React.JSX.Elemen
     if (hydrated.tabs.length > 0) {
       return hydrated
     }
+    const firstId = crypto.randomUUID()
     const first: TerminalTab = {
-      id: crypto.randomUUID(),
-      label: terminalLabel(seedTerminalIndex())
+      id: firstId,
+      label: terminalLabel(seedTerminalIndex()),
+      // cosmos-random-tab-icons-v1: the PURE lazy initializer must stay side-effect-free
+      // (StrictMode double-invokes it), so the seed tab's glyph is DETERMINISTIC from its id —
+      // never Math.random here (strictmode-impure-initializer gotcha).
+      iconId: tabIconIdFromKey(firstId)
     }
     return { tabs: [first], activeTabId: first.id }
   })
@@ -781,6 +796,9 @@ export function TerminalPanel({ active }: { active: boolean }): React.JSX.Elemen
       tabs: tabs.map((t) => ({
         id: t.id,
         label: t.label,
+        // cosmos-random-tab-icons-v1 (FR-012): carry the per-tab glyph id so the Cosmos tree's
+        // Terminal-group leaf rows show the SAME glyph as the strip. Renderer-only ref pass.
+        ...(t.iconId ? { iconId: t.iconId } : {}),
         ...(livePaneIds.has(t.id)
           ? { serialize: (): string => serializersRef.current.get(t.id)?.() ?? '' }
           : {})
@@ -811,7 +829,16 @@ export function TerminalPanel({ active }: { active: boolean }): React.JSX.Elemen
   }, [tabs.length])
 
   const stripTabs: PanelTab[] = useMemo(
-    () => tabs.map((t) => ({ id: t.id, label: t.label, kind: 'terminal' as const })),
+    () =>
+      tabs.map((t) => ({
+        id: t.id,
+        label: t.label,
+        kind: 'terminal' as const,
+        // cosmos-random-tab-icons-v1 (FR-005/OQ-2): the per-tab random glyph; the strip's
+        // leading-slot reorder renders it in place of SquareTerminal (which is now only the
+        // fallback when a terminal tab has no assigned icon).
+        icon: tabIconComponent(t.iconId)
+      })),
     [tabs]
   )
 

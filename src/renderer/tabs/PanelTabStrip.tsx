@@ -313,21 +313,30 @@ export function PanelTabStrip({
                   )}
                 >
                   {/* Leading slot (mutually-exclusive): in-flight spinner | error glyph |
-                      terminal glyph. Decorative — the busy/error semantics live on the
-                      button (aria-busy / tooltip). design §3.2/§3.3/§3.4. */}
+                      per-tab icon | terminal fallback glyph. Decorative — the busy/error
+                      semantics live on the button (aria-busy / tooltip). design §3.2/§3.3/§3.4.
+
+                      cosmos-random-tab-icons-v1 (OQ-2): `LeadingIcon` (the per-tab `t.icon`) now
+                      PRECEDES the terminal default, so a terminal tab renders its random "cosmos"
+                      glyph; `SquareTerminal` remains ONLY the fallback when a terminal tab has no
+                      assigned icon (pre-feature/edge). Spinner/error stay first (FR-008). A favorite
+                      (non-terminal, `icon=SURFACE_ICON`) still renders via `LeadingIcon` unchanged. */}
                   {status === 'in-flight' ? (
                     <Loader2 className="size-3.5 shrink-0 animate-spin text-primary" aria-hidden="true" />
                   ) : status === 'error' ? (
                     <CircleAlert className="size-3.5 shrink-0 text-destructive" aria-hidden="true" />
+                  ) : LeadingIcon ? (
+                    // The per-tab glyph (a favorite's source-panel icon, or a random "cosmos" glyph) —
+                    // SAME leading slot/treatment the terminal glyph uses (muted → foreground active).
+                    <LeadingIcon
+                      className="size-3.5 shrink-0 text-muted-foreground group-data-[state=active]/tab:text-foreground"
+                      aria-hidden="true"
+                    />
                   ) : isTerminal ? (
                     <SquareTerminal
                       className="size-3.5 shrink-0 text-muted-foreground group-data-[state=active]/tab:text-foreground"
                       aria-hidden="true"
                     />
-                  ) : LeadingIcon ? (
-                    // cosmos-home-favorite-tabs-v1 (FR-014): a favorite's source panel glyph, in the
-                    // SAME leading slot/treatment the terminal glyph uses (muted → foreground active).
-                    <LeadingIcon className="size-3.5 shrink-0 text-muted-foreground group-data-[state=active]/tab:text-foreground" />
                   ) : null}
 
                   {/* Label — truncates with ellipsis (FR-010); Untitled is italic-muted

@@ -14,6 +14,7 @@
 
 import type { CrossPanelId, LivePanelTab, PanelTabsRegistry } from './panelTabs'
 import type { PromptContext } from '../../shared/promptContext/promptContext'
+import { isTabIconId } from '../../shared/tabIcons'
 
 /** One labeled group of a panel's open tabs (the tree's level-1 node). */
 export interface PanelTabGroup {
@@ -76,7 +77,13 @@ export function toPanelTabGroups(
     const tabs: LivePanelTab[] = []
     for (const t of rawTabs) {
       if (validTab(t)) {
-        tabs.push({ id: t.id, label: t.label })
+        // cosmos-random-tab-icons-v1 (FR-012): carry a VALID glyph id through; an unknown id is
+        // simply omitted (the tree leaf falls back to AppWindow). Keeps the pure/defensive contract.
+        tabs.push({
+          id: t.id,
+          label: t.label,
+          ...(isTabIconId(t.iconId) ? { iconId: t.iconId } : {})
+        })
       } else {
         warn(`[panelTabsTree] toPanelTabGroups: skipping a malformed tab in "${panelId}"`)
       }

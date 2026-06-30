@@ -37,6 +37,15 @@ export interface LivePanelTab {
   id: string
   label: string
   /**
+   * This tab's per-tab "cosmos" glyph id (cosmos-random-tab-icons-v1, FR-012): a renderer-only
+   * NON-SECRET reference (a bounded enum string from the 14-icon set) carried so the Cosmos tree's
+   * leaf row resolves the SAME glyph as the panel strip. Like {@link serialize}, it is a renderer
+   * ref pass on the in-process `PanelTabsProvider` — NEVER persisted or sent over IPC on this path
+   * (the persisted copy is the per-tab snapshot's `iconId`). Absent ⇒ the tree falls back to
+   * `AppWindow`.
+   */
+  iconId?: string
+  /**
    * A TERMINAL pane's live scrollback accessor (cosmos-terminal-favorite-multiplex-v1, FR-009): a
    * renderer-only REFERENCE that returns the source xterm's current serialized buffer. A Home
    * terminal favorite calls it ONCE on mount to seed its mirror xterm (`initialScrollback`) so it

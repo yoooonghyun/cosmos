@@ -47,6 +47,7 @@ import {
 } from './confluenceCatalog/components'
 import { CommentsSection } from './confluenceCatalog/CommentsSection'
 import { PanelTabStrip, type PanelTab } from '../tabs/PanelTabStrip'
+import { tabIconComponent } from '../tabs/tabIconRegistry'
 import { PanelRefreshButton } from '../generative/PanelRefreshButton'
 import { panelRefreshInputsFor } from '../generative/panelRefreshLogic'
 import { PanelFooter } from '../app/PanelFooter'
@@ -593,6 +594,9 @@ export function ConfluencePanel({ active }: { active: boolean }): React.JSX.Elem
     kind: 'generative' as const,
     status: t.inFlight ? 'in-flight' : t.error ? 'error' : 'idle',
     untitled: t.untitled,
+    // cosmos-random-tab-icons-v1 (FR-005): the tab's per-tab random "cosmos" glyph (idle leading
+    // slot); the spinner/error glyph still wins while in-flight/errored (FR-008).
+    icon: tabIconComponent(t.iconId),
     ...(t.error ? { errorMessage: t.error } : {})
   }))
   const activeStripTab = stripTabs.find((t) => t.id === activeTabId) ?? null

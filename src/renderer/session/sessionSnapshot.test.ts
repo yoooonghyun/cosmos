@@ -10,6 +10,7 @@ import {
   type LiveTabsState,
   type LiveTerminalTab
 } from './sessionSnapshot'
+import { isTabIconId, tabIconIdFromKey } from '../../shared/tabIcons'
 
 function genTab(over: Partial<GenerativeTab>): GenerativeTab {
   return { id: 'x', label: 'X', untitled: false, surface: null, inFlight: false, ...over }
@@ -194,7 +195,9 @@ describe('hydrateTerminalTabs (FR-008/FR-011)', () => {
       activeTabId: 'gone',
       everOpened: 2
     })
-    expect(out.tabs).toEqual([
+    // cosmos-random-tab-icons-v1: hydrate now also assigns a deterministic iconId (asserted in its
+    // own test below) — match the stable fields without pinning the added glyph here.
+    expect(out.tabs).toMatchObject([
       { id: 'p1', label: 'Terminal' },
       { id: 'p2', label: 'Mine', renamed: true }
     ])
@@ -220,6 +223,83 @@ describe('hydrateTerminalTabs (FR-008/FR-011)', () => {
     expect(out.tabs[0].openFiles).toEqual({ files: ['a.ts', 'b.ts'], activeRelPath: 'b.ts' })
     expect(out.tabs[1]).not.toHaveProperty('openFiles')
     expect(out.tabs[2]).not.toHaveProperty('openFiles')
+  })
+})
+
+describe('per-tab iconId build/hydrate (cosmos-random-tab-icons-v1, FR-004/FR-006)', () => {
+  it('buildGenerativeTab carries iconId when present, omits when absent — independent of composed', () => {
+    // present on a base (non-composed) tab → still persisted (independent of composed)
+    const withIcon = buildGenerativeTab(genTab({ id: 'g', iconId: 'rocket' }))
+    expect(withIcon.iconId).toBe('rocket')
+    // absent → field omitted
+    const without = buildGenerativeTab(genTab({ id: 'g2' }))
+    expect(without).not.toHaveProperty('iconId')
+  })
+
+  it('buildTerminalDraft carries iconId when present, omits when absent', () => {
+    const state: LiveTabsState<LiveTerminalTab> = {
+      tabs: [
+        { id: 'p1', label: 'T', iconId: 'orbit' },
+        { id: 'p2', label: 'T2' }
+      ],
+      activeTabId: 'p1'
+    }
+    const draft = buildTerminalDraft(state, 2, {})
+    expect(draft.tabs[0].iconId).toBe('orbit')
+    expect(draft.tabs[1]).not.toHaveProperty('iconId')
+  })
+
+  it('hydrateGenerativeTabs keeps a present id and assigns a STABLE fallback when absent (FR-006)', () => {
+    const out = hydrateGenerativeTabs(
+      {
+        tabs: [
+          { id: 'g1', label: 'A', untitled: false, iconId: 'telescope' },
+          { id: 'g2', label: 'B', untitled: true } // pre-feature: no iconId
+        ],
+        activeTabId: 'g1',
+        everOpened: 2
+      },
+      () => 'r'
+    )
+    expect(out.tabs[0].iconId).toBe('telescope')
+    // pre-feature tab → deterministic glyph from its id, stable across calls
+    expect(out.tabs[1].iconId).toBe(tabIconIdFromKey('g2'))
+    expect(isTabIconId(out.tabs[1].iconId)).toBe(true)
+    const again = hydrateGenerativeTabs(
+      { tabs: [{ id: 'g2', label: 'B', untitled: true }], activeTabId: 'g2', everOpened: 1 },
+      () => 'r'
+    )
+    expect(again.tabs[0].iconId).toBe(out.tabs[1].iconId) // same id across two hydrate calls
+  })
+
+  it('hydrateGenerativeTabs falls back for a non-member persisted id (defensive)', () => {
+    const out = hydrateGenerativeTabs(
+      { tabs: [{ id: 'g', label: 'A', untitled: false, iconId: 'bogus' }], activeTabId: 'g', everOpened: 1 },
+      () => 'r'
+    )
+    expect(out.tabs[0].iconId).toBe(tabIconIdFromKey('g'))
+  })
+
+  it('hydrateTerminalTabs keeps a present id and assigns a STABLE fallback when absent (FR-006)', () => {
+    const out = hydrateTerminalTabs({
+      tabs: [
+        { id: 'p1', label: 'T', sessionId: 's1', cwd: '/w', iconId: 'moon' },
+        { id: 'p2', label: 'T2', sessionId: 's2', cwd: '/w' } // pre-feature
+      ],
+      activeTabId: 'p1',
+      everOpened: 2
+    })
+    expect(out.tabs[0].iconId).toBe('moon')
+    expect(out.tabs[1].iconId).toBe(tabIconIdFromKey('p2'))
+  })
+
+  it('a generative build → hydrate round-trip preserves a valid id', () => {
+    const built = buildGenerativePanel(
+      { tabs: [genTab({ id: 'g', iconId: 'earth' })], activeTabId: 'g' },
+      1
+    )
+    const out = hydrateGenerativeTabs(built, () => 'r')
+    expect(out.tabs[0].iconId).toBe('earth')
   })
 })
 

@@ -48,6 +48,7 @@ import type { CrossPanelId, LivePanelTabs } from '../panelTabs'
 import { useReportPanel } from '../session/SessionProvider'
 import type { GenerativePanelKey } from '../../shared/ipc'
 import type { AdapterBinding, AdapterDescriptor } from '../../shared/types/adapter'
+import { randomTabIconId, type TabIconId } from '../../shared/tabIcons'
 
 /** A rendered surface stored on a tab: the spec to (re)process + its requestId. */
 export interface TabSurface {
@@ -153,6 +154,14 @@ export interface GenerativeTab {
    * email-like ids. Only google-calendar tabs ever set it; the other panels never do.
    */
   hiddenCalendars?: string[]
+  /**
+   * This tab's per-tab "cosmos" glyph id (cosmos-random-tab-icons-v1, FR-002/FR-003). A bounded
+   * enum string from the 14-icon set; assigned ONCE at the event-time mint (random) and stable for
+   * the tab's life — never recomputed on render. Resolved to a lucide component at the strip's
+   * `stripTabs` map + published to the Home tree via `LivePanelTab.iconId`. Mirrors how every other
+   * tab field persists (session-only on the live record; `GenerativeTabSnapshot.iconId` is the copy).
+   */
+  iconId?: TabIconId
 }
 
 export interface GenerativePanelTabs extends PanelTabsController<GenerativeTab> {
@@ -326,7 +335,14 @@ export function useGenerativePanelTabs(
             // LIVE source panel itself (reparented via the panel-host portal). The tree consumer
             // (`toPanelTabGroups`) only needs {id,label}, and favorite GONE detection is by tab
             // EXISTENCE in this list. (No `surface`/`mirrorSurface` — those evolutions are superseded.)
-            tabs: tabs.map((t) => ({ id: t.id, label: t.label })),
+            // cosmos-random-tab-icons-v1 (FR-012): carry the per-tab glyph id so the Cosmos tree's
+            // leaf row shows the SAME glyph as the panel strip. Renderer-only NON-SECRET ref pass
+            // (like `serialize`); never persisted/IPC on this path.
+            tabs: tabs.map((t) => ({
+              id: t.id,
+              label: t.label,
+              ...(t.iconId ? { iconId: t.iconId } : {})
+            })),
             activeTabId
           },
     [panelTabsPanelId, tabs, activeTabId]
@@ -402,6 +418,9 @@ export function useGenerativePanelTabs(
             id,
             label: mintLabel(),
             untitled: true,
+            // cosmos-random-tab-icons-v1 (FR-002): assign at the event-time mint (this
+            // subscription callback is an event, never render).
+            iconId: randomTabIconId(),
             surface: {
               requestId: payload.requestId,
               spec: payload.spec,
@@ -575,6 +594,7 @@ export function useGenerativePanelTabs(
           id,
           label: labelFromUtterance(utterance),
           untitled: false,
+          iconId: randomTabIconId(), // cosmos-random-tab-icons-v1 (FR-002): event-time mint.
           surface: null,
           inFlight
         })
@@ -637,6 +657,7 @@ export function useGenerativePanelTabs(
       id: crypto.randomUUID(),
       label: mintLabel(),
       untitled: true,
+      iconId: randomTabIconId(), // cosmos-random-tab-icons-v1 (FR-002): event-time mint.
       surface: null,
       inFlight: false
     })
@@ -664,6 +685,7 @@ export function useGenerativePanelTabs(
         id: crypto.randomUUID(),
         label: mintLabel(),
         untitled: true,
+        iconId: randomTabIconId(), // cosmos-random-tab-icons-v1 (FR-002): event-time mint.
         surface: null,
         inFlight: false,
         loadingDefault: true

@@ -28,6 +28,7 @@ import type {
 } from '../../shared/ipc'
 import type { GenerativeTab } from '../tabs/useGenerativePanelTabs'
 import { seedEverOpenedFrom } from '../tabs/panelTabs'
+import { isTabIconId, tabIconIdFromKey } from '../../shared/tabIcons'
 
 export { seedEverOpenedFrom }
 
@@ -42,6 +43,13 @@ export interface LiveTerminalTab {
   id: string
   label: string
   renamed?: boolean
+  /**
+   * This tab's per-tab "cosmos" glyph id (cosmos-random-tab-icons-v1). A bounded enum string
+   * from the 14-icon set; assigned at mint (random) or hydrate (deterministic fallback) and
+   * stable for the tab's life. Mirrors how every other tab field persists. Session-only on the
+   * live record; the persisted copy is `TerminalTabSnapshot.iconId`.
+   */
+  iconId?: string
   /**
    * The restored open-files slice for this tab (persist-workdir-open-files-v1,
    * FR-004), surfaced by `hydrateTerminalTabs` so `useFileExplorer` can seed its
@@ -66,6 +74,12 @@ export interface TerminalTabDraft {
   id: string
   label: string
   renamed?: boolean
+  /**
+   * This tab's per-tab "cosmos" glyph id (cosmos-random-tab-icons-v1, FR-004). Carried on the
+   * draft when present so the save round-trips it; main enriches the rest (sessionId/cwd) and
+   * spreads this through unchanged into `TerminalTabSnapshot.iconId`. Non-secret enum string.
+   */
+  iconId?: string
   /** Bounded serialized scrollback captured in the renderer (FR-021). */
   scrollback?: string
   /**
@@ -110,6 +124,8 @@ export function buildTerminalDraft(
     tabs: state.tabs.map((t) => {
       const draft: TerminalTabDraft = { id: t.id, label: t.label }
       if (t.renamed === true) draft.renamed = true
+      // cosmos-random-tab-icons-v1 (FR-004): round-trip the per-tab glyph id when present.
+      if (t.iconId) draft.iconId = t.iconId
       const sb = get(t.id)
       if (typeof sb === 'string' && sb.length > 0) draft.scrollback = sb
       const open = getOpen(t.id)
@@ -136,6 +152,9 @@ export function buildGenerativeTab(tab: GenerativeTab): GenerativeTabSnapshot {
     untitled: tab.untitled === true
   }
   if (tab.renamed === true) snap.renamed = true
+  // cosmos-random-tab-icons-v1 (FR-004): persist the per-tab glyph id INDEPENDENT of `composed`
+  // (like `hiddenCalendars`) so a base/live tab keeps its glyph across restart.
+  if (tab.iconId) snap.iconId = tab.iconId
   if (tab.composed === true && tab.surface && !tab.surface.error) {
     snap.composed = true
     snap.surface = { spec: tab.surface.spec }
@@ -192,7 +211,11 @@ export function hydrateGenerativeTabs(
       label: t.label,
       untitled: t.untitled === true,
       surface: null,
-      inFlight: false
+      inFlight: false,
+      // cosmos-random-tab-icons-v1 (FR-006): keep a KNOWN persisted id; else assign a STABLE
+      // deterministic glyph from the tab id (no Math.random in this pure path). This single
+      // path covers BOTH a pre-feature snapshot (absent) AND any non-member value defensively.
+      iconId: isTabIconId(t.iconId) ? t.iconId : tabIconIdFromKey(t.id)
     }
     if (t.renamed === true) tab.renamed = true
     if (t.composed === true && t.surface && t.surface.spec) {
@@ -251,7 +274,13 @@ export function hydrateTerminalTabs(
     return { tabs: [], activeTabId: null }
   }
   const tabs: LiveTerminalTab[] = panel.tabs.map((t) => {
-    const tab: LiveTerminalTab = { id: t.id, label: t.label }
+    const tab: LiveTerminalTab = {
+      id: t.id,
+      label: t.label,
+      // cosmos-random-tab-icons-v1 (FR-006): keep a persisted id; else a STABLE deterministic
+      // glyph from the tab id (no Math.random in this pure hydrate path).
+      iconId: t.iconId ?? tabIconIdFromKey(t.id)
+    }
     if (t.renamed === true) tab.renamed = true
     // persist-workdir-open-files-v1 FR-004: surface the restored open-files slice so the
     // tab's file explorer seeds from it on go-live. Main already normalized it (string

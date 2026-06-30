@@ -96,6 +96,54 @@ describe('PanelTabTree (PANEL-TABS-TREE-UI-01)', () => {
     expect(other).toHaveAttribute('aria-selected', 'false')
   })
 
+  it('two tabs with different iconIds render two DIFFERENT leaf glyphs (FR-010/SC-007)', () => {
+    const { container } = render(
+      <TooltipProvider>
+        <PanelTabTree
+          groups={[
+            {
+              panelId: 'jira',
+              label: 'Jira',
+              tabs: [
+                { id: 'j1', label: 'One', iconId: 'rocket' },
+                { id: 'j2', label: 'Two', iconId: 'telescope' }
+              ],
+              activeTabId: 'j1'
+            }
+          ]}
+          selected={null}
+          onActivate={() => {}}
+        />
+      </TooltipProvider>
+    )
+    expect(container.querySelector('.lucide-rocket')).toBeInTheDocument()
+    expect(container.querySelector('.lucide-telescope')).toBeInTheDocument()
+  })
+
+  it('a tab with NO resolvable iconId falls back to AppWindow (FR-010)', () => {
+    const { container } = render(
+      <TooltipProvider>
+        <PanelTabTree
+          groups={[
+            {
+              panelId: 'jira',
+              label: 'Jira',
+              tabs: [
+                { id: 'j1', label: 'No icon' }, // pre-feature: no iconId
+                { id: 'j2', label: 'Bad icon', iconId: 'bogus' } // unknown id
+              ],
+              activeTabId: 'j1'
+            }
+          ]}
+          selected={null}
+          onActivate={() => {}}
+        />
+      </TooltipProvider>
+    )
+    // Both fall back to AppWindow (two app-window glyphs).
+    expect(container.querySelectorAll('.lucide-app-window')).toHaveLength(2)
+  })
+
   it('renders NO active-source dot (the focused-tab indicator was removed per user request)', () => {
     const { container } = render(
       <TooltipProvider>
@@ -169,6 +217,33 @@ describe('PanelTabTree right-click Pin/Unpin menu (cosmos-home-favorite-tabs-v1)
     fireEvent.click(pin)
     expect(onPin).toHaveBeenCalledTimes(1)
     expect(onPin).toHaveBeenCalledWith(groups[0], { id: 't1', label: 'Terminal' })
+  })
+
+  it('marks an ALREADY-PINNED row with text-primary on the per-tab glyph (D-15/FR-011)', () => {
+    // The pinned row carries a per-tab iconId (rocket); the tint must apply to THAT glyph.
+    render(
+      <TooltipProvider>
+        <PanelTabTree
+          groups={[
+            {
+              panelId: 'jira',
+              label: 'Jira',
+              tabs: [{ id: 'j1', label: 'Sprint board', iconId: 'rocket' }],
+              activeTabId: 'j1'
+            }
+          ]}
+          selected={null}
+          onActivate={() => {}}
+          isPinned={(p, t) => p === 'jira' && t === 'j1'}
+          onPin={() => {}}
+          onUnpin={() => {}}
+        />
+      </TooltipProvider>
+    )
+    const row = screen.getByText('Sprint board').closest('[role="treeitem"]')!
+    const glyph = row.querySelector('.lucide-rocket')!
+    expect(glyph).toBeInTheDocument()
+    expect(glyph.getAttribute('class') ?? '').toContain('text-primary')
   })
 
   it('marks an ALREADY-PINNED row with text-primary icon + bold label; a non-pinned sibling stays default (D-15)', () => {

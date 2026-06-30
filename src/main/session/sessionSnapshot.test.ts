@@ -289,6 +289,51 @@ describe('validateSnapshot — #93 enabled + open-files coexistence (FR-014/SC-0
   })
 })
 
+describe('validateSnapshot — per-tab iconId (cosmos-random-tab-icons-v1, FR-007/SC-004/SC-005)', () => {
+  it('KEEPS a valid iconId on a generative + terminal tab; NO schema bump (SC-004)', () => {
+    const warn = vi.fn()
+    const snap = goodSnapshot()
+    snap.panels.terminal.tabs = [
+      { id: 'p1', label: 'T', sessionId: 's1', cwd: '/w', iconId: 'rocket' } as never
+    ]
+    snap.panels.jira = {
+      tabs: [{ id: 'j1', label: 'J', untitled: false, iconId: 'orbit' } as never],
+      activeTabId: 'j1',
+      everOpened: 1
+    }
+    const out = validateSnapshot(snap, warn)
+    expect(warn).not.toHaveBeenCalled()
+    expect(out!.schemaVersion).toBe(SESSION_SCHEMA_VERSION)
+    expect(out!.panels.terminal.tabs[0].iconId).toBe('rocket')
+    expect(out!.panels.jira.tabs[0].iconId).toBe('orbit')
+  })
+
+  it('DROPS an unknown/malformed iconId without crashing (FR-007/SC-005)', () => {
+    const warn = vi.fn()
+    const snap = goodSnapshot()
+    snap.panels.terminal.tabs = [
+      { id: 'p1', label: 'T', sessionId: 's1', cwd: '/w', iconId: 'bogus' } as never
+    ]
+    snap.panels.jira = {
+      tabs: [{ id: 'j1', label: 'J', untitled: false, iconId: 42 } as never],
+      activeTabId: 'j1',
+      everOpened: 1
+    }
+    const out = validateSnapshot(snap, warn)
+    expect(out).not.toBeNull()
+    expect(out!.panels.terminal.tabs[0]).not.toHaveProperty('iconId')
+    expect(out!.panels.jira.tabs[0]).not.toHaveProperty('iconId')
+  })
+
+  it('a PRE-FEATURE snapshot (no iconId anywhere) still validates with no warn (SC-004)', () => {
+    const warn = vi.fn()
+    const out = validateSnapshot(goodSnapshot(), warn)
+    expect(warn).not.toHaveBeenCalled()
+    expect(out!.panels.terminal.tabs[0]).not.toHaveProperty('iconId')
+    expect(out!.panels['generated-ui'].tabs[0]).not.toHaveProperty('iconId')
+  })
+})
+
 describe('reconcileEverOpened (FR-010)', () => {
   it('floors to at least the tab count', () => {
     expect(reconcileEverOpened(1, 3)).toBe(3)

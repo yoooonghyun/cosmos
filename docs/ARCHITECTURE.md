@@ -883,6 +883,20 @@ trailing `+` new-tab affordance, and horizontal overflow scroll. Tabs are render
   `everOpened` counter (no renumber on close, advanced only off render-phase so StrictMode cannot
   double-count — cf. terminal-tab-index-skip-v1). A compose then relabels the tab from its utterance
   (`labelFromUtterance`); a manual rename pins it (`renamed`).
+- **Per-tab random "cosmos" glyph (cosmos-random-tab-icons-v1).** Every newly minted tab of the four
+  generative panels + Terminal is assigned ONE `iconId` from a fixed 14-icon lucide set, drawn at the
+  EVENT-TIME mint (`randomTabIconId()` in each `open({…})` site + `TerminalPanel.mintTab()`); the pure
+  terminal lazy-initializer seed tab and the hydrate fallback use the DETERMINISTIC `tabIconIdFromKey(id)`
+  so no `Math.random` runs in a render/initializer path (StrictMode-safe). The id is a NON-SECRET bounded
+  enum string (`shared/tabIcons.ts`) persisted ADDITIVELY + OPTIONALLY on `GenerativeTabSnapshot.iconId`
+  and the terminal `TerminalTabDraft`/`TerminalTabSnapshot.iconId` — NO schema bump (it mirrors
+  `hiddenCalendars`/`openPromptPosition`); the main load boundary DROPS an unknown id so the hydrate
+  fallback re-assigns a stable one. It renders in TWO seams sharing the one id: the panel's own
+  `PanelTabStrip` leading slot (the `icon` slot; the terminal leading-slot order was REORDERED so a
+  terminal tab shows its glyph and `SquareTerminal` is only the no-icon fallback — spinner/error still
+  win) and the Cosmos Home `PanelTabTree` leaf (replacing the uniform `AppWindow`), carried to the tree
+  via a renderer-only NON-SECRET `LivePanelTab.iconId` publish ref (never persisted/IPC on that path).
+  Home favorites + the generic Cosmos default tab are EXCLUDED — they keep `SURFACE_ICON`.
 - **Deferred default-view request — protecting the correlation slot.** A Jira default-view request
   (first activation or a `+` tab, §4.9) is a deterministic main read, NOT an `AgentRunner` run, so
   it does NOT consume the single-run guard — but its unsolicited frame and a solicited compose's

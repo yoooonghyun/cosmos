@@ -16,6 +16,14 @@ For the authoritative design see `docs/ARCHITECTURE.md`.
 
 ## Next
 
+- [ ] Manual GUI verification (full `npm run dev` restart — session persistence touched) of the
+  **per-tab random "cosmos" glyph** (`cosmos-random-tab-icons-v1`): opening new tabs across Jira/
+  Slack/Confluence/Calendar + Terminal shows a VARIED leading space glyph per tab (terminal tab now
+  shows its random glyph, not `SquareTerminal`); the Cosmos Home tree leaf rows show the SAME glyph
+  as each panel's strip (pinned rows keep the `text-primary` tint); the glyph does NOT change on tab
+  switch/relabel/rename; and after QUIT + relaunch every restored tab keeps its glyph (favorites +
+  the default Cosmos tab keep `SURFACE_ICON`). Logic/persistence/render is covered by node+jsdom; the
+  live mint + restart round-trip pixels were NOT exercised headless.
 - [ ] Manual GUI verification (full `npm run dev` restart — main/preload changed) of the
   **Home-timeline batch**: agent-progress STREAMING (multi-step prompt → tool calls + assistant
   messages appear progressively, spinner until done, no duplicate/empty context bubble incl. a

@@ -120,6 +120,15 @@ export interface TerminalTabSnapshot {
   /** Bounded serialized scrollback, restored as on-screen history (≤~256KB). FR-021. */
   scrollback?: string
   /**
+   * The tab's per-tab "cosmos" glyph id (cosmos-random-tab-icons-v1, FR-004). A bounded enum
+   * string from the 14-icon set (`src/shared/tabIcons.ts`), assigned at mint and stable for the
+   * tab's life. ADDITIVE + OPTIONAL (NO schema bump — mirrors `openFiles`/`hiddenCalendars`):
+   * an older snapshot lacking it restores cleanly (hydrate assigns a deterministic fallback). The
+   * main boundary DROPS an unknown id (validateTerminalTab), so a malformed value never crashes.
+   * NON-SECRET: a fixed-vocabulary id, never a token/path (FR-009).
+   */
+  iconId?: string
+  /**
    * The file-explorer's persisted open files for this tab (persist-workdir-open-files-v1,
    * FR-003/FR-006). The ordered, root-RELATIVE open-file paths (`files`) plus which one is
    * active/focused (`activeRelPath`, or `null`). Absent when the tab had no files open
@@ -205,6 +214,16 @@ export interface GenerativeTabSnapshot {
    * it; the other generative panels never set it.
    */
   hiddenCalendars?: string[]
+  /**
+   * The tab's per-tab "cosmos" glyph id (cosmos-random-tab-icons-v1, FR-004). A bounded enum
+   * string from the 14-icon set (`src/shared/tabIcons.ts`), assigned at mint and stable for the
+   * tab's life. ADDITIVE + OPTIONAL (NO schema bump — mirrors `hiddenCalendars`): an older
+   * snapshot lacking it restores cleanly (hydrate assigns a deterministic fallback). The main
+   * boundary DROPS an unknown id (validateGenerativeTab), so a malformed value never crashes.
+   * NON-SECRET: a fixed-vocabulary id, never a token/path (FR-009). Persisted INDEPENDENT of
+   * `composed` so a base/live tab keeps its glyph across restart.
+   */
+  iconId?: string
 }
 
 /**
