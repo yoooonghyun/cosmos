@@ -16,14 +16,16 @@
  * panel renders its source's live A2UI surface inline through the shared `ActiveTabSurface` host.
  */
 
-import type { GateableIntegration } from '../../shared/ipc'
+import type { CrossPanelId } from '../panelTabs/panelTabs'
 
 /**
- * The generative panels whose tabs can be pinned as Home favorites — terminal is NOT pinnable
- * (a PTY tab has no A2UI surface, FR-040), so a favorite's `source.panelId` is always one of the
- * four gateable integrations. Equals the cross-panel ids minus `terminal`.
+ * The panels whose tabs can be pinned as Home favorites. cosmos-terminal-favorite-multiplex-v1
+ * relaxed the FR-040 exclusion: terminal tabs ARE pinnable now (a terminal favorite is a renderer-
+ * side xterm multiplex bound to the same PTY), so a favorite's `source.panelId` is any cross-panel
+ * id — the four gateable integrations OR `'terminal'`. Equals {@link CrossPanelId} (a type-only
+ * import, so this module stays React-free + node-testable).
  */
-export type FavoritePanelId = GateableIntegration
+export type FavoritePanelId = CrossPanelId
 
 /** A Cosmos tab. `default` is the pinned, undeletable conversation tab; `favorite` is a pinned shortcut. */
 export interface CosmosTab {

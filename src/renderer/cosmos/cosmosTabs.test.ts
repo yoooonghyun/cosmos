@@ -109,6 +109,41 @@ describe('cosmosTabs', () => {
   })
 })
 
+// cosmos-terminal-favorite-multiplex-v1 (FR-001/FR-002/FR-003): a TERMINAL tab is now a valid favorite
+// source (the FR-040 exclusion is relaxed). The pure tab ops are panelId-agnostic, so they admit a
+// terminal source identically to a generative one.
+describe('cosmosTabs — terminal source (cosmos-terminal-favorite-multiplex-v1)', () => {
+  const TERMINAL_SOURCE = { panelId: 'terminal' as const, tabId: 'pane-1' }
+
+  it('favoriteId is deterministic for a terminal source (paneId-keyed)', () => {
+    expect(favoriteId(TERMINAL_SOURCE)).toBe('fav:terminal:pane-1')
+  })
+
+  it('appendFavorite admits a terminal source after the pinned default (FR-003)', () => {
+    const state = appendFavorite(initialCosmosTabs(), { source: TERMINAL_SOURCE, label: 'Terminal 2' })
+    const id = favoriteId(TERMINAL_SOURCE)
+    expect(state.tabs.map((t) => t.id)).toEqual([DEFAULT_TAB_ID, id])
+    expect(state.tabs[1].kind).toBe('favorite')
+    expect(state.tabs[1].source).toEqual(TERMINAL_SOURCE)
+    expect(isCloseable(state.tabs[1])).toBe(true)
+    // Non-disruptive: the default stays active.
+    expect(state.activeTabId).toBe(DEFAULT_TAB_ID)
+  })
+
+  it('re-pinning the SAME terminal source is an idempotent no-op (FR-003)', () => {
+    const once = appendFavorite(initialCosmosTabs(), { source: TERMINAL_SOURCE, label: 'Terminal 2' })
+    const twice = appendFavorite(once, { source: TERMINAL_SOURCE, label: 'Terminal 2 again' })
+    expect(twice).toBe(once)
+    expect(twice.tabs.filter((t) => t.kind === 'favorite')).toHaveLength(1)
+  })
+
+  it('isPinned reflects a pinned terminal source (FR-002)', () => {
+    const state = appendFavorite(initialCosmosTabs(), { source: TERMINAL_SOURCE, label: 'Terminal 2' })
+    expect(isPinned(state, TERMINAL_SOURCE)).toBe(true)
+    expect(isPinned(state, { panelId: 'terminal', tabId: 'other' })).toBe(false)
+  })
+})
+
 // cosmos-home-keyboard-tab-nav-v1: Home cycles its tabs through the SHARED `cycleActiveId` wrap math
 // (the same the `useTabShortcuts` hook applies), over `cosmosTabs` order [default, fav…]. These pin
 // the navigation contract the keyboard shortcut relies on, with NO parallel helper.

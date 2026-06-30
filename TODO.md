@@ -60,6 +60,14 @@ For the authoritative design see `docs/ARCHITECTURE.md`.
   picker-v1`) via `npm run dev` (**full restart — preload changed**): a new tab shows the `[Open]` empty
   state with NO auto-spawn; picking a dir starts `claude` in that cwd; cancelling keeps `[Open]`; a
   restored session auto-resumes without a pick. Logic locked by `paneSpawn` tests; not live-exercised.
+- [ ] Manual GUI verification of **pinnable terminal favorites** (`cosmos-terminal-favorite-multiplex-v1`)
+  via `npm run dev`: right-click a Terminal tree row in Home → Pin → a terminal favorite appears after
+  the default; click it → it mirrors the live source terminal (seeded scrollback then live output, in
+  sync with the source view); typing in either view drives the SAME PTY (each char once per view);
+  closing the source tab / unpinning / switching Home tabs NEVER kills the source terminal; switching
+  surfaces re-fits the on-screen view only. xterm-in-jsdom is not exercised by tests, so the live
+  mirror + input fan-out + resize-on-switch are a MANUAL check (the non-owning lifecycle gates +
+  resize-guard predicate + favorite branch states ARE locked by tests).
 - [ ] Manual GUI verification of the **terminal picker spinner-hang fix** (`terminal-picker-spinner-
   hang-v1`) via `npm run dev` (StrictMode dev): open a fresh terminal tab → click `[Open a folder]` →
   pick a directory → confirm `claude` spawns in that cwd and the "Opening…" spinner clears (no infinite

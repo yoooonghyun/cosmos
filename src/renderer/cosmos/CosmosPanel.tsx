@@ -209,29 +209,22 @@ export function CosmosPanel({ active }: { active: boolean }): React.JSX.Element 
 
   // FR-001/FR-010: pin a source tab as a favorite (idempotent/de-duped) WITHOUT activating it —
   // pinning is non-disruptive, the user stays on the current tab (the favorite just appears in the
-  // strip). Terminal is not pinnable (FR-040) — the tree disables its Pin item, and this guard
-  // narrows the panel id.
+  // strip). cosmos-terminal-favorite-multiplex-v1: terminal IS pinnable now (FR-040 relaxed), so the
+  // terminal early-return is gone — `group.panelId` (CrossPanelId) is a valid FavoritePanelId.
   const handlePin = useCallback((group: PanelTabGroup, tab: LivePanelTab): void => {
-    if (group.panelId === 'terminal') {
-      return
-    }
     const source = { panelId: group.panelId, tabId: tab.id }
     setTabsState((s) => appendFavorite(s, { source, label: tab.label }))
   }, [])
 
   // FR-004: unpin a source tab's favorite (from the tree's Unpin menu); active favorite → default.
   const handleUnpin = useCallback((group: PanelTabGroup, tab: LivePanelTab): void => {
-    if (group.panelId === 'terminal') {
-      return
-    }
     const id = favoriteId({ panelId: group.panelId, tabId: tab.id })
     setTabsState((s) => closeCosmosTab(s, id))
   }, [])
 
-  // FR-002: drives the tree row menu's Pin vs Unpin (terminal is never pinned).
+  // FR-002: drives the tree row menu's Pin vs Unpin (terminal included now).
   const isSourcePinned = useCallback(
-    (panelId: CrossPanelId, tabId: string): boolean =>
-      panelId !== 'terminal' && isPinned(tabsState, { panelId, tabId }),
+    (panelId: CrossPanelId, tabId: string): boolean => isPinned(tabsState, { panelId, tabId }),
     [tabsState]
   )
 

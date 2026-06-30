@@ -319,13 +319,25 @@ describe('Home favorite tabs (COSMOS-FAVORITE-TABS-01)', () => {
     expect(await screen.findByRole('menuitem', { name: /Unpin/ })).toBeInTheDocument()
   })
 
-  it("a terminal tree row's Pin is disabled with a reason (FR-040)", async () => {
+  it('a terminal tree row IS pinnable → pinning appends a terminal favorite after the default (cosmos-terminal-favorite-multiplex-v1, FR-001/FR-002)', async () => {
+    // FR-040 relaxed: the terminal row's Pin is enabled (no disabled item / "can't be pinned" reason),
+    // and pinning a terminal source appends a favorite to the strip (NON-DISRUPTIVE — we don't activate
+    // it, so the lazy xterm mirror is not rendered; the pin path through CosmosPanel.handlePin is the
+    // behavior under test).
     renderApp()
     await settle()
     openRowMenu('Terminal')
     const pin = await screen.findByRole('menuitem', { name: /Pin/ })
-    expect(pin).toHaveAttribute('data-disabled')
-    expect(screen.getByText(/Terminal tabs can't be pinned/)).toBeInTheDocument()
+    expect(pin).not.toHaveAttribute('data-disabled')
+    expect(screen.queryByText(/Terminal tabs can't be pinned/)).not.toBeInTheDocument()
+    fireEvent.click(pin)
+    await settle()
+    // A terminal favorite appears in the strip after the default "Cosmos" tab.
+    const tabs = within(strip()).getAllByRole('tab')
+    expect(tabs[0]).toHaveTextContent('Cosmos')
+    expect(tabs[1]).toHaveTextContent('Terminal')
+    // Pinning is non-disruptive — the default stays active, the tree is still shown.
+    expect(treeOrNull()).toBeInTheDocument()
   })
 
   it('restored favorites seed the strip on mount (FR-030)', async () => {

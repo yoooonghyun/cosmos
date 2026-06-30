@@ -38,6 +38,7 @@ import { useTabShortcuts } from '../tabs/useTabShortcuts'
 import { resolveCloseTarget, resolveTabNavTarget } from '../tabs/closeTabRouting'
 import { mapTerminalKey } from './terminalKeymap'
 import { exitRecoveryHint, formatExit } from './terminalExit'
+import { shouldDriveResize } from './terminalResize'
 import {
   isFolderOpen,
   nextTerminalIndex,
@@ -71,18 +72,32 @@ interface TerminalTab {
  * kept mounted for the tab's lifetime (FR-025). `active` only toggles visibility +
  * triggers a re-fit/focus when it becomes visible (a hidden container can't measure).
  */
-function TerminalView({
+export function TerminalView({
   paneId,
   active,
   autoStart,
+  mirror = false,
   initialScrollback,
   restoredOpenFiles,
   onOpenFilesChange,
   onViewerStateChange,
+  onLiveChange,
   registerSerializer
 }: {
   paneId: string
   active: boolean
+  /**
+   * cosmos-terminal-favorite-multiplex-v1: when `true`, this is a NON-OWNING (secondary) mirror view
+   * of an already-live PTY — a Home terminal favorite bound to the SAME `paneId` as the source
+   * Terminal pane. A mirror (FR-005/FR-015/FR-017): NEVER calls `pty:start`/`pty:dispose`/`restart`
+   * (the source view owns the PTY lifecycle — a naive 2nd mount would kill the shared PTY on every
+   * Home tab switch); is always-live (no `[Open a folder]` welcome CTA, no Restart button — exit is
+   * read-only); and renders the TERMINAL PANE ONLY (no file-explorer split — explorer state is
+   * per-mount imperative React/`fs:*` state that cannot be referenced across two mounts, so it is
+   * excluded by design). It seeds from `initialScrollback` (the source pane's live serializer) then
+   * fans in via the existing per-paneId `pty:data` subscription. Default `false` = the owning path,
+   * 100% UNCHANGED. */
+  mirror?: boolean
   /**
    * True for a RESTORED/resumed tab — it auto-spawns its PTY on mount and skips the
    * [Open] empty state (terminal-open-directory-picker-v1, OQ-2). False for a freshly
@@ -114,6 +129,13 @@ function TerminalView({
       navFileTab: (delta: number) => void
     }
   ) => void
+  /**
+   * cosmos-terminal-favorite-multiplex-v1 (FR-009/FR-014): report this OWNING pane's liveness so the
+   * panel publishes a `serialize` scrollback-seed accessor ONLY while live (a Home terminal favorite
+   * reads it to seed its mirror; absence ⇒ the favorite shows WAITING). Optional — a `mirror` view
+   * does NOT report (it is not part of the panel's liveness bookkeeping).
+   */
+  onLiveChange?: (paneId: string, live: boolean) => void
   /** Register this pane's scrollback serializer with the panel; returns an unregister fn. */
   registerSerializer: (paneId: string, serialize: () => string) => () => void
 }): React.JSX.Element {
@@ -132,7 +154,9 @@ function TerminalView({
   // terminal-open-directory-picker-v1 FR-001: a fresh tab waits for a directory; a
   // restored/resumed tab is live immediately (autoStart). 'awaiting' renders the [Open]
   // empty state; 'live' shows the xterm.
-  const [phase, setPhase] = useState<'awaiting' | 'live'>(autoStart ? 'live' : 'awaiting')
+  // A mirror is only ever mounted when the source PTY is already live, so it starts 'live' (no
+  // [Open] welcome CTA) — cosmos-terminal-favorite-multiplex-v1, FR-014.
+  const [phase, setPhase] = useState<'awaiting' | 'live'>(mirror || autoStart ? 'live' : 'awaiting')
   // True while the native directory picker is open — disables the button (no double-open).
   const [pending, setPending] = useState(false)
   // OQ-3: a selection returned after the tab unmounted must NOT spawn. Cleared in the
@@ -284,9 +308,17 @@ function TerminalView({
       return false
     })
 
-    // FR-005: propagate resize, debounced.
+    // FR-005: propagate resize, debounced. cosmos-terminal-favorite-multiplex-v1 (FR-011/FR-012):
+    // only a MEASURABLE (on-screen, non-zero) view fits + drives `pty:resize` — a hidden / zero-size
+    // view (the inactive tab, or the off-screen source/favorite of a multiplexed paneId) must NOT
+    // push a stale/competing size. So the visible view is always the last writer; the arbitration is
+    // race-free without knowing rail visibility. This also fixes a latent bug for ALL terminals (a
+    // hidden terminal used to resize because `safeFit()` swallowed the throw but the resize fired).
     let resizeTimer: ReturnType<typeof setTimeout> | undefined
     const pushResize = (): void => {
+      if (!shouldDriveResize(containerRef.current)) {
+        return
+      }
       safeFit()
       window.cosmos.pty.resize({ paneId, cols: term.cols, rows: term.rows })
     }
@@ -307,7 +339,9 @@ function TerminalView({
     // for a restored/resumed tab (autoStart). A freshly minted tab DEFERS the spawn until
     // the user picks a directory via the [Open] affordance (terminal-open-directory-picker
     // v1, FR-001/FR-009); the subscriptions above are wired and ready for when it spawns.
-    if (autoStart) {
+    // cosmos-terminal-favorite-multiplex-v1 (FR-005): a MIRROR never starts the PTY — the source
+    // Terminal pane owns the lifecycle; the mirror only fans in on the existing `pty:data` stream.
+    if (autoStart && !mirror) {
       window.cosmos.pty.start(paneId)
     }
 
@@ -331,7 +365,12 @@ function TerminalView({
       termRef.current = null
       fitRef.current = null
       // FR-023: dispose this pane's PTY when its tab unmounts (tab closed).
-      window.cosmos.pty.dispose(paneId)
+      // cosmos-terminal-favorite-multiplex-v1 (FR-005, the dispose-danger): a MIRROR must NOT dispose
+      // — it unmounts on every Home tab switch, and disposing would kill the shared PTY (and the
+      // source terminal). Only the owning source view disposes.
+      if (!mirror) {
+        window.cosmos.pty.dispose(paneId)
+      }
     }
     // paneId/autoStart are stable for this view's lifetime; mount/unmount only.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -347,7 +386,9 @@ function TerminalView({
     const id = requestAnimationFrame(() => {
       const term = termRef.current
       const fit = fitRef.current
-      if (!term || !fit) {
+      // cosmos-terminal-favorite-multiplex-v1 (FR-011/FR-012): re-fit + resize ONLY when this view is
+      // measurable (it just became the on-screen view). A 0-size container must not drive the PTY.
+      if (!term || !fit || !shouldDriveResize(containerRef.current)) {
         return
       }
       try {
@@ -360,6 +401,13 @@ function TerminalView({
     })
     return () => cancelAnimationFrame(id)
   }, [active, paneId])
+
+  // cosmos-terminal-favorite-multiplex-v1 (FR-009/FR-014): an OWNING view reports its liveness so the
+  // panel publishes a scrollback-seed `serialize` accessor only while live (a Home terminal favorite
+  // reads it to seed its mirror; absence ⇒ WAITING). A mirror passes no reporter (not its job).
+  useEffect(() => {
+    onLiveChange?.(paneId, phase === 'live')
+  }, [paneId, phase, onLiveChange])
 
   const handleRestart = (): void => {
     // FR-026: restart only THIS pane's session; clear the exit banner.
@@ -441,9 +489,15 @@ function TerminalView({
   // The MIDDLE viewer column + RIGHT tree dock, both backed by ONE explorer hook instance (a click
   // in the dock retargets the viewer). Hooks run unconditionally; while !live the hook is inert.
   // The restored open-files slice seeds the strip on go-live (FR-004).
+  // cosmos-terminal-favorite-multiplex-v1 (FR-017): the hook runs unconditionally (rules of hooks)
+  // but is forced INERT in mirror mode (`live=false` ⇒ no `fs:*` reads, Monaco never mounted). The
+  // mirror renders the terminal pane ONLY — the file-explorer split is deliberately NOT mirrored
+  // because its per-mount imperative state (open files, Monaco models, `fs:*`) cannot be referenced
+  // across two mounts (a second mount would get its own independent state); only the genuinely shared
+  // PTY/`pty:data` is mirrored.
   const { viewer, tree, openFileCount, closeActiveFile, navFileTab } = useExplorerPanes(
     paneId,
-    live,
+    mirror ? false : live,
     restoredOpenFiles,
     reportOpenFiles,
     setViewerFocused
@@ -479,7 +533,17 @@ function TerminalView({
           controlled flex-basis once live (the §1.2 resize state). Never unmounted (FR-013). */}
       <div
         className="flex min-h-0 min-w-0 flex-col"
-        style={live ? (termWidth !== null ? { flex: `0 0 ${termWidth}px` } : { flex: '0 0 45%' }) : { flex: '1 1 0%' }}
+        style={
+          // cosmos-terminal-favorite-multiplex-v1 (FR-017): a mirror is terminal-pane-ONLY → always
+          // full width (no §1.2 resize state, no split to leave room for).
+          mirror
+            ? { flex: '1 1 0%' }
+            : live
+              ? termWidth !== null
+                ? { flex: `0 0 ${termWidth}px` }
+                : { flex: '0 0 45%' }
+              : { flex: '1 1 0%' }
+        }
       >
         {!live ? (
           // VS-Code-style WELCOME view (FR-001/FR-009): the ONLY thing shown before a folder is open.
@@ -515,9 +579,14 @@ function TerminalView({
                   </span>
                 )}
               </div>
-              <button type="button" className="terminal-panel__restart" onClick={handleRestart}>
-                Restart claude
-              </button>
+              {/* cosmos-terminal-favorite-multiplex-v1 (FR-015): a MIRROR reflects the exited state
+                  READ-ONLY — restarting stays a source-only action (the favorite never owns the PTY
+                  lifecycle). Only the owning view offers Restart. */}
+              {!mirror && (
+                <button type="button" className="terminal-panel__restart" onClick={handleRestart}>
+                  Restart claude
+                </button>
+              )}
             </div>
           )
         )}
@@ -530,8 +599,9 @@ function TerminalView({
       </div>
 
       {/* The 3-pane split chrome (dividers + viewer + tree dock) exists ONLY once a folder is open —
-          before that the welcome view is the whole tab. */}
-      {live ? (
+          before that the welcome view is the whole tab. cosmos-terminal-favorite-multiplex-v1
+          (FR-017): a MIRROR never renders the split (terminal pane only). */}
+      {live && !mirror ? (
         <>
           {/* §1.3 divider A (terminal | viewer). */}
           <ResizeDivider onResize={handleTermResize} ariaLabel="Resize terminal and file viewer" />
@@ -674,13 +744,49 @@ export function TerminalPanel({ active }: { active: boolean }): React.JSX.Elemen
     reportTerminal({ tabs, activeTabId })
   }, [tabs, activeTabId, reportTerminal])
 
+  // cosmos-terminal-favorite-multiplex-v1 (FR-009/FR-014): which panes are LIVE (their PTY spawned),
+  // reported by each owning TerminalView via `handleLiveChange`. STATE (not a ref) so the publish
+  // memo re-runs when a pane goes live ⇒ its `serialize` seed accessor is published, flipping a Home
+  // terminal favorite from WAITING to the live mirror. A stale entry for a closed pane is harmless
+  // (the publish memo maps only the CURRENT `tabs`).
+  const [livePaneIds, setLivePaneIds] = useState<ReadonlySet<string>>(() => new Set())
+  const handleLiveChange = useCallback((paneId: string, live: boolean): void => {
+    setLivePaneIds((prev) => {
+      if (prev.has(paneId) === live) {
+        return prev
+      }
+      const next = new Set(prev)
+      if (live) {
+        next.add(paneId)
+      } else {
+        next.delete(paneId)
+      }
+      return next
+    })
+  }, [])
+
   // cosmos-panel-tab-list-v1 (FR-005/FR-008): publish the Terminal panel's live tab list into the
   // App-root PanelTabsProvider so the Cosmos tree's "Terminal" group reflects every open terminal
   // tab (its label, e.g. "Terminal 2", + the active id), live. Non-secret { id, label } only — no
   // scrollback, cwd, sessionId, or open-files (FR-011).
+  //
+  // cosmos-terminal-favorite-multiplex-v1 (FR-009): a LIVE pane ALSO carries `serialize` — a renderer-
+  // only accessor returning the source xterm's current buffer, so a Home terminal favorite can seed
+  // its mirror from real history. The closure reads `serializersRef` LAZILY (the serializer registers
+  // after publish), so the memo must NOT depend on the ref. NON-SECRET (on-screen output, same
+  // standard as the persisted scrollback) + NEVER persisted/IPC'd (renderer ref pass only, FR-010).
   const livePanelTabs = useMemo<LivePanelTabs>(
-    () => ({ tabs: tabs.map((t) => ({ id: t.id, label: t.label })), activeTabId }),
-    [tabs, activeTabId]
+    () => ({
+      tabs: tabs.map((t) => ({
+        id: t.id,
+        label: t.label,
+        ...(livePaneIds.has(t.id)
+          ? { serialize: (): string => serializersRef.current.get(t.id)?.() ?? '' }
+          : {})
+      })),
+      activeTabId
+    }),
+    [tabs, activeTabId, livePaneIds]
   )
   usePublishPanelTabs('terminal', livePanelTabs)
 
@@ -807,6 +913,7 @@ export function TerminalPanel({ active }: { active: boolean }): React.JSX.Elemen
             restoredOpenFiles={restoredOpenFilesRef.current.get(t.id)}
             onOpenFilesChange={handleOpenFilesChange}
             onViewerStateChange={handleViewerStateChange}
+            onLiveChange={handleLiveChange}
             registerSerializer={registerSerializer}
           />
         ))}

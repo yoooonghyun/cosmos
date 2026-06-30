@@ -518,12 +518,11 @@ describe('validateSnapshot — favorites (cosmos-home-favorite-tabs-v1, FR-030/F
     ])
   })
 
-  it('DROPS malformed / secret-shaped / terminal / unknown-panel entries, keeping the good (FR-033)', () => {
+  it('DROPS malformed / secret-shaped / unknown-panel entries, keeping the good (FR-033)', () => {
     const snap = {
       ...goodSnapshot(),
       favorites: [
         { panelId: 'jira', tabId: 'j1', label: 'Kept', token: 'SECRET-shaped-extra' },
-        { panelId: 'terminal', tabId: 't1', label: 'Terminal' }, // not pinnable
         { panelId: 'evil', tabId: 'x', label: 'x' }, // unknown panel
         { tabId: 'no-panel', label: 'x' }, // missing panelId
         'a string' // not an object
@@ -534,8 +533,20 @@ describe('validateSnapshot — favorites (cosmos-home-favorite-tabs-v1, FR-030/F
     expect(out!.favorites).toEqual([{ panelId: 'jira', tabId: 'j1', label: 'Kept' }])
   })
 
+  it('KEEPS a terminal favorite (cosmos-terminal-favorite-multiplex-v1 relaxed FR-040), secret-free', () => {
+    const snap = {
+      ...goodSnapshot(),
+      favorites: [
+        { panelId: 'terminal', tabId: 'pane-1', label: 'Terminal 2', cwd: '/secret', sessionId: 's' }
+      ]
+    }
+    const out = validateSnapshot(snap)
+    // Terminal kept, rebuilt to the {panelId,tabId,label} whitelist — the cwd/sessionId stripped.
+    expect(out!.favorites).toEqual([{ panelId: 'terminal', tabId: 'pane-1', label: 'Terminal 2' }])
+  })
+
   it('OMITS favorites entirely when the list is empty / all-dropped (so an old snapshot stays clean)', () => {
-    const snap = { ...goodSnapshot(), favorites: [{ panelId: 'terminal', tabId: 't', label: 'x' }] }
+    const snap = { ...goodSnapshot(), favorites: [{ panelId: 'evil', tabId: 't', label: 'x' }] }
     expect(validateSnapshot(snap)).not.toHaveProperty('favorites')
     expect(validateSnapshot(goodSnapshot())).not.toHaveProperty('favorites') // pre-feature
   })

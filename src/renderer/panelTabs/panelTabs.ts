@@ -45,6 +45,23 @@ export interface LivePanelTab {
    * (a PTY tab has no A2UI surface to mirror).
    */
   surface?: TabSurface | null
+  /**
+   * A TERMINAL pane's live scrollback accessor (cosmos-terminal-favorite-multiplex-v1, FR-009): a
+   * renderer-only REFERENCE that returns the source xterm's current serialized buffer. A Home
+   * terminal favorite calls it ONCE on mount to seed its mirror xterm (`initialScrollback`) so it
+   * shows real history, not a blank screen, before attaching to the shared `pty:data` stream.
+   *
+   * Present ONLY while the pane's PTY is live (an awaiting/`[Open a folder]` pane omits it ⇒ the
+   * favorite shows WAITING); terminal liveness is therefore encoded by PRESENCE of `serialize`, so
+   * no separate `live` flag is needed. Only terminal tabs ever set it; the four generative panels
+   * never do.
+   *
+   * NON-SECRET by the SAME standard as the already-persisted session scrollback — it is on-screen
+   * terminal output, the same whitelist as the label/id above. It is a renderer-only ref pass
+   * ({@link PanelTabsProvider} is in-renderer, no IPC) and is NEVER persisted or sent over IPC by
+   * this seam (favorites persist by reference only — `{panelId, tabId, label}`).
+   */
+  serialize?: () => string
 }
 
 /** One panel's FULL live tab list + which tab is active (FR-008). */

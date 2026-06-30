@@ -352,6 +352,38 @@ detail.
   own cwd wins), a fresh spawn uses `overrideCwd ?? sandboxDir`. `TerminalView` carries the
   `autoStart`/`phase`/`pending` state for this; restored tabs set `autoStart` so they resume
   without a pick.
+- **A terminal tab can be PINNED as a Home favorite — a non-owning xterm MIRROR (cosmos-terminal-
+  favorite-multiplex-v1).** `TerminalView` gained a `mirror?: boolean` prop (default `false` ⇒ the
+  owning path is 100% unchanged). When `mirror` is true it is a SECOND xterm bound to the SAME
+  `paneId` as the source pane (Approach A — no new PTY/session): it (a) NEVER calls `pty:start`/
+  `dispose`/`restart` (the **dispose-danger** — a naive 2nd mount would kill the shared PTY on every
+  Home tab switch; the gates are `if (autoStart && !mirror) start` and `if (!mirror) dispose`),
+  (b) starts in `phase:'live'` (no `[Open]` CTA), (c) seeds from `initialScrollback` then fans in on
+  the existing per-`paneId` `pty:data` subscription, (d) renders the **terminal pane ONLY**
+  (`useExplorerPanes(paneId, mirror ? false : live, …)` keeps the explorer inert + Monaco unmounted),
+  (e) shows the exit banner READ-ONLY (no Restart). The favorite branch lives in
+  `cosmos/TerminalFavoriteSurface.tsx` (`FavoriteSurface` branches on `source.panelId === 'terminal'`
+  BEFORE the `favoriteCatalogHosts` lookup).
+- **GOTCHA — the terminal-favorite mirror MUST `React.lazy`-import `TerminalView`.** `TerminalPanel.tsx`
+  statically imports the Monaco-backed file explorer (the `../fileExplorer` barrel), which **crashes
+  jsdom on import** (`queryCommandSupported`). Importing `TerminalView` eagerly from
+  `TerminalFavoriteSurface` would drag Monaco into the WHOLE `FavoriteSurface`/`CosmosPanel` module
+  graph and break every favorites `.dom.test` (it did — confirmed). So `TerminalFavoriteSurface`
+  loads it via `lazy(() => import('../terminal/TerminalPanel').then(m => ({ default: m.TerminalView })))`
+  behind a `Suspense`. A `.dom.test` that renders the real terminal mirror must `await findBy…` (the
+  lazy boundary), or `vi.mock('../terminal/TerminalPanel')` to stub `TerminalView`.
+- **Terminal liveness → the favorite's WAITING vs live mirror is encoded by a `serialize` ref on
+  `LivePanelTab`.** The Terminal panel publishes `serialize: () => …` per tab ONLY while that pane is
+  live (an owning `TerminalView` reports `onLiveChange(paneId, phase==='live')`; the panel holds a
+  `livePaneIds` STATE Set so the publish memo re-runs). The closure reads `serializersRef` LAZILY (the
+  serializer registers after publish), so the memo must NOT depend on the ref. Absent `serialize` ⇒
+  the favorite shows WAITING. This ref is renderer-only + NON-SECRET (on-screen output, same standard
+  as the persisted scrollback) — NEVER persisted or sent over IPC.
+- **GLOBAL resize guard (`shouldDriveResize`, `terminal/terminalResize.ts`).** A `paneId` may now have
+  two bound xterms (source + favorite mirror); `TerminalView` gates BOTH `pushResize` and the
+  active-effect resize on a measurable (non-zero) container, so only the on-screen view drives
+  `pty:resize` (race-free arbitration; also fixes a latent bug where a hidden terminal resized the PTY
+  because `safeFit()` swallowed the throw but the resize still fired).
 
 ## Cosmos conversation timeline (cosmos-conversation-panel-v2, step 3)
 

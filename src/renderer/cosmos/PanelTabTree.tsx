@@ -20,7 +20,6 @@ import {
   ContextMenu,
   ContextMenuContent,
   ContextMenuItem,
-  ContextMenuLabel,
   ContextMenuTrigger
 } from '@/components/ui/context-menu'
 import { cn } from '@/lib/utils'
@@ -63,7 +62,8 @@ export function PanelTabTree({
   /**
    * cosmos-home-favorite-tabs-v1 (FR-001/FR-002): whether the source panel+tab is currently pinned
    * as a Home favorite (drives the row's right-click menu Pin vs Unpin). Optional — when omitted (no
-   * pin handlers wired) tab rows carry no menu. Terminal rows are never pinnable (FR-040).
+   * pin handlers wired) tab rows carry no menu. Terminal rows ARE pinnable too
+   * (cosmos-terminal-favorite-multiplex-v1 relaxed FR-040).
    */
   isPinned?: (panelId: CrossPanelId, tabId: string) => boolean
   /** Pin a source tab as a favorite (FR-001/FR-010). */
@@ -209,8 +209,8 @@ export function PanelTabTree({
                     group.tabs.map((tab) => {
                       // ONE source of truth for pinned-ness — the SAME signal the Pin/Unpin menu
                       // uses (cosmos-home-favorite-tabs-v1). Drives both the menu's Pin vs Unpin AND
-                      // the additive row marking (text-primary icon + bold label, D-15). Terminal
-                      // rows are never pinned (isPinned returns false), so they never get the mark.
+                      // the additive row marking (text-primary icon + bold label, D-15). Applies to
+                      // terminal rows too now (cosmos-terminal-favorite-multiplex-v1).
                       const pinned = isPinned?.(group.panelId, tab.id) ?? false
                       return (
                         <TabRow
@@ -248,9 +248,11 @@ export function PanelTabTree({
 }
 
 /**
- * Build a tab row's right-click menu CONTENT (cosmos-home-favorite-tabs-v1, design §2.2/§2.3). A
- * terminal row gets a DISABLED "Pin" + a quiet reason (FR-040); a generative row gets a single
- * state-reflective item: "Unpin" when pinned, "Pin" when not (FR-001/FR-002).
+ * Build a tab row's right-click menu CONTENT (cosmos-home-favorite-tabs-v1, design §2.2/§2.3). Every
+ * row — generative OR terminal (cosmos-terminal-favorite-multiplex-v1 relaxed the FR-040 exclusion:
+ * terminal tabs ARE pinnable now, as an xterm-multiplex mirror) — gets a single state-reflective
+ * item: "Unpin" when pinned, "Pin" when not (FR-001/FR-002). `panelId` is retained for parity with
+ * the row's `isPinned` signal even though the menu no longer special-cases it.
  */
 function renderRowMenu(opts: {
   panelId: CrossPanelId
@@ -258,16 +260,6 @@ function renderRowMenu(opts: {
   onPin: () => void
   onUnpin: () => void
 }): React.ReactNode {
-  if (opts.panelId === 'terminal') {
-    return (
-      <ContextMenuContent>
-        <ContextMenuItem disabled aria-label="Pin — Terminal tabs can't be pinned">
-          Pin
-        </ContextMenuItem>
-        <ContextMenuLabel>Terminal tabs can&apos;t be pinned</ContextMenuLabel>
-      </ContextMenuContent>
-    )
-  }
   return (
     <ContextMenuContent>
       {opts.pinned ? (
@@ -346,7 +338,8 @@ function TabRow({
    * cosmos-home-favorite-tabs-v1 (D-15): this source tab ALREADY has a Home favorite. An additive,
    * purely-visual mark so the user can see which tabs are pinned — the leading icon takes the brand
    * accent (`text-primary`) and the label goes bold (`font-medium`). Driven by the SAME `isPinned`
-   * signal the Pin/Unpin menu uses (one source of truth); terminal rows are never pinned.
+   * signal the Pin/Unpin menu uses (one source of truth); applies to terminal rows too now
+   * (cosmos-terminal-favorite-multiplex-v1).
    */
   pinned: boolean
   isSelected: boolean

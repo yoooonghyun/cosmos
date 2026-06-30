@@ -239,6 +239,14 @@ event.** This is a behavior contract, not an optimization:
 - Is one of the five rail surfaces (§3), and the default. All terminal tabs are kept **mounted
   even when inactive or when another surface is selected** (only hidden), so neither switching
   terminal tabs nor switching the rail drops any live PTY session or scrollback.
+- **A `paneId` may now have MORE THAN ONE bound xterm** (cosmos-terminal-favorite-multiplex-v1): the
+  source Terminal-pane view PLUS a Home terminal-favorite **mirror** (§4.14) of the same `paneId`.
+  Both subscribe to the one `paneId`'s `pty:data` (the preload multiplexes subscribers) and write the
+  same `pty:input`. Only the **source** view owns `pty:start`/`dispose`/`restart`; the mirror is
+  non-owning. **Resize is driven ONLY by the MEASURABLE (on-screen) view** — `TerminalView` gates
+  `pty:resize` on a non-zero container (`shouldDriveResize`), so a hidden/zero-size view (the inactive
+  tab, or the off-screen source/favorite of a multiplexed pane) never pushes a competing size; the
+  visible view is always the last writer (latent-correctness fix applied to ALL terminals).
 
 ### 4.3 Render MCP tools + UiBridge (main process)
 - A `render_ui(spec)` MCP tool, where `spec` is an A2UI `surfaceUpdate` payload (validated
@@ -1010,6 +1018,11 @@ is a **collection layer over the per-file `viewerState.ts`**, mirroring the `pan
   it is independent across terminal tabs and is **NOT persisted** to the session snapshot — it
   resets to empty on go-live / app restart, matching the existing ephemeral split-ratio + viewer
   state from #84.
+- **A Home terminal favorite (§4.14) mirrors the TERMINAL PANE ONLY — NOT this 3-pane split.** The
+  mirror's `useExplorerPanes` is forced inert (`live=false`) so no `fs:*` read fires and Monaco is
+  never mounted, and it renders just the terminal column. The explorer is excluded by design because
+  its per-mount imperative state (open files, Monaco models, `fs:*`) can't be referenced across two
+  mounts of the same `paneId` — only the genuinely shared PTY/`pty:data` is mirrored.
 
 ### 4.14 Cosmos panel-tab list — read-only cross-panel tab survey + context-picker (renderer)
 
@@ -1067,7 +1080,22 @@ the source tab the favorite mirrors. The App-level "one hoisted composer routes 
 surface" invariant is preserved (Home's null config → `SharedComposer` renders nothing; the favorite's
 floating composer is a second, Home-scoped instance only while a favorite is active). v1 SWALLOWS
 panel-internal renderer-local navigation (Slack open-channel, Jira/Calendar open-detail) inside Home.
-Terminal tabs are **not pinnable** (no A2UI surface). Favorites persist by reference only — a top-level additive-optional `SessionSnapshot.favorites`
+**Terminal tabs ARE pinnable** (cosmos-terminal-favorite-multiplex-v1 relaxed the prior exclusion): a
+terminal favorite is a **renderer-side xterm multiplex** — a SECOND `xterm` bound to the SAME `paneId`
+as the source pane (NO new session, NO second PTY), reusing the existing `TerminalView` in a new
+**`mirror` (non-owning) mode**. `FavoriteSurface` branches on `source.panelId === 'terminal'` (BEFORE
+the `favoriteCatalogHosts` lookup, which has no terminal host) to a `TerminalFavoriteSurface` that
+mounts the mirror lazily (a `React.lazy` boundary keeps the Monaco-backed explorer import out of the
+`FavoriteSurface` module graph). A mirror NEVER drives `pty:start`/`dispose`/`restart` (the source view
+owns the PTY lifecycle — a naive 2nd mount would dispose the shared PTY on every Home tab switch),
+seeds its scrollback from the source pane's live serializer (surfaced as a renderer-only `serialize`
+ref on `LivePanelTab`, non-secret by the persisted-scrollback standard, never IPC/persisted), then fans
+in on the existing per-`paneId` `pty:data` stream; it renders the **terminal pane ONLY** (the
+file-explorer split is excluded — its per-mount imperative state can't be shared across two mounts). It
+shows the same GONE/WAITING (no `serialize` yet ⇒ waiting) / exited-read-only (no Restart) idioms as
+A2UI favorites. `FavoritePanelId` widens to `CrossPanelId`. (Resize: a `paneId` may now have more than
+one bound xterm, but ONLY the measurable on-screen view drives `pty:resize` — see §4.1.) Favorites
+persist by reference only — a top-level additive-optional `SessionSnapshot.favorites`
 (`{panelId,tabId,label}`, NON-SECRET, **NO schema bump** — mirrors `openPromptPosition`, validated by
 the shared `validateFavorites` at the main boundary) — and **re-bind** to the restored source tab on
 relaunch (stable generative tab ids); a favorite whose source is gone shows a calm "no longer open"

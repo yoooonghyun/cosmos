@@ -41,8 +41,14 @@ const SWALLOWED_LOCAL_ACTIONS: ReadonlySet<string> = new Set([
   CALENDAR_OPEN_DETAIL_ACTION
 ])
 
-/** The four generative panels' A2UI hosts, keyed by a favorite's source `panelId` (FR-022). */
-export const favoriteCatalogHosts: Record<FavoritePanelId, FavoriteCatalogHost> = {
+/**
+ * The four generative panels' A2UI hosts, keyed by a favorite's source `panelId` (FR-022). PARTIAL:
+ * `'terminal'` is intentionally absent (cosmos-terminal-favorite-multiplex-v1) — a terminal favorite
+ * is an xterm-multiplex mirror, NOT an A2UI surface, so `FavoriteSurface` branches to its own
+ * terminal path BEFORE this lookup and never indexes a terminal host (an absent host ⇒ undefined,
+ * already handled by the GONE guard).
+ */
+export const favoriteCatalogHosts: Partial<Record<FavoritePanelId, FavoriteCatalogHost>> = {
   jira: { catalog: jiraCatalog, catalogId: JIRA_CATALOG_ID, panelName: RAIL_LABEL.jira },
   slack: { catalog: slackCatalog, catalogId: SLACK_CATALOG_ID, panelName: RAIL_LABEL.slack },
   confluence: {

@@ -60,7 +60,7 @@ the only widening is `FavoritePanelId`/the persisted whitelist admitting `'termi
 
 ## Phase 0 — Sequencing gate (HARD — do not start Phase 1 until cleared)
 
-- [ ] **Confirm the in-flight favorites work has settled.** navigate-on-pin fix is DONE; a
+- [x] **Confirm the in-flight favorites work has settled.** navigate-on-pin fix is DONE; a
       **Confluence-favorite bugfix is in flight touching the publish path / `FavoriteSurface`**. This
       plan edits `FavoriteSurface.tsx`, `CosmosPanel.tsx`, and the publish path (`panelTabs.ts` /
       `TerminalPanel.tsx` publish) — all overlap. **Implementation MUST land after that bugfix
@@ -68,53 +68,53 @@ the only widening is `FavoritePanelId`/the persisted whitelist admitting `'termi
 
 ## Phase 1 — Interface (types + the widening, no behavior yet)
 
-- [ ] **Widen the favorite panel id (shared boundary).** In `src/shared/ipc/session.ts`:
+- [x] **Widen the favorite panel id (shared boundary).** In `src/shared/ipc/session.ts`:
       `HomeFavorite.panelId: GateableIntegration` → `GateableIntegration | 'terminal'`; add `'terminal'`
       to `FAVORITE_PANEL_IDS`. `validateFavorites` then accepts a terminal favorite for free (it gates on
       `FAVORITE_PANEL_IDS` membership). Update the doc comments (drop "terminal is NOT pinnable — FR-040").
-- [ ] **Widen `FavoritePanelId` (renderer).** In `src/renderer/cosmos/cosmosTabs.ts`: `export type
+- [x] **Widen `FavoritePanelId` (renderer).** In `src/renderer/cosmos/cosmosTabs.ts`: `export type
       FavoritePanelId = CrossPanelId` (type-only import from `../panelTabs/panelTabs`; keeps the module
       React-free). `CrossPanelId` (`'terminal'|'slack'|'jira'|'confluence'|'google-calendar'`) is
       structurally the shared union, so `favoriteId`/`isPinned`/`appendFavorite`/`favoritesToTabs` widen
       with no further change. Update the module/`FavoritePanelId` doc comments.
-- [ ] **Add the scrollback-seed ref to the cross-panel contract.** In `src/renderer/panelTabs/panelTabs.ts`,
+- [x] **Add the scrollback-seed ref to the cross-panel contract.** In `src/renderer/panelTabs/panelTabs.ts`,
       add to `LivePanelTab`: `serialize?: () => string` — "a TERMINAL pane's live scrollback accessor, a
       renderer-only reference (NEVER IPC/persisted), present ONLY while the pane's PTY is live; a Home
       terminal favorite calls it once on mount to seed its mirror xterm. NON-SECRET by the same standard
       as the already-persisted session scrollback (it is on-screen output)." Mirrors the existing
       `surface` ref-pass precedent. Terminal liveness is encoded by PRESENCE of `serialize` (absent ⇒
       WAITING), so no separate `live` flag is needed.
-- [ ] **Add the `mirror` prop to `TerminalView`'s props type** (see Phase 3 for the conditionals).
-- [ ] Review types vs spec — no invented properties (the only new fields are `mirror` and the
+- [x] **Add the `mirror` prop to `TerminalView`'s props type** (see Phase 3 for the conditionals).
+- [x] Review types vs spec — no invented properties (the only new fields are `mirror` and the
       `serialize` ref; both trace to FR-005/FR-009).
 
 ## Phase 2 — Testing (write first where the logic is pure / branchy)
 
 **node-unit (`.test.ts`, vitest node env):**
-- [ ] `src/main/session/sessionSnapshot.test.ts` (or the validators test): `validateFavorites` ACCEPTS a
+- [x] `src/main/session/sessionSnapshot.test.ts` (or the validators test): `validateFavorites` ACCEPTS a
       `{panelId:'terminal',tabId,label}` favorite; still rejects an unknown panelId; still drops a
       secret-shaped/malformed entry.
-- [ ] `src/renderer/cosmos/cosmosTabs.test.ts`: `favoriteId`/`isPinned`/`appendFavorite` work with a
+- [x] `src/renderer/cosmos/cosmosTabs.test.ts`: `favoriteId`/`isPinned`/`appendFavorite` work with a
       `terminal` source (idempotent de-dupe by `favoriteId`).
-- [ ] `src/renderer/cosmos/homeFavorites.test.ts` (NEW — `homeFavorites` has no test today):
+- [x] `src/renderer/cosmos/homeFavorites.test.ts` (NEW — `homeFavorites` has no test today):
       `toHomeFavorites`↔`favoritesToTabs` round-trip a terminal favorite; `reconcileFavorites` KEEPS a
       terminal favorite when its source group is gone, RELABELS on source rename.
 
 **jsdom (`.dom.test.tsx`):**
-- [ ] **FavoriteSurface terminal branch** (`TerminalFavoriteSurface.dom.test.tsx`): GONE (no live tab →
+- [x] **FavoriteSurface terminal branch** (`TerminalFavoriteSurface.dom.test.tsx`): GONE (no live tab →
       "no longer open" + Unpin), WAITING (live tab, no `serialize` → calm waiting), POPULATED (live tab +
       `serialize` → renders the mirror and seeds `initialScrollback` from `serialize()`). Mock the heavy
       terminal/Monaco imports (see Phase 3 note) + a fake `window.cosmos.pty`.
-- [ ] **Non-owning behavior** (the load-bearing guarantee, SC-004): mounting then unmounting the mirror
+- [x] **Non-owning behavior** (the load-bearing guarantee, SC-004): mounting then unmounting the mirror
       `TerminalView` (`mirror`) calls NEITHER `window.cosmos.pty.start` NOR `pty.dispose` NOR `pty.restart`;
       the owning view (no `mirror`) still calls `start` on mount + `dispose` on unmount (regression guard).
-- [ ] **Resize guard** (SC-006): a `TerminalView` whose container measures 0 (hidden) does NOT call
+- [x] **Resize guard** (SC-006): a `TerminalView` whose container measures 0 (hidden) does NOT call
       `pty.resize`; a measurable one does. (Drive via a mocked `fitAddon.fit()` throw / 0-size container,
       or test an extracted pure `shouldDriveResize(container)` helper.)
-- [ ] **Tree + pin** (`CosmosFavoriteTabs.dom.test.tsx` / `PanelTabTree` test): a Terminal-group row's
+- [x] **Tree + pin** (`CosmosFavoriteTabs.dom.test.tsx` / `PanelTabTree` test): a Terminal-group row's
       right-click menu now offers **Pin** (not the disabled item); pinning a terminal source appends a
       favorite; the row shows the pinned mark.
-- [ ] **CosmosPanel**: `handlePin`/`handleUnpin`/`isSourcePinned` no longer no-op for `'terminal'`
+- [x] **CosmosPanel**: `handlePin`/`handleUnpin`/`isSourcePinned` no longer no-op for `'terminal'`
       (pin a terminal source → favorite tab appears after the default; unpin removes it; active favorite
       unpin → default).
 
@@ -128,17 +128,17 @@ existing per-paneId channels). Note this explicitly so no one adds a redundant `
 In `src/renderer/terminal/TerminalPanel.tsx`, add `mirror?: boolean` (default `false`) to `TerminalView`
 and gate ONLY these branches on it (every existing owning-path behavior is untouched when `mirror` is false):
 
-- [ ] **Export `TerminalView`** so `FavoriteSurface` can reuse it (currently module-local).
-- [ ] **No PTY lifecycle ownership (FR-005).**
+- [x] **Export `TerminalView`** so `FavoriteSurface` can reuse it (currently module-local).
+- [x] **No PTY lifecycle ownership (FR-005).**
       - Spawn: `if (autoStart && !mirror) window.cosmos.pty.start(paneId)`.
       - Unmount cleanup: `if (!mirror) window.cosmos.pty.dispose(paneId)`.
       - Exit-banner Restart: in `mirror` mode render the exit text READ-ONLY (no "Restart claude" button;
         `handleRestart` is unreachable). (FR-015)
-- [ ] **Always-live, no picker (mirror is only mounted when the source PTY is live).** Initialize
+- [x] **Always-live, no picker (mirror is only mounted when the source PTY is live).** Initialize
       `phase` as `mirror ? 'live' : (autoStart ? 'live' : 'awaiting')`; the `[Open a folder]` welcome CTA
       branch and `handleOpen` are never shown/used in mirror mode (they're gated by `!live`, which is true
       in mirror).
-- [ ] **Terminal pane only — exclude the explorer split (FR-017).** Render only the terminal column in
+- [x] **Terminal pane only — exclude the explorer split (FR-017).** Render only the terminal column in
       mirror mode (no dividers, no viewer, no tree dock). Keep the hook call unconditional (rules of hooks)
       but force it inert: `useExplorerPanes(paneId, mirror ? false : live, …)` — `live=false` keeps the
       explorer hook inert (no `fs:*` reads) and Monaco is never MOUNTED at runtime (it's only mounted by the
@@ -146,15 +146,15 @@ and gate ONLY these branches on it (every existing owning-path behavior is untou
       Monaco models, `fs:*`) is per-mount imperative state that can't be referenced across two mounts, so it
       is deliberately not mirrored (a second mount would get its own independent state) — only the genuinely
       shared PTY/`pty:data` is mirrored.
-- [ ] **Seed scrollback (FR-009).** `mirror` reuses the EXISTING `initialScrollback` prop path verbatim:
+- [x] **Seed scrollback (FR-009).** `mirror` reuses the EXISTING `initialScrollback` prop path verbatim:
       `FavoriteSurface` passes `initialScrollback={live.serialize()}` (the source pane's current buffer),
       pre-written before the live `pty:data` subscription attaches. The seed/subscribe micro-race (a few
       lost/duplicated bytes) is accepted for v1 (perfect replay would need sequence-numbered `pty:data` —
       out of scope; note in comment).
-- [ ] **Data fan-out + input (FR-006/FR-007/FR-008).** No change needed — the existing per-paneId
+- [x] **Data fan-out + input (FR-006/FR-007/FR-008).** No change needed — the existing per-paneId
       `pty.onData` subscription + `term.onData → pty.sendInput({paneId})` are reused as-is; the preload
       multiplexes subscribers. Only the focused on-screen view receives keystrokes (xterm focus is DOM-scoped).
-- [ ] **Mirror passes no-op panel callbacks.** `registerSerializer`, `onOpenFilesChange`,
+- [x] **Mirror passes no-op panel callbacks.** `registerSerializer`, `onOpenFilesChange`,
       `onViewerStateChange` are required props but irrelevant to a mirror → `FavoriteSurface` passes no-ops
       (the mirror is not part of the Terminal panel's serializer/open-files bookkeeping).
 
@@ -168,11 +168,11 @@ and gate ONLY these branches on it (every existing owning-path behavior is untou
 
 ### 3b. Publish the terminal scrollback serializer (FR-009 transport)
 
-- [ ] In `src/renderer/terminal/TerminalPanel.tsx`, the `livePanelTabs` memo maps each tab to also carry
+- [x] In `src/renderer/terminal/TerminalPanel.tsx`, the `livePanelTabs` memo maps each tab to also carry
       `serialize` **only for live panes**: `serialize: isPaneLive(t.id) ? () => serializersRef.current.get(t.id)?.() ?? '' : undefined`.
       The closure reads `serializersRef` lazily (the serializer registers after publish, so a lazy read is
       required; the memo must NOT depend on the ref).
-- [ ] **Liveness signal.** Add a minimal per-pane live reporter mirroring the existing
+- [x] **Liveness signal.** Add a minimal per-pane live reporter mirroring the existing
       `onOpenFilesChange`/`onViewerStateChange` reporter pattern: `TerminalView` reports `onLiveChange(paneId,
       phase === 'live')` via an effect on `phase`; `TerminalPanel` holds a `livePaneIds` **state Set**
       (state, not ref, so the publish memo re-runs) updated by a stable `handleLiveChange`. The
@@ -181,7 +181,7 @@ and gate ONLY these branches on it (every existing owning-path behavior is untou
 
 ### 3c. The `FavoriteSurface` terminal branch (before the A2UI catalog path) (FR-004/FR-013/FR-014)
 
-- [ ] In `src/renderer/cosmos/FavoriteSurface.tsx`, branch FIRST on `source.panelId === 'terminal'`
+- [x] In `src/renderer/cosmos/FavoriteSurface.tsx`, branch FIRST on `source.panelId === 'terminal'`
       (before the `favoriteCatalogHosts[source.panelId]` lookup, which has no terminal entry). Extract the
       branch into a co-located `TerminalFavoriteSurface` (keeps `FavoriteSurface` lean + isolates the
       terminal/Monaco import for the jsdom split). It reads `live = findLiveTab(registry, 'terminal',
@@ -194,17 +194,17 @@ and gate ONLY these branches on it (every existing owning-path behavior is untou
 
 ### 3d. Relax the terminal gates (FR-001/FR-002)
 
-- [ ] `src/renderer/cosmos/PanelTabTree.tsx` — `renderRowMenu`: REMOVE the `panelId==='terminal'`
+- [x] `src/renderer/cosmos/PanelTabTree.tsx` — `renderRowMenu`: REMOVE the `panelId==='terminal'`
       disabled-Pin special case so terminal rows get the normal state-reflective Pin/Unpin item. The
       `pinned` mark + `isPinned` already light up once `CosmosPanel` stops excluding terminal.
-- [ ] `src/renderer/cosmos/CosmosPanel.tsx` — REMOVE the three `if (group.panelId === 'terminal') return`
+- [x] `src/renderer/cosmos/CosmosPanel.tsx` — REMOVE the three `if (group.panelId === 'terminal') return`
       early-returns in `handlePin` / `handleUnpin` / `isSourcePinned`. The `handlePin` source becomes
       `{ panelId: group.panelId, tabId: tab.id }` (group.panelId is now a valid `FavoritePanelId`). No other
       CosmosPanel change — the favorite render already dispatches through `FavoriteSurface`.
 
 ### 3e. Global resize-guard latent fix (FR-011/FR-012, OQ3 → apply globally)
 
-- [ ] In `TerminalView`'s `pushResize` (and the `active`-effect's fit+resize), only call
+- [x] In `TerminalView`'s `pushResize` (and the `active`-effect's fit+resize), only call
       `window.cosmos.pty.resize(...)` when the container is MEASURABLE (fit succeeded / non-zero
       `clientWidth`×`clientHeight`). Today `pushResize` resizes even when `safeFit()` swallowed a throw
       (hidden container) — a hidden view then pushes a stale size. Gate it (e.g. `safeFit()` returns a
@@ -214,7 +214,7 @@ and gate ONLY these branches on it (every existing owning-path behavior is untou
 
 ## Phase 4 — Docs
 
-- [ ] Update `docs/ARCHITECTURE.md` (architect, after implementation): **§4.1/§4.2** — a `paneId` may now
+- [x] Update `docs/ARCHITECTURE.md` (architect, after implementation): **§4.1/§4.2** — a `paneId` may now
       have MORE THAN ONE bound xterm (source + a Home favorite mirror); only the source view owns
       `pty:start`/`dispose`/`restart`; resize is driven only by the measurable (on-screen) view. **§4.13** —
       the terminal favorite mirrors the terminal pane ONLY; the file-explorer split is excluded BECAUSE its
@@ -222,7 +222,7 @@ and gate ONLY these branches on it (every existing owning-path behavior is untou
       **§4.14** — terminal tabs ARE pinnable (relax the FR-040 line); a terminal favorite is a renderer-side
       xterm multiplex (non-owning); `FavoritePanelId` widens to `CrossPanelId`; `LivePanelTab` carries a
       terminal `serialize` scrollback-seed ref (renderer-only, non-secret by the persisted-scrollback standard).
-- [ ] Reconcile `TODO.md`; update this plan's Deviations with anything that differed.
+- [x] Reconcile `TODO.md`; update this plan's Deviations with anything that differed.
 
 ---
 
@@ -263,4 +263,21 @@ and gate ONLY these branches on it (every existing owning-path behavior is untou
 ## Deviations & Notes
 
 - **2026-06-30**: Plan authored. No deviations yet (no code written — STOP after plan per the cycle).
+- **2026-06-30 (implementation)**: Steps 3–5 implemented. Interface: `FavoritePanelId = CrossPanelId`;
+  `HomeFavorite.panelId`/`FAVORITE_PANEL_IDS`/`validateFavorites` admit `'terminal'`; `LivePanelTab.serialize?`
+  added; `TerminalView` += `mirror?: boolean` (+ `onLiveChange?`). Implementation followed 3a→3e.
+  **DEVIATION (necessary, reported):** reuse-in-place per the steer, BUT `TerminalFavoriteSurface`
+  imports `TerminalView` via **`React.lazy` behind `Suspense`**, NOT a static import. Reason: importing
+  `TerminalPanel.tsx` eagerly drags its `../fileExplorer` (Monaco) barrel into the `FavoriteSurface`/
+  `CosmosPanel` module graph, which **crashes every favorites `.dom.test` on import** (`queryCommandSupported`)
+  — confirmed, then fixed by the lazy boundary. This is the lighter alternative to the plan's
+  `TerminalXterm.tsx` extraction fallback (kept the SINGLE reused component, no move-refactor of the
+  800-line file). `favoriteCatalogHosts` retyped `Record` → `Partial<Record<…>>` (no terminal host).
+  **DEVIATION (additive):** added `onLiveChange` reporter on `TerminalView` (not spelled in Phase 1's
+  type list but called for by 3b) so liveness drives `serialize`-presence (FR-009/FR-014).
+  Phase 0 (sequencing gate) was already settled (favorites code is in place). Phase 4 §4.1/§4.13/§4.14
+  ARCHITECTURE edits applied (per explicit task directive); DEVELOPMENT.md + TEST-SCENARIOS.md
+  (TERM-FAVORITE-MULTIPLEX-01) + TODO.md updated. Verify: `npm run typecheck` clean, `npm test`
+  2721 passed, `npm run test:dom` 112 passed. Red→green confirmed for the non-owning dispose gate and
+  the `shouldDriveResize` guard.
 </content>

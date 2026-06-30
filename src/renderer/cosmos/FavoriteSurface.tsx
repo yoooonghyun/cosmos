@@ -25,6 +25,7 @@ import { useAllPanelTabs } from '../panelTabs'
 import { SURFACE_ICON, type RailIcon } from '../app/surfaceIcons'
 import { findLiveTab } from './homeFavorites'
 import { favoriteCatalogHosts, favoriteOnAction } from './favoriteCatalogHosts'
+import { TerminalFavoriteSurface } from './TerminalFavoriteSurface'
 import type { FavoritePanelId } from './cosmosTabs'
 
 export function FavoriteSurface({
@@ -35,7 +36,17 @@ export function FavoriteSurface({
   /** Unpin this favorite (the gone-source empty state's only action; same path as the strip `X`). */
   onUnpin: () => void
 }): React.JSX.Element {
+  // Hook called UNCONDITIONALLY before any branch (rules of hooks — this instance is reused across
+  // favorite switches, so the hook count must not vary).
   const registry = useAllPanelTabs()
+
+  // cosmos-terminal-favorite-multiplex-v1 (FR-004): a terminal favorite is an xterm-multiplex mirror,
+  // NOT an A2UI surface — branch to it BEFORE the `favoriteCatalogHosts` lookup (which has no terminal
+  // entry). Its own GONE/WAITING/POPULATED states live in TerminalFavoriteSurface.
+  if (source.panelId === 'terminal') {
+    return <TerminalFavoriteSurface source={source} onUnpin={onUnpin} />
+  }
+
   const live = findLiveTab(registry, source.panelId, source.tabId)
   const host = favoriteCatalogHosts[source.panelId]
   const Glyph: RailIcon = SURFACE_ICON[source.panelId] ?? PanelsTopLeft

@@ -160,12 +160,15 @@ describe('PanelTabTree right-click Pin/Unpin menu (cosmos-home-favorite-tabs-v1)
     expect(onUnpin).toHaveBeenCalledTimes(1)
   })
 
-  it("a terminal row's Pin is DISABLED with a discoverable reason (FR-040)", async () => {
-    renderWithMenu()
+  it("a terminal row's Pin is ENABLED and fires onPin (cosmos-terminal-favorite-multiplex-v1 relaxed FR-040)", async () => {
+    const { onPin } = renderWithMenu()
     rightClick('Terminal')
     const pin = await screen.findByRole('menuitem', { name: /Pin/ })
-    expect(pin).toHaveAttribute('data-disabled')
-    expect(screen.getByText(/Terminal tabs can't be pinned/)).toBeInTheDocument()
+    expect(pin).not.toHaveAttribute('data-disabled')
+    expect(screen.queryByText(/Terminal tabs can't be pinned/)).not.toBeInTheDocument()
+    fireEvent.click(pin)
+    expect(onPin).toHaveBeenCalledTimes(1)
+    expect(onPin).toHaveBeenCalledWith(groups[0], { id: 't1', label: 'Terminal' })
   })
 
   it('marks an ALREADY-PINNED row with text-primary icon + bold label; a non-pinned sibling stays default (D-15)', () => {

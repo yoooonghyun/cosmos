@@ -291,28 +291,40 @@ export interface SessionSnapshot {
 
 /**
  * One persisted Home favorite (cosmos-home-favorite-tabs-v1): a non-secret reference to a source
- * generative panel+tab. `panelId` is a {@link GateableIntegration} (terminal is NOT pinnable —
- * FR-040), `tabId` is the source's stable generative tab id, `label` is its display label.
+ * panel+tab. `panelId` is a {@link FavoritePanelId} — the four {@link GateableIntegration}s OR
+ * `'terminal'` (cosmos-terminal-favorite-multiplex-v1 relaxed the FR-040 exclusion: a terminal tab
+ * IS pinnable now, rendered as a renderer-side xterm multiplex mirror of the same PTY). `tabId` is
+ * the source's stable tab id (the paneId for a terminal), `label` is its display label.
  */
 export interface HomeFavorite {
-  panelId: GateableIntegration
+  panelId: FavoritePanelId
   tabId: string
   label: string
 }
 
-/** The gateable panel ids a favorite may reference (terminal excluded — not pinnable, FR-040). */
-const FAVORITE_PANEL_IDS: readonly GateableIntegration[] = [
+/**
+ * The panel ids a favorite may reference (cosmos-terminal-favorite-multiplex-v1): the four gateable
+ * integrations PLUS `'terminal'` (terminal tabs are pinnable as an xterm-multiplex mirror). Equals
+ * the renderer's `CrossPanelId` set, kept self-contained here so the shared boundary imports no
+ * renderer type.
+ */
+export type FavoritePanelId = GateableIntegration | 'terminal'
+
+/** The panel ids a favorite may reference (the four integrations + terminal — all pinnable). */
+const FAVORITE_PANEL_IDS: readonly FavoritePanelId[] = [
   'slack',
   'jira',
   'confluence',
-  'google-calendar'
+  'google-calendar',
+  'terminal'
 ]
 
 /**
  * Validate the inbound persisted `favorites` list at the main boundary (cosmos-home-favorite-tabs-v1,
  * FR-033). KEEPS only entries that are a `{ panelId, tabId, label }` object whose `panelId` is a
- * known gateable panel and whose `tabId`/`label` are non-empty strings; every other entry (malformed,
- * extra/secret-shaped keys, unknown panel id, terminal id, non-string fields) is DROPPED with a warn —
+ * known {@link FavoritePanelId} (the four integrations + `'terminal'`) and whose `tabId`/`label` are
+ * non-empty strings; every other entry (malformed, extra/secret-shaped keys, unknown panel id,
+ * non-string fields) is DROPPED with a warn —
  * never fatal. Returns ONLY the three whitelisted fields, so a secret-bearing persisted entry can
  * never carry an unexpected field through. Pure (no electron/fs) so it is the SINGLE source reused by
  * both the main `validateSnapshot` boundary and the renderer favorites code; node-testable.
@@ -336,7 +348,7 @@ export function validateFavorites(
       continue
     }
     const { panelId, tabId, label } = raw as Record<string, unknown>
-    if (!FAVORITE_PANEL_IDS.includes(panelId as GateableIntegration)) {
+    if (!FAVORITE_PANEL_IDS.includes(panelId as FavoritePanelId)) {
       warn(`[session] favorites: dropping entry with invalid panelId "${String(panelId)}"`)
       continue
     }
@@ -355,7 +367,7 @@ export function validateFavorites(
     }
     seen.add(key)
     // Whitelist-rebuild: emit ONLY the three known fields (drops any extra/secret-shaped key).
-    out.push({ panelId: panelId as GateableIntegration, tabId, label })
+    out.push({ panelId: panelId as FavoritePanelId, tabId, label })
   }
   return out
 }

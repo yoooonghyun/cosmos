@@ -108,11 +108,10 @@ describe('validateFavorites (HOME-FAVORITES-01, FR-033)', () => {
     expect(Object.keys(out[0]).sort()).toEqual(['label', 'panelId', 'tabId'])
   })
 
-  it('drops malformed + invalid-panel + terminal + non-string entries with a warn', () => {
+  it('drops malformed + invalid-panel + non-string entries with a warn (terminal is now KEPT)', () => {
     const warn = vi.fn()
     const out = validateFavorites(
       [
-        { panelId: 'terminal', tabId: 't1', label: 'Terminal' }, // not pinnable
         { panelId: 'nope', tabId: 'x', label: 'x' }, // unknown panel
         { panelId: 'jira', tabId: '', label: 'empty id' }, // empty tabId
         { panelId: 'slack', tabId: 'c1', label: '' }, // empty label
@@ -123,6 +122,18 @@ describe('validateFavorites (HOME-FAVORITES-01, FR-033)', () => {
     )
     expect(out).toEqual([{ panelId: 'jira', tabId: 'ok', label: 'Kept' }])
     expect(warn).toHaveBeenCalled()
+  })
+
+  it('KEEPS a terminal favorite (cosmos-terminal-favorite-multiplex-v1 relaxed FR-040)', () => {
+    const warn = vi.fn()
+    const out = validateFavorites(
+      [{ panelId: 'terminal', tabId: 'pane-1', label: 'Terminal 2', cwd: '/secret/path' }],
+      warn
+    )
+    // Kept, rebuilt to the {panelId,tabId,label} whitelist (the secret-shaped `cwd` dropped).
+    expect(out).toEqual([{ panelId: 'terminal', tabId: 'pane-1', label: 'Terminal 2' }])
+    expect(Object.keys(out[0]).sort()).toEqual(['label', 'panelId', 'tabId'])
+    expect(warn).not.toHaveBeenCalled()
   })
 
   it('de-dupes a repeated (panelId, tabId) keeping the first', () => {
