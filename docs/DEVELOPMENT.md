@@ -619,6 +619,29 @@ single new `window.cosmos.session` namespace in `src/shared/ipc.ts` (`session:lo
   does this; `setOpenPromptPosition`/`setEnabled`/panel `report()` keep the debounce on purpose (a
   drag/tab storm should coalesce). Eager-saving is strictly safe — it just persists current state
   early, like teardown.
+- **GOTCHA — an EAGER save MUST run against a SEEDED registry, or it clobbers panels that haven't
+  re-reported yet** (bug favorites-lost-on-restart-v2 — the trap the v1 eager fix opened). On a fresh
+  relaunch the `SessionRegistry` starts EMPTY; `assembleSnapshot` fills every un-reported panel with
+  `emptyGenerative()`. `CosmosPanel` is mounted BEFORE the generative panels in the rail (`App.tsx`
+  `TabsContent` order: terminal, cosmos, slack, jira, confluence, google-calendar), so its EAGER
+  favorites save fires during its mount effect BEFORE jira/slack/confluence/calendar re-report — and
+  thus persists `{ favorites, EMPTY panels }`, WIPING each favorite's SOURCE panel from disk (the
+  favorite reference survives; the next load hydrates the source empty → the favorite re-binds to the
+  calm "no longer open" state — PRESENT-but-gone-source). The 600ms debounced reports heal disk only
+  if the app survives the window. THE RULE: any registry that can be saved BEFORE every panel has
+  reported on the current mount MUST be seeded from the restored snapshot first. `SessionRegistry.seed`
+  (called once in `SessionProvider`'s registry `useMemo`) seeds generative panels + `enabled` +
+  `openPromptPosition` + `favorites` (terminal EXCLUDED — main re-enriches/drops it from its live PTY
+  session map in `enrichSnapshotForSave`, and it reports before Cosmos anyway), extending the immunity
+  the `enabled` field already had (`useEnabledIntegrations`' mount seed). SECOND path (the "absent, as
+  if never pinned" symptom): a dev React Fast-Refresh REMOUNT of `CosmosPanel` keeps the SURVIVING
+  registry but re-runs the panel's `useState` initializer against the STALE app-start snapshot
+  (`useRestoredFavorites` loads once), resetting favorites to none → the eager effect saves `[]` →
+  wiped. Fix: `CosmosPanel` seeds its initial favorites from `registry.getFavorites() ?? restored`,
+  so the surviving registry (the live truth) wins on a remount; a genuine unpin leaves it `[]`
+  (respected). Regression guard = `CosmosFavoriteRestartRoundTrip.dom.test.tsx` (real `CosmosPanel`
+  round-trip — pin → save → restart → source preserved + re-binds POPULATED; and a Fast-Refresh
+  remount keeps the favorite), NOT a SessionRegistry spy unit.
 - **Restore seeding must stay StrictMode-pure.** Tabs are seeded from the snapshot via the lazy
   `useState`/`useRef` initializers only — `hydrateGenerativeTabs`/`hydrateTerminalTabs` are pure, and
   the monotonic `everOpened` counter is initialized AT `seedEverOpenedFrom(everOpened, tabCount)`

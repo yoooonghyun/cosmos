@@ -132,6 +132,58 @@ export class SessionRegistry {
     this.debounceMs = debounceMs
   }
 
+  /**
+   * Seed the registry's contributions from the RESTORED snapshot at mount (favorites-lost-on-restart-v2).
+   *
+   * WHY (root cause of the round-2 regression): on a fresh relaunch the registry starts with EMPTY
+   * contributions, yet the Cosmos panel fires an EAGER favorites save during its mount effect — and
+   * Cosmos is mounted BEFORE the generative panels in the rail (App.tsx), so those panels have NOT
+   * re-reported yet. {@link assembleSnapshot} fills every un-reported panel with an EMPTY default, so
+   * that eager save persists `{ favorites, EMPTY jira/slack/confluence/google-calendar }` — WIPING the
+   * favorite's SOURCE panel from disk. The favorite reference survives, but the next load hydrates the
+   * source panel empty, so the favorite re-binds to nothing (the "no longer open" gone-source state).
+   * The 600ms debounced panel reports only heal disk if the app survives the window; a dev HMR / quick
+   * relaunch inside it makes the corruption stick.
+   *
+   * Seeding the contributions from the loaded snapshot makes any early/eager save preserve the restored
+   * panels REGARDLESS of panel-mount order or debounce timing — the same protection the per-mount
+   * `enabled` seed already gives that field (SessionProvider). Pure population: it does NOT trigger a
+   * save; each panel's own report overwrites its seeded slice once it mounts (with the same data).
+   *
+   * Terminal is intentionally EXCLUDED: main re-enriches/drops terminal tabs from its live PTY session
+   * map at the save boundary (a renderer-seeded terminal tab with no live session would be dropped
+   * anyway), and the terminal panel re-reports its draft before the Cosmos eager save fires (it renders
+   * earlier in the rail), so terminal is never at risk.
+   */
+  seed(snapshot: SessionSnapshot): void {
+    const p = snapshot.panels
+    this.contributions['generated-ui'] = p['generated-ui']
+    this.contributions.jira = p.jira
+    this.contributions.slack = p.slack
+    this.contributions.confluence = p.confluence
+    this.contributions['google-calendar'] = p['google-calendar']
+    this.contributions.enabled = snapshot.enabled
+    if (snapshot.openPromptPosition) {
+      this.contributions.openPromptPosition = snapshot.openPromptPosition
+    }
+    if (snapshot.favorites && snapshot.favorites.length) {
+      this.contributions.favorites = snapshot.favorites
+    }
+  }
+
+  /**
+   * The registry's CURRENT favorites contribution (the live, just-persisted truth), or `undefined`
+   * when none has been recorded. cosmos-home-favorite-tabs / favorites-lost-on-restart-v2: the Cosmos
+   * panel seeds its initial favorite tabs from this FIRST (falling back to the restored snapshot) so a
+   * dev Fast-Refresh REMOUNT — which re-runs the panel's `useState` initializer against the STALE
+   * app-start snapshot while the registry instance SURVIVES — re-seeds the truly-pinned set instead of
+   * resetting to none and eager-saving an empty list (which would wipe the favorite from disk = the
+   * "absent, as if never pinned" symptom). A genuine unpin leaves this `[]`, which is respected.
+   */
+  getFavorites(): HomeFavorite[] | undefined {
+    return this.contributions.favorites
+  }
+
   /** Record a panel's latest contribution and schedule a trailing-debounced save. */
   report<K extends PanelKey>(
     key: K,

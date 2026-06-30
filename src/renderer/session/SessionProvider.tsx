@@ -42,11 +42,19 @@ export function SessionProvider({
   snapshot: SessionSnapshot | null
   children: React.ReactNode
 }): React.JSX.Element {
-  // One registry for the app's lifetime; its save pushes to main.
-  const registry = useMemo(
-    () => new SessionRegistry((snap) => window.cosmos.session.save(snap)),
-    []
-  )
+  // One registry for the app's lifetime; its save pushes to main. SEEDED from the restored snapshot
+  // (favorites-lost-on-restart-v2) so an EAGER / early save that fires before the panels re-report on
+  // this mount preserves the restored panels instead of clobbering them with empty defaults — see
+  // SessionRegistry.seed. The snapshot is loaded ONCE and fixed for the provider's lifetime, so the []
+  // deps are correct (mirrors the per-mount `enabled` seed below).
+  const registry = useMemo(() => {
+    const r = new SessionRegistry((snap) => window.cosmos.session.save(snap))
+    if (snapshot) {
+      r.seed(snapshot)
+    }
+    return r
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   // FR-007: force a final save on teardown (quit / reload) so the freshest state is
   // persisted even if it landed inside the debounce window.

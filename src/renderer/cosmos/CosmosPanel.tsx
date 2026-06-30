@@ -113,10 +113,21 @@ export function CosmosPanel({ active }: { active: boolean }): React.JSX.Element 
   // (re-bound to live source tabs by their stable ids as panels restore). The pinned default tab is
   // always first + active; favorites are appended in pinned order.
   const restoredFavorites = useRestoredFavorites()
+  // The shared save coordinator. Read here (before the initializer) so the favorites seed can prefer
+  // the registry's LIVE favorites — see the initializer below (favorites-lost-on-restart-v2).
+  const sessionRegistry = useSessionRegistry()
   // FR-114: the pinned-default tab state (purpose-built; NOT useGenerativePanelTabs).
   const [tabsState, setTabsState] = useState(() => {
     const base = initialCosmosTabs()
-    const favTabs = favoritesToTabs(restoredFavorites ?? [])
+    // favorites-lost-on-restart-v2: seed from the LIVE registry's favorites FIRST, falling back to the
+    // restored snapshot. On a genuine relaunch the registry was seeded from the same snapshot, so the
+    // two agree. The difference matters on a dev Fast-Refresh REMOUNT, which re-runs this initializer
+    // against the STALE app-start snapshot (which lacks favorites pinned during the session) while the
+    // registry instance SURVIVES holding the true set — without this, the stale snapshot would reset
+    // tabsState to none and the eager favorites effect below would persist [], wiping the favorite from
+    // disk ("absent, as if never pinned"). A genuine unpin leaves the registry favorites [], respected.
+    const seed = sessionRegistry.getFavorites() ?? restoredFavorites ?? []
+    const favTabs = favoritesToTabs(seed)
     return favTabs.length > 0 ? { ...base, tabs: [...base.tabs, ...favTabs] } : base
   })
 
@@ -204,7 +215,7 @@ export function CosmosPanel({ active }: { active: boolean }): React.JSX.Element 
 
   // FR-030: report the favorites list to the debounced save coordinator on every change (the NON-panel
   // path, mirrors openPromptPosition). Non-secret references only — never an A2UI surface (FR-023).
-  const sessionRegistry = useSessionRegistry()
+  // `sessionRegistry` is read above (before the tabsState initializer).
   useEffect(() => {
     sessionRegistry.setFavorites(toHomeFavorites(tabsState))
   }, [tabsState, sessionRegistry])

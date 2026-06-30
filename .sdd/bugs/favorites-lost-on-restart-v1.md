@@ -1,9 +1,115 @@
 # Bug: Home FAVORITES disappear on every app restart
 
-ID: `favorites-lost-on-restart-v1`
-Status: Fixed
+ID: `favorites-lost-on-restart-v1` (round 2 → `-v2`)
+Status: Fixed (v2 — the v1 fix was necessary but INSUFFICIENT)
 Skill: bugfix
 Reported: 2026-06-30
+
+---
+
+## ROUND 2 (v2) — the real root cause the v1 fix missed
+
+The v1 fix (eager `setFavorites` → `saveNow`) made a pin reach disk promptly, but
+favorites STILL disappeared on restart. The v1 regression test was inadequate: a
+SessionRegistry NODE-UNIT with a `vi.fn()` `save` spy — it proved favorites reach
+the spy eagerly but NEVER exercised the real save→validate→load→seed→re-bind
+round-trip, so it could not see the actual defect.
+
+### Reproduced FIRST, end-to-end (the round-trip the v1 test lacked)
+
+A disk-equivalent round-trip rendering the REAL `CosmosPanel` under the REAL
+`SessionProvider`/`SessionRegistry` (`CosmosFavoriteRestartRoundTrip.dom.test.tsx`)
+plus a node round-trip over the real classes confirmed the failure BEFORE any fix:
+after a pin + a simulated RESTART (reload the persisted snapshot + re-mount), the
+persisted `panels.jira.tabs` is `[]` — the favorite's SOURCE panel is gone from
+disk — while `favorites` itself survives.
+
+### ABSENT vs GONE-SOURCE — the empirical finding
+
+**PRESENT-but-gone-source** (save-side, the source PANEL is wiped — NOT the favorite
+reference). At the persistence layer the favorite `{panelId,tabId,label}` round-trips
+fine; it is the source generative panel that is overwritten with an empty default, so
+the next load hydrates the source empty and the favorite re-binds to nothing → the
+calm "no longer open" state. (A SECOND, dev-only path produces the literal "absent,
+as if never pinned" — see below.)
+
+### Root cause (runtime/ordering — invisible to static reading; candidate (1) + (3))
+
+On a fresh relaunch the `SessionRegistry` is constructed with EMPTY contributions
+(`SessionProvider` `useMemo`). `CosmosPanel` is mounted BEFORE the generative panels
+in the rail (`App.tsx` `TabsContent` order: terminal, **cosmos**, slack, jira,
+confluence, google-calendar), so its EAGER favorites save (the mount effect at
+`CosmosPanel.tsx`, `setFavorites` → `saveNow`) fires BEFORE jira/slack/confluence/
+calendar have re-reported. `assembleSnapshot` (`sessionRegistry.ts`) fills every
+un-reported panel with `emptyGenerative()`, so the eager save persists
+`{ favorites, EMPTY jira/slack/confluence/google-calendar }` — wiping each favorite's
+SOURCE panel from disk. The 600ms debounced panel reports heal disk only if the app
+survives the window; a dev HMR / quick relaunch inside it makes the corruption stick.
+
+`enabled` was ALREADY immune because `useEnabledIntegrations` seeds it into the
+registry on mount (`SessionProvider.tsx`, comment: "so a save triggered by another
+panel before the user toggles anything preserves the restored enabled state") — the
+panels + favorites simply never got that same seed.
+
+DEV-vs-PROD call:
+- **Production (clean quit → relaunch):** real but self-healing — the eager mount
+  save wipes the panels, the debounced reports re-persist them ~600ms later; a quit
+  within that window leaves a gone-source favorite next launch.
+- **Dev (`npm run dev`):** reliably broken — a Vite full reload hits the same
+  gone-source window; AND a PARTIAL React Fast-Refresh REMOUNT of `CosmosPanel` (the
+  registry instance survives, the `useState` initializer re-reads the STALE app-start
+  snapshot via `useRestoredFavorites`, which lacks a favorite pinned during the
+  session) resets `tabsState` to none and the eager favorites effect persists `[]` →
+  the favorite is genuinely WIPED from disk = "absent, as if never pinned". (v1
+  dismissed this as an out-of-scope Fast-Refresh artifact; v2 closes it.)
+
+### Fix (minimal, root-cause)
+
+1. `SessionRegistry.seed(snapshot)` — populate the generative-panel contributions +
+   `enabled` + `openPromptPosition` + `favorites` from the restored snapshot at mount
+   (called once in `SessionProvider`'s registry `useMemo`). Now any early/eager save
+   preserves the restored panels REGARDLESS of panel-mount order or debounce timing —
+   the same protection the `enabled` seed already provided, extended to the rest.
+   Terminal is EXCLUDED: main re-enriches/drops terminal tabs from its live PTY
+   session map at the save boundary (`enrichSnapshotForSave`, `index.ts`), and
+   terminal reports before Cosmos anyway, so it is never at risk.
+2. `SessionRegistry.getFavorites()` + `CosmosPanel` seeds its initial favorite tabs
+   from `registry.getFavorites() ?? restoredFavorites ?? []`. On a dev Fast-Refresh
+   remount the surviving registry holds the truly-pinned set, so the stale snapshot no
+   longer resets favorites to none. A genuine unpin leaves the registry favorites `[]`
+   (respected, not protected away).
+
+NOT regressed: `setOpenPromptPosition`/`setEnabled`/panel `report` keep the trailing
+debounce; the eager favorites save and terminal sessionId/cwd enrichment are unchanged.
+
+Files: `src/renderer/session/sessionRegistry.ts` (`seed`/`getFavorites`),
+`src/renderer/session/SessionProvider.tsx` (seed on construct),
+`src/renderer/cosmos/CosmosPanel.tsx` (seed favorites from the live registry).
+
+### Regression test (RED→GREEN at the round-trip layer — SESSION-FAVORITES-RESTART-02)
+
+`src/renderer/cosmos/CosmosFavoriteRestartRoundTrip.dom.test.tsx` (renders the REAL
+`CosmosPanel`; disk-equivalent store = JSON serialize/parse + the SHARED
+`validateFavorites` the main `validateSnapshot` delegates to; faithful `JiraSource`
+hydrates from the restored slice + publishes live + reports to the session registry):
+- pin → save → RESTART preserves `panels.jira.tabs` on disk; a 2nd restart re-binds
+  the favorite to a POPULATED source. RED pre-fix (`panels.jira.tabs` `[]`; gone-source).
+- a keyed Fast-Refresh REMOUNT (SessionProvider stays mounted, snapshot prop stale)
+  keeps the favorite in the strip + on disk. RED pre-fix (favorites wiped = absent).
+Both confirmed RED with the fix reverted, GREEN after.
+Plus node-unit `sessionRegistry.test.ts` locks the `seed`/`getFavorites` contract.
+
+### Verification (v2)
+
+- `npm run typecheck` — green
+- `npm test` — 2743 passed
+- `npm run test:dom` — 23 files / 118 tests passed
+- Manual `npm run dev` (pin → restart → persists + renders live): NOT run here (no
+  Electron in this environment) — flagged for a manual pass.
+
+---
+
+## (v1 — historical; the necessary-but-insufficient first fix)
 
 ## Symptom
 
