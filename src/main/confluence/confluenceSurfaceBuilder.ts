@@ -1,10 +1,8 @@
 /**
- * confluenceSurfaceBuilder (main) — the bound Confluence surface builders now live in the
- * SHARED module `src/shared/surfaceBuilders/confluenceSurfaceBuilder.ts` (relocated by
- * cosmos-native-view-mirror-surface-v1, D3 — so the renderer can reuse them for a
- * favorite's native-view mirror). This file RE-EXPORTS them (single source of truth; the
- * main resolver/dispatcher imports are unchanged) and keeps the MAIN-ONLY
- * `buildConfluenceBoundShell` (panel-refresh-v1) here.
+ * confluenceSurfaceBuilder (main) — the pure Confluence bound-shell / row helpers live in
+ * the SHARED module `src/shared/surfaceBuilders/confluenceSurfaceBuilder.ts`. This file
+ * RE-EXPORTS them (single source of truth; the main resolver/dispatcher imports are
+ * unchanged) and keeps the MAIN-ONLY `buildConfluenceBoundShell` (panel-refresh-v1) here.
  */
 
 import type { A2uiSurfaceUpdate } from '../../shared/ipc'
@@ -18,11 +16,8 @@ import {
   SURFACE_CONFLUENCE_SEARCH
 } from '../../shared/surfaceBuilders/confluenceSurfaceBuilder'
 
-// Re-export the relocated pure builders + constants + interface (single source of truth).
+// Re-export the relocated pure row mapper + constants (single source of truth).
 export {
-  buildBoundDefaultFeedSurface,
-  buildBoundSearchResultsSurface,
-  buildBoundPageDetailSurface,
   confluenceResultRow,
   CONFLUENCE_FEED_PATH,
   CONFLUENCE_RESULTS_PATH,
@@ -31,7 +26,6 @@ export {
   SURFACE_CONFLUENCE_SEARCH,
   SURFACE_CONFLUENCE_PAGE
 } from '../../shared/surfaceBuilders/confluenceSurfaceBuilder'
-export type { ConfluenceBoundSurface } from '../../shared/surfaceBuilders/confluenceSurfaceBuilder'
 
 /**
  * panel-refresh-v1 (OQ-5 = main-composes): build the DATA-FREE bound SHELL surface for a

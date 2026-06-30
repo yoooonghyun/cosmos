@@ -451,14 +451,17 @@ detail.
     panel's `useTabShortcuts` is gated `active && hostFor!=='favorite'` (rail surface only) and **Home
     KEEPS `tab:*`** (it does NOT cede). Focus-on-activation (`focusSourceTab` → the panel's `onFocusTab`
     handler → `setActive`) still focuses the pinned tab so the body shown is the pinned one.
-- **GOTCHA — the bound surface builders live in `src/shared/surfaceBuilders/`, not `src/main/`.** The six
-  `buildBound*Surface` builders + the row mappers (`confluenceResultRow`/`slack{Channel,Message,Search}Row`)
-  + the `*_PATH`/surface-id constants moved to `src/shared/surfaceBuilders/{confluence,slack}SurfaceBuilder.ts`
-  so the RENDERER can reuse them (they were main-only fossils). The main `*SurfaceBuilder.ts`/`*Adapter.ts`
+- **GOTCHA — the Confluence/Slack bound-surface HELPERS live in `src/shared/surfaceBuilders/`, not `src/main/`.**
+  The row mappers (`confluenceResultRow`/`slack{Channel,Message,Search}Row`), the `*_PATH`/surface-id
+  constants, and the `boundListSpec`/`boundPageDetailSpec` shell helpers live in
+  `src/shared/surfaceBuilders/{confluence,slack}SurfaceBuilder.ts`; the main `*SurfaceBuilder.ts`/`*Adapter.ts`
   RE-EXPORT them (single source of truth — main callers + their tests import from the SAME paths and are
   unchanged); main keeps only the resolver/bind-options + the `build*BoundShell` panel-refresh helpers
-  (which import `boundListSpec`/`boundPageDetailSpec` from the shared module). When touching a builder,
-  edit the SHARED file; the relocated `*SurfaceBuilder.test.ts` lives beside it in `src/shared/`.
+  (which import `boundListSpec`/`boundPageDetailSpec` from the shared module). When touching a helper, edit
+  the SHARED file. (The full per-page `buildBound*Surface` composers — which built spec+seed+descriptor in
+  one call — were only ever consumed by the reverted native-view mirror and have been removed; Jira's
+  `buildBoundIssueListSurface`/`buildBoundIssueDetailSurface` stay in `src/main/jira/` since `index.ts`
+  still calls them.)
 
 ## Cosmos conversation timeline (cosmos-conversation-panel-v2, step 3)
 

@@ -154,14 +154,12 @@ stay stable (rollup input keys + `mcpConfig.ts` runtime `join(__dirname, 'mcp/<n
 - `types/` — per-integration + generative-contract types: `jira.ts`, `slack.ts`, `confluence.ts`,
   `googleCalendar.ts`, `googleCalendarColor.ts`, `adapter.ts`, `conversation.ts`
   (`UserPromptTurn.context` carries the parsed prompt-context), `dataBearingSpec.ts`
-- `surfaceBuilders/` — the SECRET-FREE bound A2UI surface builders RELOCATED from `src/main/`
-  (cosmos-native-view-mirror-surface-v1, D3) so the renderer can reuse them for a favorite's
-  native-view mirror: `confluenceSurfaceBuilder.ts` (feed/search/page) + `slackSurfaceBuilder.ts`
-  (channels/history/search) — each holds the six `buildBound*Surface` builders, the row mappers
-  (`confluenceResultRow`/`slack{Channel,Message,Search}Row`), the bound data-model `*_PATH`
-  constants, the surface-id constants, and the `boundListSpec`/`boundPageDetailSpec` helpers (+
-  `.test.ts`). The main `*SurfaceBuilder.ts`/`*Adapter.ts` RE-EXPORT them (single source of truth;
-  main keeps only the resolver/bind-options + the `build*BoundShell` panel-refresh helpers)
+- `surfaceBuilders/` — the SECRET-FREE shared bound-A2UI surface HELPERS: `confluenceSurfaceBuilder.ts`
+  (feed/search/page) + `slackSurfaceBuilder.ts` (channels/history/search) — each holds the row mappers
+  (`confluenceResultRow`/`slack{Channel,Message,Search}Row`), the bound data-model `*_PATH` constants,
+  the surface-id constants, and the `boundListSpec`/`boundPageDetailSpec` shell helpers. The main
+  `*SurfaceBuilder.ts`/`*Adapter.ts` RE-EXPORT them (single source of truth; main keeps only the
+  resolver/bind-options + the `build*BoundShell` panel-refresh helpers)
 - `promptContext/` — the pure, shared prompt-context contract + codec
   (`cosmos-timeline-prompt-context-v1`): `promptContext.ts` (the `PromptContext` type — `panel`/
   `tab`/`dock`, extends `ViewContext`), `promptContextMarker.ts` (serialize/parse+strip the trailing

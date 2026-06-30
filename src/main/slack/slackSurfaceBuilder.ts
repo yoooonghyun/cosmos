@@ -1,10 +1,8 @@
 /**
- * slackSurfaceBuilder (main) — the bound Slack surface builders now live in the SHARED
- * module `src/shared/surfaceBuilders/slackSurfaceBuilder.ts` (relocated by
- * cosmos-native-view-mirror-surface-v1, D3 — so the renderer can reuse them for a
- * favorite's native-view mirror). This file RE-EXPORTS them (single source of truth; the
- * main resolver/dispatcher imports are unchanged) and keeps the MAIN-ONLY
- * `buildSlackBoundShell` (panel-refresh-v1) here.
+ * slackSurfaceBuilder (main) — the pure Slack bound-shell / row helpers live in the SHARED
+ * module `src/shared/surfaceBuilders/slackSurfaceBuilder.ts`. This file RE-EXPORTS them
+ * (single source of truth; the main resolver/dispatcher imports are unchanged) and keeps
+ * the MAIN-ONLY `buildSlackBoundShell` (panel-refresh-v1) here.
  */
 
 import type { A2uiSurfaceUpdate } from '../../shared/ipc'
@@ -19,11 +17,8 @@ import {
   SURFACE_SLACK_SEARCH
 } from '../../shared/surfaceBuilders/slackSurfaceBuilder'
 
-// Re-export the relocated pure builders + constants + interface (single source of truth).
+// Re-export the relocated pure row mappers + constants (single source of truth).
 export {
-  buildBoundChannelListSurface,
-  buildBoundMessageListSurface,
-  buildBoundSearchResultListSurface,
   slackChannelRow,
   slackMessageRow,
   slackSearchRow,
@@ -34,7 +29,6 @@ export {
   SURFACE_SLACK_HISTORY,
   SURFACE_SLACK_SEARCH
 } from '../../shared/surfaceBuilders/slackSurfaceBuilder'
-export type { SlackBoundSurface } from '../../shared/surfaceBuilders/slackSurfaceBuilder'
 
 /**
  * panel-refresh-v1 (OQ-5 = main-composes): build the DATA-FREE bound SHELL surface for a

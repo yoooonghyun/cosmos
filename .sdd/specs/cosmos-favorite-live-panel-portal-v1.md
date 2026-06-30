@@ -6,7 +6,31 @@
 `ActiveTabSurface`/`FavoriteSurface` `surface` mirror) **and** `cosmos-native-view-mirror-surface-v1`
 (the `mirrorSurface` projection) **for the four generative panels only**. The terminal favorite
 (`cosmos-terminal-favorite-multiplex-v1`) is unchanged.
-**Related plan**: (to be authored at `.sdd/plans/cosmos-favorite-live-panel-portal-v1.md`)
+**Related plan**: `.sdd/plans/cosmos-favorite-live-panel-portal-v1.md`
+
+---
+
+## Deviation from spec — AS SHIPPED (reconciled 2026-06-30, commit e0446d9)
+
+The reparenting-portal core (FR-001..FR-005, FR-009..FR-011, FR-014..FR-017) shipped as specified. Two
+open questions were **overridden mid-implementation by user feedback** to a **body-only** favorite, which
+changes FR-007 and the OQ-1/OQ-3 recommendations:
+
+- **OQ-1 (inner tab strip) → SUPPRESS, not show.** The recommendation was "show the inner strip as-is".
+  As shipped, while a generative panel is favorite-hosted (`hostFor(id) === 'favorite'`) it **suppresses
+  its own `PanelTabStrip` AND `PanelFooter`** — the favorite shows the active tab's BODY only. So FR-007's
+  "present the live panel as-is, including the panel's own tab strip" is amended: the favorite presents the
+  live panel **body-only** (no nested strip/footer); the user still navigates via panel-internal nav (Slack
+  open-channel, Jira/Calendar open-detail, page-back), which works because it is the live instance.
+- **OQ-3 (keyboard tab-shortcut ownership) → Home KEEPS `tab:*`.** With no nested strip, there is no inner
+  strip to cede shortcuts to: **Home keeps the global `tab:*` shortcuts** (`cosmos-home-keyboard-tab-nav-v1`),
+  and the relocated panel gates its own `useTabShortcuts` to its **RAIL surface only** (`active &&
+  !favoriteHosted`), so there is no double-bind. (The OQ-3 recommendation — shortcuts target the inner panel
+  — is therefore moot.)
+
+OQ-2/OQ-4/OQ-5/OQ-6 shipped per their recommendations (initial-focus-then-free; retained Home-side floating
+composer; `react-reverse-portal`; the surface-mirror removed outright). The Home docked composer + footer are
+hidden on a favorite tab (null `'cosmos'` config), as specified.
 
 ---
 
@@ -285,7 +309,7 @@ is the whole reason generative panels get the cleaner portal model and terminal 
 
 > These are the genuinely unresolved choices needing your confirmation. Each has a recommendation.
 
-- [ ] **[NEEDS CLARIFICATION — OQ-1] Inner tab strip: show or suppress?** A favorite is one Home tab,
+- [x] **[RESOLVED → SUPPRESS (body-only); see Deviation note at top] OQ-1 Inner tab strip: show or suppress?** A favorite is one Home tab,
   but the live panel renders its OWN tab strip inside it (a strip within a tab). **RECOMMEND: show it
   as-is** (true "그대로"; it is the same component, suppressing its strip would mean a special stripped
   render mode that fights the "same component" model). The alternative is to hide the inner strip and
@@ -295,7 +319,7 @@ is the whole reason generative panels get the cleaner portal model and terminal 
   — the favorite is a deep-link into the live panel at tab T. The alternative (continuously re-pin T
   while the favorite is shown) makes the inner strip non-functional and fights "그대로". Confirm
   initial-focus-then-free.
-- [ ] **[NEEDS CLARIFICATION — OQ-3] Keyboard tab-shortcut ownership while a favorite is active.** With
+- [x] **[RESOLVED → Home keeps `tab:*` (inner strip suppressed); see Deviation note at top] OQ-3 Keyboard tab-shortcut ownership while a favorite is active.** With
   the inner strip visible, which strip do the global `tab:*` shortcuts target — the favorite's inner
   panel (the thing on screen) or Home's favorite strip? **RECOMMEND: while a generative favorite is
   active, the global tab shortcuts target the inner (visible) panel; Home tab switching stays available

@@ -97,10 +97,18 @@ If hard size/memory limits appear later, the core can migrate to Tauri.
 The renderer presents its surfaces through a **left icon-rail single-surface switcher**
 (`src/renderer/App.tsx`, a Radix vertical `Tabs`): the rail lists five surfaces — Terminal,
 Generated UI, Slack, Jira, Confluence — and exactly **one fills the main area at a time**
-(Terminal is the default). All five stay **mounted** when hidden (`forceMount` + a
-`data-state`-driven hide) so switching only toggles visibility — never tearing down the
-Terminal's live PTY session or a pending `render_ui` surface. (The §3 diagram shows the two
-data *channels*, not the on-screen layout.) The selected rail item is clearly highlighted — a
+(Terminal is the default). All surfaces stay **mounted** when hidden so switching only toggles
+visibility — never tearing down the Terminal's live PTY session or a pending `render_ui` surface.
+Terminal and Cosmos are `forceMount`ed directly (a `data-state`-driven hide); the four generative
+panels (Slack/Jira/Confluence/Google Calendar) are rendered **once** into stable
+`react-reverse-portal` `InPortal` nodes at App root (`PanelHostProvider`,
+`cosmos-favorite-live-panel-portal-v1`) and mounted by exactly one `OutPortal` at a time — their rail
+slot by default, or a Home favorite slot when relocated (§4.14). A pure `hostFor(panelId)` selector
+over `(visibleSurface, activeFavoriteSource)` guarantees exactly one claimant, so relocating a panel
+**reparents** its detached DOM node (all state survives) rather than remounting it; each generative
+panel's `active` prop is therefore redefined to mean **visible** — rail-active OR hosted in the active
+Home favorite (`panelVisible`). (The §3 diagram shows the two data *channels*, not the on-screen
+layout.) The selected rail item is clearly highlighted — a
 `--secondary` filled pill behind a full-brightness icon plus a 3px full-height `--primary` left
 bar — driven by React `surface` state, **not** `data-[state=active]` (each trigger is wrapped by
 a `Tooltip` whose `data-state` clobbers the tab's; see DEVELOPMENT.md "Nested Radix triggers").
@@ -113,10 +121,13 @@ inside its panel. (The Cosmos panel does host a **read-only cross-panel tab LIST
 context-picker, not a navigation bar; clicking a row attaches that panel+tab as the next prompt's
 context, it never switches surfaces — see §4.14.) **Home (Cosmos) is itself a small multi-tab
 container** (cosmos-home-favorite-tabs-v1): the undeletable default conversation-timeline tab PLUS
-user-pinned **favorite** tabs — each a live shortcut that renders another panel's open tab's A2UI
-surface INLINE in Home as a FULL-WIDTH mirror "as-is", INCLUDING the source panel's own Open Prompt
-(no rail navigation; the cross-panel tab tree shows ONLY on the default tab); favorites persist
-across relaunch by reference (§4.14). When a panel has zero tabs it shows its native
+user-pinned **favorite** tabs. A favorite of a generative panel (Slack/Jira/Confluence/Google
+Calendar) **relocates that panel's LIVE force-mounted instance** into Home (the reparenting portal
+above, `cosmos-favorite-live-panel-portal-v1`) so the favorite IS the real panel — full interactive
+chrome and shared state — rendered **body-only** (the relocated panel suppresses its own tab strip +
+footer while favorite-hosted). A terminal favorite is instead an xterm multiplex (§4.14). The source
+panel's own floating Open Prompt is surfaced over the favorite (no rail navigation; the cross-panel
+tab tree shows ONLY on the default tab); favorites persist across relaunch by reference (§4.14). When a panel has zero tabs it shows its native
 base (Slack/Jira/Confluence native browser) or idle placeholder (Generated UI); the Terminal panel
 always keeps ≥1 tab.
 
@@ -941,8 +952,12 @@ would otherwise swallow the keys — so no renderer-side typing/focus guard is n
   the one combo that is Ctrl on every platform (Chrome-faithful).
 - **Command vocabulary** (`ShortcutCommand`, `src/shared/ipc/shortcut.ts`): `tab:new` / `tab:close`
   / `tab:next` / `tab:prev` / `tab:jump` / `tab:last` are handled **per-panel** by `useTabShortcuts`
-  on the active surface; `surface:next` / `surface:prev` switch the **left-rail panel** and are
-  handled by `AppShell` (`App.tsx`) with functional `setSurface` wrap-around over `RAIL_ITEMS`.
+  on the active surface — including **Home/Cosmos** (`cosmos-home-keyboard-tab-nav-v1`), which cycles
+  its default + favorite tabs (`cosmosTabs` order, wrap-around) via the SAME `useTabShortcuts`, but
+  OMITS `onNewTab`/`onCloseTab` so `tab:new`/`tab:close` are structural no-ops there (Home has no
+  new-tab affordance; the default tab is never closeable). `surface:next` / `surface:prev` switch the
+  **left-rail panel** and are handled by `AppShell` (`App.tsx`) with functional `setSurface`
+  wrap-around over `RAIL_ITEMS`.
 - **Authoritative key map** (mod = Cmd on darwin, Ctrl elsewhere):
 
   | Combo | Command | Action |
@@ -1028,15 +1043,30 @@ is a **collection layer over the per-file `viewerState.ts`**, mirroring the `pan
 - **Tree highlight follows the active tab.** `useExplorerPanes` passes `selectedRelPath =
   activeRelPath` to the tree (FR-016) — the row for the active file renders selected; `null` (empty
   strip) → no open-file selection.
-- **Ephemeral, per-`paneId`.** The collection lives in the per-pane `useFileExplorer` instance, so
-  it is independent across terminal tabs and is **NOT persisted** to the session snapshot — it
-  resets to empty on go-live / app restart, matching the existing ephemeral split-ratio + viewer
-  state from #84.
-- **A Home terminal favorite (§4.14) mirrors the TERMINAL PANE ONLY — NOT this 3-pane split.** The
-  mirror's `useExplorerPanes` is forced inert (`live=false`) so no `fs:*` read fires and Monaco is
-  never mounted, and it renders just the terminal column. The explorer is excluded by design because
-  its per-mount imperative state (open files, Monaco models, `fs:*`) can't be referenced across two
-  mounts of the same `paneId` — only the genuinely shared PTY/`pty:data` is mirrored.
+- **Shared, paneId-keyed open-files + model stores (cosmos-terminal-favorite-explorer-share-v1).** A
+  pane's open-files **selection** (ordered open files + active relPath + each file's resolved
+  `ViewerState`) is LIFTED out of the per-mount `useFileExplorer` into an **App-root `OpenFilesProvider`**
+  keyed by `paneId`, and each open TEXT file's Monaco `ITextModel` (text + language + undo) into a
+  **ref-counted `sharedMonacoModelRegistry`** keyed by `cosmos-file://<paneId>/<relPath>`. So a pane
+  may now have **TWO explorer VIEWS** — the source Terminal split and a Home terminal-favorite mirror
+  (§4.14) — that read+write ONE open-files selection and attach (`setModel`) to the SAME per-file
+  model, sharing the buffer while keeping per-view cursor/scroll/tree-expansion. The **source mount is
+  the single owner** of `fs:read`/`fs:watch` resolution + the persist/restore seam; the favorite mount
+  is **non-owning** (drives no `fs:*`, reports no slice). A model disposes only when (closed in the
+  shared store AND no editor view attached), so a favorite tab-switch never strands the source. The
+  viewer stays **read-only** (no `fs:write` in v1). The collection remains ephemeral per-pane
+  (renderer-only, never persisted beyond the existing per-pane restore slice) and the single-mount
+  behavior (StrictMode go-live guard, restore/persist, open-or-focus/adjacency-close, tree-highlight)
+  is unchanged.
+- **A Home terminal favorite (§4.14) now mirrors the FULL Terminal view** — terminal pane (xterm
+  multiplex + scrollback seed) AND the file-explorer split (cosmos-terminal-favorite-explorer-share-v1,
+  superseding the base feature's terminal-pane-only carve-out). The favorite's `useFileExplorer` runs
+  in **`mirror` (non-owning) mode**: it renders the three-column split against the shared open-files
+  store + ref-counted model registry above, but drives no `fs:watchStart/Stop`, no `fs:read`
+  resolution, and reports no persist slice — open-file selection + content come from the source mount
+  it shares the stores with (per-view cursor/scroll/tree-expansion stay independent). The whole mirror
+  (terminal + explorer) degrades together to the calm GONE/WAITING state; closing/unpinning it never
+  tears down the source pane's `fs:*`.
 
 ### 4.14 Cosmos panel-tab list — read-only cross-panel tab survey + context-picker (renderer)
 
@@ -1062,70 +1092,67 @@ submits still capture dock).
   read; persistence stays its own concern.
 - **No reach-in.** The Cosmos panel never reads another panel's internal hook/component state — every
   panel pushes its own tab list; the tree only consumes the shared registry.
-- **Seam evolution — labels → labels + LIVE surface (cosmos-home-favorite-tabs-v1).** The published
-  per-tab payload now ALSO carries the tab's CURRENT live `TabSurface` (`LivePanelTab.surface` — the
-  same spec + live `requestId` + descriptor/bindings/dataModel the source panel renders). It remains
-  a **renderer-only reference pass** (no IPC) and **non-secret** by the A2UI render contract (never a
-  token/path/transcript), and is **never persisted** by this seam. The tree *survey* stays
-  **label-only** (`toPanelTabGroups` ignores `surface`); a NEW pure reader `findLiveTab(registry,
-  panelId, tabId)` reads the live surface for a Home **favorite** to mirror. This is the one accepted
-  change to the seam's purpose: it is still the immediate, full, lossless live read, now able to hand
-  a foreign panel's live surface to Home for an in-place live mirror (see §3, "Home is a multi-tab
-  container").
-
-- **Seam evolution — composed `surface` + native-view `mirrorSurface` (cosmos-native-view-mirror-surface-v1).**
-  The published per-tab payload ALSO carries an optional `LivePanelTab.mirrorSurface`: a favorite-only
-  projection of a **native-first** panel's CURRENT native view (Confluence feed/search/page; Slack
-  channel-list/history/search). Only `surface` was ever populated by an agent COMPOSE, so a favorite of a
-  natively-browsing Confluence/Slack tab showed "Waiting…" forever (`confluence-favorite-waiting-v1`).
-  Now those panels lift their on-screen native data and build a secret-free **bound** `TabSurface` via the
-  relocated **shared** `surfaceBuilders/{confluence,slack}SurfaceBuilder` (the six fossil bound builders
-  moved to `src/shared/surfaceBuilders/`; the main `*SurfaceBuilder.ts`/`*Adapter.ts` re-export them).
-  `FavoriteSurface` resolves **`mirrorSurface ?? surface`**, so a favorite mirrors native browsing too.
-  The two are published **mutually exclusively** by the pure `livePanelProjection.projectLivePanelTab`
-  (`mirrorSurface: surface ? null : (mirrorSurface ?? null)`), so the favorite always shows exactly what
-  the source shows: composed wins while the source shows it; native mirror otherwise. The mirror is built
-  in the RENDERER from data already on screen (`nativeMirror.ts`), DISPLAY-ONLY (a fresh `requestId` per
-  build; its own load-more is not wired — it re-projects as the source grows), **non-secret**,
-  **renderer-only ref pass** (no IPC), and **never persisted** (`buildGenerativeTab` does not whitelist
-  it). It is built ONLY while the source tab is **pinned** — gated by a small **reverse "pinned sources"
-  channel** on `PanelTabsProvider` (Cosmos `publishPins(Set<"panelId:tabId">)` → panels `usePinnedSources()`),
-  so no panel churns building a mirror nobody pinned. **Jira** is unaffected (it already pushes a
-  default-view bound `surface` via `jira:requestDefaultView`); Generated-UI and terminal never set it.
+- **Seam evolution — published tab list is LABEL-ONLY again (cosmos-favorite-live-panel-portal-v1,
+  SUPERSEDES the surface/mirror evolutions).** Two earlier evolutions had the published `LivePanelTab`
+  also carry the tab's live composed `surface` (cosmos-home-favorite-tabs-v1) and a native-view
+  `mirrorSurface` projection (cosmos-native-view-mirror-surface-v1) so a favorite could re-render a
+  flattened A2UI copy. That copy could never carry the panel's native interactive chrome (search box,
+  date/month nav, legend), so it is **REPLACED** by relocating the live panel itself (the reparenting
+  portal, §3). The composed-`surface`/`mirrorSurface` publish, the renderer-side native-view builder
+  (`nativeMirror.ts`), the mutually-exclusive projector (`livePanelProjection.ts`), the per-panel
+  favorite-catalog host map (`favoriteCatalogHosts.tsx`), and the Cosmos→panels reverse
+  **pinned-sources** gate are all **DELETED**. The published `LivePanelTab` is now **label-only** for
+  the four generative panels (the tree survey was always label-only via `toPanelTabGroups`); it still
+  carries the terminal favorite's renderer-only `serialize` + per-tab `iconId` refs (non-secret, never
+  IPC/persisted). `findLiveTab(registry, panelId, tabId)` now resolves a favorite's source tab by
+  **existence** (GONE = no tab with the pinned id), not by reading a published surface.
 
 **Home favorites (cosmos-home-favorite-tabs-v1).** From the tree, a user **right-clicks** a generative
 panel's tab row → **Pin** (shared shadcn/Radix `ContextMenu`); Pin appends a `kind:'favorite'`
 `CosmosTab` (recording the source `{panelId,tabId}`, idempotent/de-duped by `favoriteId`) AFTER the
-undeletable default "Cosmos" tab. Clicking a favorite makes Home a **FULL-WIDTH source mirror**: the
-cross-panel tab **tree renders ONLY on the default "Cosmos" tab** (a favorite tab is a single
-full-width pane — no tree, no divider), and the favorite renders the SOURCE tab's live A2UI surface
-**inline in Home** through the SAME `ActiveTabSurface` host — under the source panel's own catalog (a
-`favoriteCatalogHosts` registry maps `panelId → {catalog, catalogId}`) and sharing the source
-`requestId`/`surfaceId`, so it is a **true live mirror** (receives the same `updateDataModel` pushes;
-bound/deterministic actions round-trip through the existing `UiBridge`, which warn-ignores a duplicate
-resolve — no new cross-panel contract). The favorite shows the source view **"as-is", INCLUDING the
-source panel's own floating Open Prompt**: while a favorite tab is active Home publishes a **null
+undeletable default "Cosmos" tab. Clicking a generative-panel favorite makes Home a **FULL-WIDTH live
+panel**: the cross-panel tab **tree renders ONLY on the default "Cosmos" tab** (a favorite tab is a
+single full-width pane — no tree, no divider), and the favorite **relocates the SOURCE panel's
+force-mounted live instance** into Home via its reverse-portal `OutPortal` (§3) — it IS the same
+component the rail shows, so the favorite gets the panel's full interactive chrome and shared state for
+free (no surface copy, no catalog re-host). The pure `hostFor(panelId)` over `(visibleSurface,
+activeFavoriteSource)` guarantees exactly one OutPortal claims the node (rail slot vs. this favorite
+slot); relocation reparents the detached DOM node so **nothing remounts** and in-flight
+searches/composes + scroll survive the move. On activation Home fires a one-shot
+`focusSourceTab(panelId, tabId)` so the panel opens on the pinned source tab, then the user navigates
+the live panel freely (**initial-focus-then-free**). The favorite shows the panel **body-only**: while
+favorite-hosted the relocated panel SUPPRESSES its own tab strip + footer (gated on `hostFor(id) ===
+'favorite'`), so there is no nested strip — Home KEEPS the global `tab:*` shortcuts and the relocated
+panel gates its own `useTabShortcuts` to its RAIL surface only (no double-bind). Because it is the live
+shared instance, panel-internal renderer-local navigation (Slack open-channel, Jira/Calendar
+open-detail, page-back) now works normally inside the favorite — a strict improvement over the
+superseded surface-mirror, which swallowed it; a disconnected/disabled source shows the panel's OWN
+real disconnected chrome rather than a "Waiting…" placeholder. The source panel's own **floating Open
+Prompt** is still surfaced over the favorite: while a favorite tab is active Home publishes a **null
 `'cosmos'` composer config** (so the App-level `SharedComposer` hides the docked Cosmos conversation
 composer + footer) and renders the SOURCE panel's already-published composer config — read by key from
 the `ActiveComposerProvider` registry (the generative panels publish it unconditionally while
 connected) — as a floating `PromptComposer`. Its submit routes to the **SOURCE target** (jira/slack/…)
 via the source panel's OWN `onSubmit` (the right layer — NO new cross-target mechanism) and lands in
-the source tab the favorite mirrors. The App-level "one hoisted composer routes to the active rail
-surface" invariant is preserved (Home's null config → `SharedComposer` renders nothing; the favorite's
-floating composer is a second, Home-scoped instance only while a favorite is active). v1 SWALLOWS
-panel-internal renderer-local navigation (Slack open-channel, Jira/Calendar open-detail) inside Home.
+the source tab the favorite hosts. This Home-side floating-composer re-publish is the one piece of the
+old surface-mirror wiring **RETAINED** (the hoisted App-level composer does not travel inside the
+reparented panel body); the App-level "one hoisted composer routes to the active rail surface"
+invariant is preserved (Home's null config → `SharedComposer` renders nothing; the favorite's floating
+composer is a second, Home-scoped instance only while a favorite is active).
 **Terminal tabs ARE pinnable** (cosmos-terminal-favorite-multiplex-v1 relaxed the prior exclusion): a
 terminal favorite is a **renderer-side xterm multiplex** — a SECOND `xterm` bound to the SAME `paneId`
 as the source pane (NO new session, NO second PTY), reusing the existing `TerminalView` in a new
 **`mirror` (non-owning) mode**. `FavoriteSurface` branches on `source.panelId === 'terminal'` (BEFORE
-the `favoriteCatalogHosts` lookup, which has no terminal host) to a `TerminalFavoriteSurface` that
+the generative reverse-portal path, which has no terminal node) to a `TerminalFavoriteSurface` that
 mounts the mirror lazily (a `React.lazy` boundary keeps the Monaco-backed explorer import out of the
 `FavoriteSurface` module graph). A mirror NEVER drives `pty:start`/`dispose`/`restart` (the source view
 owns the PTY lifecycle — a naive 2nd mount would dispose the shared PTY on every Home tab switch),
 seeds its scrollback from the source pane's live serializer (surfaced as a renderer-only `serialize`
 ref on `LivePanelTab`, non-secret by the persisted-scrollback standard, never IPC/persisted), then fans
-in on the existing per-`paneId` `pty:data` stream; it renders the **terminal pane ONLY** (the
-file-explorer split is excluded — its per-mount imperative state can't be shared across two mounts). It
+in on the existing per-`paneId` `pty:data` stream; it renders the **full Terminal view** — terminal
+pane AND the file-explorer split via the shared open-files store + ref-counted Monaco model registry
+(cosmos-terminal-favorite-explorer-share-v1, §4.13), the favorite's explorer running non-owning in
+`mirror` mode (the base feature's terminal-pane-only carve-out is superseded). It
 shows the same GONE/WAITING (no `serialize` yet ⇒ waiting) / exited-read-only (no Restart) idioms as
 A2UI favorites. `FavoritePanelId` widens to `CrossPanelId`. (Resize: a `paneId` may now have more than
 one bound xterm, but ONLY the measurable on-screen view drives `pty:resize` — see §4.1.) Favorites
@@ -1133,7 +1160,11 @@ persist by reference only — a top-level additive-optional `SessionSnapshot.fav
 (`{panelId,tabId,label}`, NON-SECRET, **NO schema bump** — mirrors `openPromptPosition`, validated by
 the shared `validateFavorites` at the main boundary) — and **re-bind** to the restored source tab on
 relaunch (stable generative tab ids); a favorite whose source is gone shows a calm "no longer open"
-state and is NEVER auto-dropped.
+state and is NEVER auto-dropped. Favorites are saved **eagerly** (`SessionRegistry.setFavorites`
+flushes immediately, not on the trailing debounce); to keep that eager write from clobbering panels
+that have not yet re-reported their tabs on mount, the registry is **seeded from the restored snapshot**
+at construction (`SessionRegistry.seed`) so the assembled snapshot already carries every panel's
+restored contribution (favorites-lost-on-restart).
 
 ---
 

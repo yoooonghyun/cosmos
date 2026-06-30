@@ -356,6 +356,15 @@ For the authoritative design see `docs/ARCHITECTURE.md`.
 
 ## Deferred / future
 
+- [ ] **Editable file viewer in the terminal favorite (and panel)** — the terminal-favorite
+  explorer-share shipped READ-ONLY (shared `ITextModel`, no write path). Making the viewer editable
+  (writable Monaco + a confined `fs:write` channel + dirty/save UX) is a separate future feature; the
+  shared-model infra already supports two live views editing one buffer.
+- [ ] **Manual GUI verification of the favorites saga** (`npm run dev`, full restart): pin a
+  Jira/Slack/Confluence/Calendar tab → the favorite shows the LIVE panel with working search/date-nav/
+  legend, body-only (no nested tab strip/footer), and rail↔favorite keeps state with no flicker; pin a
+  terminal tab → live mirror + shared file explorer; favorites persist across restart; new tabs (+ the
+  Home tree) show varied random cosmos glyphs that persist.
 - [ ] **Cross-calendar dedup of shared meetings** (product decision → architect). A meeting on two
   subscribed calendars renders as two overlapping copies (Google reuses one event id); hiding one
   calendar leaves the other copy — correct membership, but reads as "hidden event still there".
