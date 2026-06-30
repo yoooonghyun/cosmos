@@ -781,6 +781,15 @@ status — never tokens or transcript).
   and each run's surface lands in the matching panel via `target` routing (§4.4). The run is driven
   with `--permission-mode dontAsk` and `--output-format json` so completion/error are detectable
   from parsed stdout + exit code.
+- **The Home timeline STREAMS the run's progress.** `claude` appends to the default-session
+  transcript jsonl incrementally during a run, so main WATCHES that file while a run is in flight
+  (`TranscriptWatcher`, polled + change-deduped) and pushes `conversation:update` on each change —
+  the timeline shows tool calls + assistant messages as they land, not only the final result on
+  completion. The renderer reconcile (`reconcileTimeline`) suppresses the live provisional prompt
+  bubble/chip once the transcript has grown past a per-run `baseline` (the turn count captured at run
+  start), so a streamed run never shows a duplicate or empty context-only bubble. (The Cosmos rail
+  surface's DISPLAY label is **Home**, its default tab **Cosmos**; the wire id stays `'cosmos'` /
+  `'generated-ui'` — do NOT rename the id.)
 - **Single-run guard (sequential).** While a run is in flight the prompt input is disabled and a
   `submit` is ignored — no queue, no concurrency. A Jira-panel utterance and a generic Generated-UI
   utterance therefore run sequentially, never simultaneously (accepted).

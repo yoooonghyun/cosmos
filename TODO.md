@@ -16,6 +16,15 @@ For the authoritative design see `docs/ARCHITECTURE.md`.
 
 ## Next
 
+- [ ] Manual GUI verification (full `npm run dev` restart — main/preload changed) of the
+  **Home-timeline batch**: agent-progress STREAMING (multi-step prompt → tool calls + assistant
+  messages appear progressively, spinner until done, no duplicate/empty context bubble incl. a
+  cross-panel submit); the **Cosmos→Home** rename (rail tooltip/footer = Home, default tab = Cosmos,
+  breadcrumb "Home > Cosmos"); the rail **divider** (Home↔Terminal); the **combined context box**
+  (header→divider→body), **bubble = primary**, **assistant logo avatar** + alignment, **tool-call
+  indent**, 2/3 width caps; the **disconnect modal** (crimson destructive button, 14px description);
+  and the **panel-tab tree** (click a tab → composer context). Logic/render is covered by
+  node/jsdom/integration; the live pixel + wake/stream behavior was NOT exercised headless.
 - [ ] Manual GUI verification of the **panel-switch shortcut** (`panel-switch-shortcut-v1`, #90) via
   `npm run dev` (HMR is enough — no preload/IPC change): Cmd+Opt+Down advances the left-rail panel one
   step with wrap-around (Confluence → Terminal), Cmd+Opt+Up retreats with wrap-around (Terminal →
@@ -312,6 +321,18 @@ For the authoritative design see `docs/ARCHITECTURE.md`.
 
 ## Deferred / future
 
+- [ ] **Cross-calendar dedup of shared meetings** (product decision → architect). A meeting on two
+  subscribed calendars renders as two overlapping copies (Google reuses one event id); hiding one
+  calendar leaves the other copy — correct membership, but reads as "hidden event still there".
+  Decide whether/how to dedup (which copy, color, whether hiding one hides both). NOT a filter bug
+  (guarded by `CalendarHiddenOverlap.dom.test.tsx`).
+- [ ] **Dev-only Vite HMR wake-reload kills terminal sessions** (`terminal-session-unnecessary-restart-v1`).
+  Direction A (suppress the reconnect-reload) is unworkable (`location.reload` non-configurable in
+  Electron → white screen, rolled back). A real fix is **direction B** — sessions SURVIVE a renderer
+  reload via stable paneIds + a reattach handshake — its own sdd. DEV-ONLY; packaged build unaffected.
+- [ ] **Disconnect modal in-flight "Disconnecting…" state** (architecture). `useConfirm.confirm()`
+  fires the disconnect fire-and-forget and closes immediately; a true loading state needs the confirm
+  state machine to await the disconnect — out of designer scope.
 - [ ] Decide whether session control stays purely interactive (PTY) or adds the Claude Agent
   SDK for background/headless work (ARCHITECTURE §7).
 - [ ] `codegraph init` once the codebase has enough real source to index (ARCHITECTURE §7).

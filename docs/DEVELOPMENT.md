@@ -602,6 +602,14 @@ single new `window.cosmos.session` namespace in `src/shared/ipc.ts` (`session:lo
   won't win (tailwind-merge can't dedupe a variant-prefixed vs unprefixed class, and the variant
   rule applies at runtime) — override with the **same** vertical variant
   (`group-data-[orientation=vertical]/tabs:justify-center`) to center icons in a vertical rail.
+- **`cn()` drops a custom `@theme` text-SIZE next to a text-COLOR.** tailwind-merge does not know the
+  project's custom font-size tokens (`text-nano…text-title`, DESIGN.md §8), so it classifies e.g.
+  `text-body` as a text-COLOR; `cn("text-body text-muted-foreground", …)` then puts both in the color
+  group and DROPS `text-body` (the element silently falls back to inherited 16px — the recurring
+  "dialog/timeline text size is wrong" defect; jsdom does NOT catch it). `cn` (`lib/utils.ts`)
+  therefore uses `extendTailwindMerge` to register the custom names in the `font-size` group. A plain
+  className STRING (not via `cn`) is unaffected — only `cn`/`twMerge` merges. When adding a new
+  `@theme` `--text-*` token, also add its name to that `extendTailwindMerge` font-size list.
 - **Nested Radix triggers collide on `data-state`.** Both `Tabs.Trigger` and `Tooltip.Trigger`
   write a `data-state` attribute; when one wraps the other with `asChild` (e.g. the rail in
   `App.tsx`: `TooltipTrigger asChild` → `TabsTrigger`), the outer trigger's props are spread AFTER
