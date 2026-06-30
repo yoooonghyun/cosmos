@@ -30,6 +30,12 @@ let blurCb: (() => void) | undefined
 vi.mock('./monacoSetup', () => {
   const focusDisposable = { dispose: vi.fn() }
   const blurDisposable = { dispose: vi.fn() }
+  // cosmos-terminal-favorite-explorer-share-v1: MonacoText now attaches a SHARED model via the model
+  // registry (`acquire` → `editor.setModel`) instead of `create({ value })` + in-place `setValue`. The
+  // registry's installed factory calls `setupMonaco().editor.{getModel,createModel}` + `Uri.parse`, and
+  // the editor needs `setModel`. Enrich the mock so importing FileViewer + mounting MonacoText is safe
+  // under jsdom — the focus wiring under test is UNCHANGED (still driven by onDidFocus/BlurEditorText).
+  const fakeModel = { getValue: () => '', setValue: vi.fn(), dispose: vi.fn() }
   const fakeEditor: Partial<editor.IStandaloneCodeEditor> = {
     onDidFocusEditorText: ((cb: () => void) => {
       focusCb = cb
@@ -39,15 +45,19 @@ vi.mock('./monacoSetup', () => {
       blurCb = cb
       return blurDisposable
     }) as editor.IStandaloneCodeEditor['onDidBlurEditorText'],
-    getModel: () => null,
+    getModel: (() => fakeModel) as unknown as editor.IStandaloneCodeEditor['getModel'],
+    setModel: vi.fn() as unknown as editor.IStandaloneCodeEditor['setModel'],
     dispose: vi.fn()
   }
   return {
     setupMonaco: () => ({
       editor: {
         create: () => fakeEditor,
-        setModelLanguage: vi.fn()
-      }
+        setModelLanguage: vi.fn(),
+        getModel: () => null,
+        createModel: () => fakeModel
+      },
+      Uri: { parse: (s: string) => s }
     })
   }
 })

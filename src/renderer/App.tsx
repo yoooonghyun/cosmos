@@ -23,6 +23,7 @@ import {
   type SurfaceId
 } from './app/railVisibility'
 import { PanelTabsProvider } from './panelTabs'
+import { OpenFilesProvider } from './fileExplorer'
 import { SURFACE_ICON, type RailIcon } from './app/surfaceIcons'
 import './App.css'
 
@@ -92,7 +93,13 @@ export function App(): React.JSX.Element {
               panel-tab tree). Sibling to ActiveComposerProvider: live cross-panel READ vs. the
               composer routing registry vs. the debounced persistence SessionRegistry. */}
           <PanelTabsProvider>
-            <AppShell />
+            {/* cosmos-terminal-favorite-explorer-share-v1 (FR-002): the App-root, paneId-keyed SHARED
+                open-files store. Wraps BOTH the Terminal panel (the source explorer) and Home (a
+                terminal favorite's mirror explorer) — both `forceMount`ed — so the two explorer views
+                of one pane read+write ONE open-files selection. Renderer-only; never persisted/IPC'd. */}
+            <OpenFilesProvider>
+              <AppShell />
+            </OpenFilesProvider>
           </PanelTabsProvider>
         </ActiveComposerProvider>
       </OpenPromptPositionProvider>

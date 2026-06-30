@@ -105,7 +105,12 @@ Entry/shell files stay at the root; everything else is grouped by domain/feature
 - `fileExplorer/` — the per-tab 3-column terminal/viewer/tree layout (the `useExplorerPanes` hook +
   `FileTree`/`FileViewer`/`FileTabStrip`/`ResizeDivider` components, the `useFileExplorer` hook, the
   pure node-tested `tree.ts`/`fileGlyph.ts`/`monacoTheme.ts`/`localFileSrc.ts`/`viewerState.ts`/
-  `openFiles.ts`, and the impure `monacoSetup.ts` Monaco-worker wiring) — UNCHANGED internals
+  `openFiles.ts`, and the impure `monacoSetup.ts` Monaco-worker wiring). cosmos-terminal-favorite-
+  explorer-share-v1 ADDED two SHARE seams so a Home terminal favorite mirrors the explorer too:
+  `OpenFilesProvider.tsx` (App-root, paneId-keyed SHARED open-files store — ref+version, modeled on
+  `PanelTabsProvider`; the lifted `useFileExplorer` storage) and `monacoModelRegistry.ts` (ref-counted
+  shared `ITextModel`s keyed `cosmos-file://<paneId>/<relPath>`, injectable Monaco factory). The
+  source mount stays the single fs owner; the favorite mount is non-owning (`{ mirror: true }`)
 - `glassDock/` — the glass-dock filter/config + `GlassDock` component — UNCHANGED
 - `components/ui/` — the shadcn primitive set — UNTOUCHED (Phase 2, deferred)
 - `lib/` — `utils.ts` (the `cn` helper) — UNTOUCHED

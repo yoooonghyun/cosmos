@@ -489,18 +489,19 @@ export function TerminalView({
   // The MIDDLE viewer column + RIGHT tree dock, both backed by ONE explorer hook instance (a click
   // in the dock retargets the viewer). Hooks run unconditionally; while !live the hook is inert.
   // The restored open-files slice seeds the strip on go-live (FR-004).
-  // cosmos-terminal-favorite-multiplex-v1 (FR-017): the hook runs unconditionally (rules of hooks)
-  // but is forced INERT in mirror mode (`live=false` ⇒ no `fs:*` reads, Monaco never mounted). The
-  // mirror renders the terminal pane ONLY — the file-explorer split is deliberately NOT mirrored
-  // because its per-mount imperative state (open files, Monaco models, `fs:*`) cannot be referenced
-  // across two mounts (a second mount would get its own independent state); only the genuinely shared
-  // PTY/`pty:data` is mirrored.
+  // cosmos-terminal-favorite-explorer-share-v1 (FR-001/FR-006, relaxes base-FR-017): a `mirror` view
+  // now ALSO renders the explorer split — but NON-OWNING. It reads + writes the SHARED open-files
+  // store + renders the SHARED Monaco models (so the favorite shows the SAME open files + content as
+  // the source, live), while the SOURCE stays the single owner of `fs:read` resolution + `fs:watch`.
+  // So the hook is LIVE in mirror mode (was forced inert), with `{ mirror: true }` gating off the
+  // fs-owning effects. The mirror passes no restored slice + no report (source-owned).
   const { viewer, tree, openFileCount, closeActiveFile, navFileTab } = useExplorerPanes(
     paneId,
-    mirror ? false : live,
-    restoredOpenFiles,
-    reportOpenFiles,
-    setViewerFocused
+    live,
+    mirror ? undefined : restoredOpenFiles,
+    mirror ? undefined : reportOpenFiles,
+    setViewerFocused,
+    { mirror }
   )
   // terminal-focus-aware-close-tab-v1: report this pane's viewer-focus + open-file count + the
   // close-active-file callback up to the panel. The panel ignores all but the ACTIVE pane (FR-012);
@@ -534,15 +535,14 @@ export function TerminalView({
       <div
         className="flex min-h-0 min-w-0 flex-col"
         style={
-          // cosmos-terminal-favorite-multiplex-v1 (FR-017): a mirror is terminal-pane-ONLY → always
-          // full width (no §1.2 resize state, no split to leave room for).
-          mirror
-            ? { flex: '1 1 0%' }
-            : live
-              ? termWidth !== null
-                ? { flex: `0 0 ${termWidth}px` }
-                : { flex: '0 0 45%' }
-              : { flex: '1 1 0%' }
+          // cosmos-terminal-favorite-explorer-share-v1 (FR-001, relaxes base-FR-017): a mirror now
+          // renders the SAME 3-pane split as the owner, so its terminal column uses the SAME live
+          // width logic (full width only while NOT live — the awaiting/welcome phase).
+          live
+            ? termWidth !== null
+              ? { flex: `0 0 ${termWidth}px` }
+              : { flex: '0 0 45%' }
+            : { flex: '1 1 0%' }
         }
       >
         {!live ? (
@@ -599,9 +599,10 @@ export function TerminalView({
       </div>
 
       {/* The 3-pane split chrome (dividers + viewer + tree dock) exists ONLY once a folder is open —
-          before that the welcome view is the whole tab. cosmos-terminal-favorite-multiplex-v1
-          (FR-017): a MIRROR never renders the split (terminal pane only). */}
-      {live && !mirror ? (
+          before that the welcome view is the whole tab. cosmos-terminal-favorite-explorer-share-v1
+          (FR-001, relaxes base-FR-017): a MIRROR now renders the SAME split, NON-OWNING (off the
+          shared open-files store + shared Monaco models). */}
+      {live ? (
         <>
           {/* §1.3 divider A (terminal | viewer). */}
           <ResizeDivider onResize={handleTermResize} ariaLabel="Resize terminal and file viewer" />

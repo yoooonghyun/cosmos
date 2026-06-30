@@ -16,7 +16,7 @@ import { FolderTree } from 'lucide-react'
 import { cycleActiveId } from '../tabs/panelTabs'
 import { FileTree } from './FileTree'
 import { FileViewer } from './FileViewer'
-import { useFileExplorer, type RestoredOpenFiles } from './useFileExplorer'
+import { useFileExplorer, type FileExplorerOptions, type RestoredOpenFiles } from './useFileExplorer'
 
 export interface ExplorerPanes {
   /** The MIDDLE column: the file viewer (or the "Select a file" placeholder). */
@@ -53,13 +53,19 @@ export interface ExplorerPanes {
  * terminal-focus-aware-close-tab-v1: `onViewerFocusChange` reports the viewer's focus-within so the
  * Terminal panel can make `Ctrl/Cmd+W` focus-aware; the return also exposes `openFileCount` +
  * `closeActiveFile` so the (active pane's) state can be lifted to where the shortcut routes.
+ *
+ * cosmos-terminal-favorite-explorer-share-v1 (FR-001/FR-006): `options.mirror` makes this a NON-OWNING
+ * favorite view bound to the SAME `paneId` as a source pane — it reads + writes the SHARED open-files
+ * store + renders the SHARED Monaco models, but drives no `fs:watch`/`fs:read` resolution/seed/report
+ * (the source owns those). Default `false` = the owning source view, 100% unchanged.
  */
 export function useExplorerPanes(
   paneId: string,
   live: boolean,
   restoredOpenFiles?: RestoredOpenFiles,
   onOpenFilesChange?: (slice: RestoredOpenFiles) => void,
-  onViewerFocusChange?: (focused: boolean) => void
+  onViewerFocusChange?: (focused: boolean) => void,
+  options?: FileExplorerOptions
 ): ExplorerPanes {
   const {
     tree,
@@ -74,7 +80,7 @@ export function useExplorerPanes(
     closeFile,
     markRenderError,
     retryRoot
-  } = useFileExplorer(paneId, live, restoredOpenFiles, onOpenFilesChange)
+  } = useFileExplorer(paneId, live, restoredOpenFiles, onOpenFilesChange, options)
 
   // terminal-focus-aware-close-tab-v1: a stable callback that closes the ACTIVE open file via the
   // existing `closeFile` (so Ctrl/Cmd+W matches the tab `X`/Delete exactly — FR-011). `closeFile`

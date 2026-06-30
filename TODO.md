@@ -68,6 +68,17 @@ For the authoritative design see `docs/ARCHITECTURE.md`.
   surfaces re-fits the on-screen view only. xterm-in-jsdom is not exercised by tests, so the live
   mirror + input fan-out + resize-on-switch are a MANUAL check (the non-owning lifecycle gates +
   resize-guard predicate + favorite branch states ARE locked by tests).
+- [ ] Manual GUI verification of the **terminal favorite's SHARED file explorer** (`cosmos-terminal-
+  favorite-explorer-share-v1`) via `npm run dev`: in a live terminal open a few files (a text file +
+  another), then open its Home favorite → the favorite shows the SAME open-file tabs + active file +
+  tree at the same cwd BESIDE the mirrored terminal; open/close/activate a file in EITHER view reflects
+  in BOTH (one shared open-files store); the same text file shows identical content in both while
+  cursor/scroll stay independent per view; an on-disk change to an open file updates both at once;
+  closing the source tab degrades the WHOLE favorite (terminal + explorer) to the calm "no longer open"
+  state with no explorer against a dead pane. v1 is READ-ONLY (no edit/save). Monaco-in-jsdom is not
+  exercised by tests, so the live two-view render is a MANUAL check (the shared-store/registry refcount,
+  resolver, single-mount no-regression, and two-mount content-sync ARE locked by tests —
+  TERM-EXPLORER-SHARE-01).
 - [ ] Manual GUI verification of **native-view favorite mirrors** (`cosmos-native-view-mirror-surface-v1`)
   via `npm run dev`: pin a Confluence tab showing a page (and one showing the feed/search) + a Slack tab
   showing a channel's history (and one on the channel list) → each favorite renders the LIVE native view

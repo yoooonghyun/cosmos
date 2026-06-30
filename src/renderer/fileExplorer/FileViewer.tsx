@@ -29,6 +29,11 @@ import { FileTabStrip, type FileTab } from './FileTabStrip'
 import { buildLocalFileSrc } from './localFileSrc'
 import { setupMonaco } from './monacoSetup'
 import { buildViewerEditorOptions, COSMOS_MONACO_THEME } from './monacoTheme'
+import {
+  installMonacoModelFactory,
+  sharedMonacoModelRegistry,
+  type ModelLike
+} from './monacoModelRegistry'
 import { PdfView } from './PdfView'
 import { DocxView } from './DocxView'
 import { SheetView } from './SheetView'
@@ -56,12 +61,38 @@ function StateBlock({
   )
 }
 
-/** Read-only Monaco editor mounting the file text (design §4.2). Themed to cosmos-dark. */
+// cosmos-terminal-favorite-explorer-share-v1 (FR-003): install the Monaco-backed model factory into
+// the shared registry once (lazily — the functions call `setupMonaco()` on first use, so importing
+// this module never eagerly touches Monaco). The registry owns the canonical `cosmos-file://` KEY
+// (Monaco-free); the factory only turns that key into / looks it up as a real `ITextModel`. READ-ONLY
+// (OQ-1): the model is shared so two read-only views render one buffer — it is the seam a future
+// editability feature would build on, NOT that feature.
+installMonacoModelFactory({
+  getModel: (uri: string): ModelLike | null => {
+    const monaco = setupMonaco()
+    return monaco.editor.getModel(monaco.Uri.parse(uri))
+  },
+  createModel: (text: string, language: string, uri: string): ModelLike => {
+    const monaco = setupMonaco()
+    return monaco.editor.createModel(text, language, monaco.Uri.parse(uri))
+  }
+})
+
+/**
+ * Read-only Monaco editor VIEW over a file's SHARED `ITextModel` (design §4.2; cosmos-terminal-
+ * favorite-explorer-share-v1 FR-003/FR-004/FR-007). The editor attaches (`setModel`) to a per-file
+ * model held in the shared {@link sharedMonacoModelRegistry} keyed by `(paneId, relPath)`, so the
+ * source viewer and a Home favorite viewer render the SAME buffer (content + language stay identical
+ * + live) while cursor/scroll stay per-view (view state lives on the editor, not the model). READ-
+ * ONLY: the editor keeps `readOnly`/`domReadOnly` (OQ-1) — the shared model is content-sync only.
+ */
 function MonacoText({
+  paneId,
   relPath,
   text,
   onViewerFocusChange
 }: {
+  paneId: string
   relPath: string
   text: string
   /**
@@ -75,12 +106,17 @@ function MonacoText({
 }): React.JSX.Element {
   const containerRef = useRef<HTMLDivElement | null>(null)
   const editorRef = useRef<editor.IStandaloneCodeEditor | null>(null)
+  // The (paneId, relPath) this editor currently has a model ATTACHED for — so a file-switch / unmount
+  // detaches the RIGHT model from the shared registry's refcount (FR-007). null until first attach.
+  const attachedRef = useRef<{ paneId: string; relPath: string } | null>(null)
   // Keep the latest callback in a ref so the once-on-mount effect's focus listeners always call the
   // current reporter without re-creating the editor when the parent re-renders.
   const focusReporter = useRef(onViewerFocusChange)
   focusReporter.current = onViewerFocusChange
 
-  // Create the editor ONCE on mount; subsequent text/lang changes update the model in place.
+  // Create the editor ONCE on mount with NO initial model; the attach effect below sets the SHARED
+  // model. Keeps `readOnly`/`domReadOnly` (OQ-1). On unmount, detach the shared model (NEVER dispose
+  // it directly — the registry owns disposal via refcount, FR-007) then dispose the editor VIEW.
   useEffect(() => {
     const container = containerRef.current
     if (!container) {
@@ -88,12 +124,11 @@ function MonacoText({
     }
     const monaco = setupMonaco()
     const ed = monaco.editor.create(container, {
-      value: text,
       theme: COSMOS_MONACO_THEME,
       // file-viewer-color-wrap-v1 (#94): the editor options (incl. `wordWrap: 'on'` for soft
       // word-wrap so long lines wrap to the viewport instead of forcing a horizontal scrollbar)
-      // come from the PURE, node-tested `buildViewerEditorOptions`. The `h-full min-h-0 w-full`
-      // container below adds no overflow-x of its own.
+      // come from the PURE, node-tested `buildViewerEditorOptions` (incl. `readOnly`/`domReadOnly`).
+      // The `h-full min-h-0 w-full` container below adds no overflow-x of its own.
       ...buildViewerEditorOptions(relPath)
     })
     editorRef.current = ed
@@ -105,26 +140,49 @@ function MonacoText({
     return () => {
       focusSub.dispose()
       blurSub.dispose()
+      // Detach THIS view from the shared model (decrement refcount) BEFORE disposing the editor — the
+      // registry disposes the model only when no view remains AND the file is closed (FR-007).
+      const attached = attachedRef.current
+      if (attached) {
+        sharedMonacoModelRegistry.detach(attached.paneId, attached.relPath)
+        attachedRef.current = null
+      }
       ed.dispose()
       editorRef.current = null
     }
-    // Mount once; the effect below handles relPath/text changes without re-creating.
+    // Mount once; the attach effect below handles paneId/relPath/text changes without re-creating.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
-  // A different file opened into the SAME viewer instance — swap the model value + language.
+  // Attach the SHARED model for the active (paneId, relPath); on a file-switch detach the old model +
+  // acquire+attach the new; on a text change (a watch re-read of the SAME file) sync the shared buffer
+  // (read-only content-sync — no edit path, OQ-1). Two editors on one model keep independent cursor/
+  // scroll (FR-004); per-file view-state persistence across switches is NOT required (OQ-5).
   useEffect(() => {
     const ed = editorRef.current
-    const monaco = setupMonaco()
     if (!ed) {
       return
     }
-    const model = ed.getModel()
-    if (model) {
-      model.setValue(text)
-      monaco.editor.setModelLanguage(model, monacoLanguageOf(relPath))
+    const attached = attachedRef.current
+    if (!attached || attached.paneId !== paneId || attached.relPath !== relPath) {
+      if (attached) {
+        sharedMonacoModelRegistry.detach(attached.paneId, attached.relPath)
+      }
+      const model = sharedMonacoModelRegistry.acquire(paneId, relPath, text, monacoLanguageOf(relPath))
+      // Acquire may return an EXISTING shared model (the other view opened this file first); make sure
+      // it carries the freshest text before this view shows it.
+      sharedMonacoModelRegistry.syncText(model, text)
+      ed.setModel(model as unknown as editor.ITextModel)
+      attachedRef.current = { paneId, relPath }
+    } else {
+      // Same file, new text (an `fs:changed` re-read landed) — push it into the one shared model so
+      // BOTH views update at once (FR-003, Scenario 4), each keeping its own cursor/scroll.
+      const model = ed.getModel()
+      if (model) {
+        sharedMonacoModelRegistry.syncText(model as unknown as ModelLike, text)
+      }
     }
-  }, [relPath, text])
+  }, [paneId, relPath, text])
 
   return <div ref={containerRef} className="h-full min-h-0 w-full" />
 }
@@ -167,6 +225,7 @@ function ViewerBody({
     case 'text':
       return (
         <MonacoText
+          paneId={paneId}
           relPath={viewer.relPath}
           text={viewer.text}
           onViewerFocusChange={onViewerFocusChange}

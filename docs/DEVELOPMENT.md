@@ -364,6 +364,40 @@ detail.
   (e) shows the exit banner READ-ONLY (no Restart). The favorite branch lives in
   `cosmos/TerminalFavoriteSurface.tsx` (`FavoriteSurface` branches on `source.panelId === 'terminal'`
   BEFORE the `favoriteCatalogHosts` lookup).
+- **The terminal favorite now mirrors the FULL view — the file-explorer split too — via SHARED
+  state + separate render (cosmos-terminal-favorite-explorer-share-v1).** This RELAXES the base's
+  "terminal pane only" (the `mirror ? false : live` inert-gate is gone — the mirror now calls
+  `useExplorerPanes(paneId, live, undefined, undefined, setFocus, { mirror: true })` and renders the
+  same 3-pane split). It is "share the data instance, render two views" (how Monaco itself splits
+  model↔view), applied to the viewer:
+  - **`fileExplorer/OpenFilesProvider.tsx`** — an App-root, paneId-keyed SHARED open-files store
+    (`Map<paneId, { openFiles, live }>`) modeled EXACTLY on `PanelTabsProvider` (ref + `version`
+    counter; `apply`/`setLive`/`clear` swap the ref + bump). `useFileExplorer` swapped its per-mount
+    `useState<OpenFilesState>` for `useSharedOpenFiles(paneId)`; every `setOpenFiles(T)` became
+    `apply(T)` over the SAME pure `openFiles.ts` transitions (only the storage moved). Wrapped in
+    `App.tsx` alongside `PanelTabsProvider`. Renderer-only — NEVER persisted/IPC'd (FR-009). It is
+    **Monaco-free to import**, so the owning hook (which only `release`s on close) shares it without
+    dragging Monaco into a Monaco-free graph.
+  - **`fileExplorer/monacoModelRegistry.ts`** — a ref-counted registry of shared `ITextModel`s keyed
+    `cosmos-file://<paneId>/<relPath>`. `MonacoText` switched from `create({ value })` + in-place
+    `setValue` to `acquire(...)` + `editor.setModel(...)` (one model per file, one editor VIEW per
+    mount). **Dispose ONLY when `released` (closed in the store) AND `attachCount === 0`** — a
+    favorite tab-switch `detach`es without disposing a model the source still renders (FR-007). The
+    Monaco model FACTORY is INJECTABLE (`installMonacoModelFactory`, installed lazily from
+    `FileViewer`) AND the URI key is Monaco-free, so the refcount/dispose logic is node-unit-testable
+    WITHOUT Monaco; `createMonacoModelRegistry(fakeFactory)` is the unit seam.
+  - **Single fs OWNER:** the source mount keeps `fs:read` resolution + `fs:watch` + the persist/restore
+    seam; the mirror (`{ mirror: true }`) drives NONE of them. The ONE owning-path change is a
+    **resolver effect**: `fs:read` moved OUT of inline `openFile` into a reconcile effect that reads
+    every `loading` file in the shared store — so a MIRROR-initiated open is resolved by the single
+    owner. The mirror DOES list its OWN tree (`fs:list` on go-live + manual expand — idempotent), but
+    refreshes on expand rather than live on `fs:changed` (open-file CONTENT stays live via the owner's
+    watch → shared store → both views). **GOTCHA — keep the StrictMode `persist-open-files-restore-
+    broken-v1` guard intact through the lift:** the restored slice is still consumed ONLY on a genuine
+    `enabled` true→false (never in effect cleanup); a single-mount regression suite
+    (`useFileExplorerShare.dom.test.tsx`) is mandatory and locks it. **READ-ONLY (OQ-1):** the editor
+    stays `readOnly`/`domReadOnly`; no `fs:write`/edit/save path is introduced — the shared model is
+    content-sync only (the seam a future editability feature would build on, not that feature).
 - **GOTCHA — the terminal-favorite mirror MUST `React.lazy`-import `TerminalView`.** `TerminalPanel.tsx`
   statically imports the Monaco-backed file explorer (the `../fileExplorer` barrel), which **crashes
   jsdom on import** (`queryCommandSupported`). Importing `TerminalView` eagerly from
