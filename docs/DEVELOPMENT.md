@@ -356,11 +356,18 @@ detail.
   the originating-tab correlation; `ActiveTabSurface.tsx` is the shared per-tab A2UI host.
 - **PTY is multi-session, keyed by a renderer-minted `paneId`.** `PtyManager` is `Map<paneId, IPty>`;
   every `pty:*` IPC payload carries a `paneId`. `pty:start` (R→M, spawn a pane) and `pty:dispose`
-  (R→M, kill on tab close) are explicit channels; `pty:restart` is per-pane; `killAll()` runs on
-  teardown. **There is NO single-PTY auto-start at window creation** — each Terminal tab issues its
-  own `pty:start`. The Terminal panel mounts one xterm `Terminal` per tab (all kept mounted so live
-  sessions + scrollback survive tab/rail switches) and always keeps ≥1 terminal (closing the last
-  opens a fresh one).
+  (R→M, kill on tab close) are explicit channels; `pty:restart` is per-pane; `pty:listLive` (R→M
+  invoke/handle) returns the live paneIds for the reload-reattach reconcile (see the reload bullet
+  below); `killAll()`/`killAllSync()` run ONLY on a genuine quit/close. **`pty:start` is IDEMPOTENT** —
+  a re-issued start for a paneId whose session is still live REATTACHES (no kill + respawn), so a
+  StrictMode remount / reload does not restart it; `PtyManager.restart` explicitly kills-then-starts to
+  force a fresh spawn. **There is NO single-PTY auto-start at window creation** — each Terminal tab
+  issues its own `pty:start`. The Terminal panel mounts one xterm `Terminal` per tab (all kept mounted
+  so live sessions + scrollback survive tab/rail switches) and always keeps ≥1 terminal (closing the
+  last opens a fresh one). **The `TerminalView` unmount cleanup disposes the PTY ONLY on a GENUINE tab
+  close** (a panel-level intentional-close ref set, marked by every close entry point — the strip `X`,
+  the tree Delete, and Ctrl/Cmd+W); a plain unmount (StrictMode double-invoke / rail switch / reload)
+  does NOT dispose, so the session survives + reattaches.
 - **A FRESH terminal tab defers its spawn until a directory is picked (terminal-open-directory-
   picker-v1).** A new tab mounts in an `awaiting` phase showing an `[Open]` empty state and does
   NOT auto-`pty:start`; clicking `[Open]` calls `window.cosmos.pty.pickDirectory()` →
@@ -650,22 +657,29 @@ single new `window.cosmos.session` namespace in `src/shared/ipc.ts` (`session:lo
   rejects with "No conversation found". The recorded id is NEVER re-minted on either path. Auto-accept
   mode (shift+tab) is process-local TUI state that cannot survive the death; the exit banner is honest
   about that (`exitRecoveryHint` in `terminalExit.ts`) rather than pretending to restore it.
-- **KNOWN DEV-ONLY annoyance: lock→wake resets terminal sessions in `npm run dev`
-  (terminal-session-unnecessary-restart-v1; NOT fixed — see why).** In dev the renderer runs Vite's
-  HMR client; on sleep the dev-server WebSocket drops and on wake `@vite/client` HARD-CODES
-  `location.reload()` after a successful reconnect ping (`node_modules/vite/dist/client/client.mjs`
-  ≈L863-870, vite 7.3.5 — NO `server.hmr` key and NO listener-cancel hook). That full reload fires
-  `did-start-navigation` → `ptyManager.killAll()` → every pane re-mounts + re-`--resume`s, STACKING
-  startup banners. A renderer-side guard that overrode `location.reload` was tried (direction A) and
-  ROLLED BACK: in a real Chromium/Electron renderer `window.location.reload` is non-configurable, so
-  `Object.defineProperty(location, 'reload', …)` THROWS at startup → white screen (jsdom allowed it,
-  so the unit test was green — a jsdom-green/runtime-broken trap). There is no clean renderer seam
-  (Vite hard-codes the reload; the reload fn is not overridable) and main-side can't distinguish the
-  HMR reload from a genuine Cmd+R. **This is DEV-ONLY: a packaged build uses `loadFile` with no
-  `@vite/client`, so it never wake-reloads — the shipped app is unaffected.** A real fix would be
-  "direction B" (sessions SURVIVE a renderer reload via stable paneIds + a reattach handshake), which
-  is feature-sized (own sdd) and was deferred. The orthogonal exit-banner Restart-`--resume` hardening
-  (above) stands.
+- **Sessions SURVIVE a renderer reload + reattach (cosmos-dev-wake-reload-session-survival-v1 — FIXED
+  via direction B; supersedes the former "NOT fixed" dev-only annoyance).** In dev the renderer runs
+  Vite's HMR client; on sleep the dev-server WebSocket drops and on wake `@vite/client` HARD-CODES
+  `location.reload()` after a successful reconnect ping (`node_modules/vite/dist/client/client.mjs`,
+  vite 7.3.5 — NO `server.hmr` key and NO listener-cancel hook). That full reload used to fire
+  `did-start-navigation` → `ptyManager.killAll()` → every pane re-`--resume`d, stacking startup banners
+  and dropping in-TUI auto-accept. THE FIX keeps the sessions alive across the reload and reattaches:
+  (1) `did-start-navigation` no longer calls `killAll()` (only the four non-PTY teardown calls remain);
+  (2) `PtyManager.start` is idempotent (reattach, no respawn) + `restart` explicitly kills-then-starts;
+  (3) the reloaded panel reconciles via `pty:listLive` (reattach survivors, adopt a live pane missing
+  from the debounced snapshot) and `TerminalView` disposes ONLY on a genuine tab close (the
+  intentional-close guard — the necessary partner to (1) under StrictMode, which else would
+  mount→cleanup(dispose)→remount and kill the survivor). Repaint is best-effort — a resize nudge
+  (SIGWINCH → the claude TUI redraws) + the existing scrollback restore, NO main-side output buffer.
+  Kill happens ONLY on a genuine quit/close (`killAll` on window `closed`; `killAllSync` on
+  `window-all-closed`/`before-quit`/`will-quit` — the ZERO-orphans invariant, unchanged). Works in BOTH
+  dev and packaged (a genuine Cmd+R now preserves context too). The rolled-back direction A (overriding
+  `location.reload`) must NOT be re-proposed — `window.location.reload` is non-configurable in a real
+  Chromium/Electron renderer, so `Object.defineProperty(location,'reload',…)` THROWS at startup → white
+  screen (jsdom allowed it — a jsdom-green/runtime-broken trap). The orthogonal exit-banner
+  Restart-`--resume` hardening (above) stands: a session that GENUINELY died (not a reload) still routes
+  to the exit banner / resume recovery. **⚠️ `pty:listLive` is a NEW preload method — a full
+  `npm run dev` restart is required; HMR alone leaves `window.cosmos.pty.listLive` as "not a function".**
 - **Scrollback via `@xterm/addon-serialize`, capped 256KB (D4/D5).** Each `TerminalView` registers a
   serializer (`() => capScrollback(serializeAddon.serialize())`); `capScrollback` keeps the
   most-recent ≤256KB on a UTF-8 boundary. On restore, scrollback is pre-written before `pty:start`.

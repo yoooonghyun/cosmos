@@ -165,16 +165,32 @@ describe('PtyManager multi-session (panel-tabs v1, FR-021/FR-022)', () => {
     expect(manager.isRunning('c')).toBe(false)
   })
 
-  it('starting the same paneId twice replaces (kills) the prior process for that pane only', () => {
+  // cosmos-dev-wake-reload-session-survival-v1 (D2/FR-004): `start` is IDEMPOTENT. A second
+  // `pty:start` for a paneId whose session is STILL LIVE (a renderer reload / StrictMode remount
+  // re-issued it) MUST REATTACH — it must NOT kill + respawn (that kill+respawn IS the visible
+  // "restart": banner, lost auto-accept, stale scrollback). Map presence ⇒ a live session.
+  it('starting the same LIVE paneId twice is idempotent — no kill, no respawn (reattach)', () => {
     const { manager } = makeManager()
     manager.start('a')
     manager.start('b')
     const firstA = spawned[0]
-    manager.start('a') // re-start pane a
-    expect(firstA.killed).toBe(true)
-    expect(spawned).toHaveLength(3)
+    manager.start('a') // re-issued for the STILL-LIVE pane a (reload / StrictMode remount)
+    expect(firstA.killed).toBe(false) // the live session is NOT killed
+    expect(spawned).toHaveLength(2) // and NOT respawned (no 3rd process)
+    expect(manager.isRunning('a')).toBe(true)
     // pane b untouched
     expect(spawned[1].killed).toBe(false)
+  })
+
+  // Regression guard: `start` for an ABSENT/exited paneId still spawns exactly as before.
+  it('starting a paneId whose session is absent/exited spawns a fresh process', () => {
+    const { manager } = makeManager()
+    manager.start('a')
+    spawned[0].exitCb?.({ exitCode: 0 }) // pane a exits on its own → map entry cleared
+    expect(manager.isRunning('a')).toBe(false)
+    manager.start('a') // no live session ⇒ spawn (resume/exit-banner recovery path)
+    expect(spawned).toHaveLength(2)
+    expect(manager.isRunning('a')).toBe(true)
   })
 
   it('routes input to the addressed pane only (FR-021)', () => {
@@ -237,6 +253,20 @@ describe('PtyManager per-pane restart (panel-tabs v1, FR-026)', () => {
     expect(firstA.killed).toBe(true)
     expect(spawned).toHaveLength(3)
     expect(spawned[1].killed).toBe(false) // pane b untouched
+    expect(manager.isRunning('a')).toBe(true)
+  })
+
+  // cosmos-dev-wake-reload-session-survival-v1 (D2): `start` is now idempotent (reattach), so
+  // `restart` MUST still FORCE a fresh spawn over a LIVE pane — it kills then starts. A regression
+  // here (restart delegating to the idempotent start without the explicit kill) would make the
+  // exit-banner Restart a silent no-op on a live pane.
+  it('restart FORCES a fresh spawn over a live pane (kill-then-start), unlike idempotent start', () => {
+    const { manager } = makeManager()
+    manager.start('a')
+    const firstA = spawned[0]
+    manager.restart('a')
+    expect(firstA.killed).toBe(true) // the live process IS killed
+    expect(spawned).toHaveLength(2) // and respawned
     expect(manager.isRunning('a')).toBe(true)
   })
 
@@ -359,6 +389,31 @@ describe('PtyManager killAll (teardown)', () => {
       { pid: spawned[0].pid, signal: 'SIGHUP' },
       { pid: spawned[0].pid, signal: 'SIGKILL' }
     ])
+  })
+})
+
+describe('PtyManager listLive (cosmos-dev-wake-reload-session-survival-v1, D3/FR-005)', () => {
+  it('returns exactly the live paneIds and excludes killed/exited ones', () => {
+    const { manager } = makeManager()
+    expect(manager.listLive()).toEqual([]) // nothing live yet
+    manager.start('a')
+    manager.start('b')
+    manager.start('c')
+    expect([...manager.listLive()].sort()).toEqual(['a', 'b', 'c'])
+    // A disposed pane leaves the live set.
+    manager.kill('b')
+    expect([...manager.listLive()].sort()).toEqual(['a', 'c'])
+    // A self-exited pane leaves the live set.
+    spawned[0].exitCb?.({ exitCode: 0 }) // pane a exits on its own
+    expect(manager.listLive()).toEqual(['c'])
+  })
+
+  it('is empty after killAll (the reload/quit teardown clears the live set)', () => {
+    const { manager } = makeManager()
+    manager.start('a')
+    manager.start('b')
+    manager.killAll()
+    expect(manager.listLive()).toEqual([])
   })
 })
 

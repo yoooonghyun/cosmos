@@ -46,7 +46,18 @@ export const PtyChannel = {
    * The chosen path is a user-selected local filesystem path, NOT a secret — but it
    * still rides only this typed, validated boundary.
    */
-  PickDirectory: 'pty:pickDirectory'
+  PickDirectory: 'pty:pickDirectory',
+  /**
+   * R->M, request/response (`ipcRenderer.invoke` / `ipcMain.handle`): list the
+   * `paneId`s that CURRENTLY have a live PTY session in main
+   * (cosmos-dev-wake-reload-session-survival-v1, FR-005/FR-011). Used by the reloaded
+   * renderer to reconcile its rehydrated tabs against main's surviving sessions —
+   * reattach a survivor, adopt a live pane whose tab wasn't in the (debounced, possibly
+   * stale) snapshot, and route a genuinely-dead tab to the resume/exit-banner path
+   * rather than respawning over a live session. NON-SECRET: renderer-minted paneIds
+   * ONLY — no cwd, sessionId, scrollback, or token ever crosses this surface.
+   */
+  ListLive: 'pty:listLive'
 } as const
 
 export type PtyChannelName = (typeof PtyChannel)[keyof typeof PtyChannel]
@@ -134,6 +145,25 @@ export interface PtyPickDirectoryResult {
 }
 
 /**
+ * R->M (request). List the live PTY sessions
+ * (cosmos-dev-wake-reload-session-survival-v1, FR-005/FR-011). Carries NO field — the
+ * whole response is built in main from its live-session map. Typed as an empty record
+ * (mirroring `PtyPickDirectoryRequest`) so a future filter is an additive change.
+ */
+export type PtyListLiveRequest = Record<string, never>
+
+/**
+ * M->R (response). The set of `paneId`s with a live PTY session in main
+ * (cosmos-dev-wake-reload-session-survival-v1, FR-005/FR-011). Built entirely in main
+ * from its session map. NON-SECRET: renderer-minted paneIds ONLY — no cwd, sessionId,
+ * scrollback, or token.
+ */
+export interface PtyListLiveResult {
+  /** The paneIds that currently have a live `claude` process attached. */
+  paneIds: string[]
+}
+
+/**
  * R->M. Request a fresh `claude` session for one terminal tab (panel-tabs v1,
  * FR-026 — per-tab restart). Carries only the renderer-minted `paneId`.
  */
@@ -202,6 +232,17 @@ export interface PtyApi {
    * leaves `window.cosmos.pty.pickDirectory` as "not a function" (CLAUDE.md).
    */
   pickDirectory(): Promise<PtyPickDirectoryResult>
+  /**
+   * R->M, request/response. List the paneIds that currently have a live PTY session in
+   * main (cosmos-dev-wake-reload-session-survival-v1, FR-005/FR-011). The reloaded
+   * renderer calls this once on mount to reconcile its rehydrated tabs against main's
+   * surviving sessions (reattach vs. spawn vs. adopt). Resolves with `{ paneIds }`.
+   * NON-SECRET — paneIds only.
+   *
+   * NEW preload method — adding it requires a FULL `npm run dev` restart; HMR alone
+   * leaves `window.cosmos.pty.listLive` as "not a function" (CLAUDE.md).
+   */
+  listLive(): Promise<PtyListLiveResult>
   /** R->M. Send keyboard input to a tab's PTY (panel-tabs v1, FR-021). FR-004. */
   sendInput(payload: PtyInputPayload): void
   /** R->M. Notify a tab's PTY of new dimensions (panel-tabs v1, FR-021). FR-005. */

@@ -204,26 +204,34 @@ event.** This is a behavior contract, not an optimization:
   does NOT kill PTYs (the user wants the same live `claude` on wake). A live session keeps running
   across these events. cosmos must not introduce a wake/online/visibility respawn — it would
   needlessly destroy in-session state (context + the in-TUI auto-accept toggle).
-- **A renderer FULL RELOAD does intentionally `killAll()` the PTYs** (`did-start-navigation`
-  non-same-document → `killAll`), then the reloaded renderer re-mints tabs and `pty:start`s each
-  (FR-023 teardown, part of `session-resume-relaunch` orphan avoidance). This is correct for a
-  GENUINE user-driven reload (Cmd+R) — without it a reload orphans every `claude` + its MCP-server
-  children. **A reload is the ONLY navigation that may tear down live sessions, and only a genuine
-  one should.** Dev-only caveat (`terminal-session-unnecessary-restart-v1`): in `npm run dev` the
-  `@vite/client` HMR client issues a SPURIOUS full `location.reload()` when its dev-server WebSocket
-  reconnects after the host sleeps; that wake-reload wrongly triggers the same `killAll()`+respawn,
-  resetting the session and stacking startup banners (the restored scrollback's prior banner +
-  the fresh `--resume` claude's new banner). A packaged build (`loadFile`, no HMR client) never does
-  this — it is a **DEV-ONLY annoyance; the shipped app is unaffected.** A renderer-side guard that
-  overrode `location.reload` to swallow the reconnect-reload was tried and ROLLED BACK: in a real
-  Chromium/Electron renderer `window.location.reload` is non-configurable, so the override THROWS at
-  startup and white-screens the app (jsdom let it pass — a jsdom-green/runtime-broken trap). Vite
-  hard-codes the reload with no cancel hook and main cannot distinguish it from a genuine Cmd+R, so
-  there is no clean suppression seam. A real fix is **direction B** — make sessions SURVIVE a renderer
-  reload (stable paneIds across reload + a reattach handshake) instead of `killAll`+respawn — which is
-  feature-sized and DEFERRED to its own sdd; the genuine-reload teardown stays intact in both builds.
-- **Respawn happens ONLY for: a genuine user-driven reload's re-spawn, an explicit user restart, or
-  first launch / relaunch resume.** No automatic respawn on a lifecycle event.
+- **A renderer FULL RELOAD KEEPS live sessions alive and REATTACHES** — it does NOT kill them
+  (`cosmos-dev-wake-reload-session-survival-v1`). The `did-start-navigation` non-same-document
+  listener NO LONGER calls `ptyManager.killAll()`; the sessions stay running in main across the reload
+  and the reloaded renderer reattaches each surviving pane by its stable `paneId`. Three coordinated
+  pieces: (1) main stops killing PTYs on reload (only the four non-PTY teardown calls remain —
+  `fsExplorer.stopAll`, `uiBridge.cancelActive`, `agentRunner.dispose`, `transcriptWatcher.stop`);
+  (2) `PtyManager.start` is IDEMPOTENT — a `pty:start` re-issued for a `paneId` whose session is still
+  live REATTACHES (no kill + respawn), while `restart` explicitly kills-then-starts to force a fresh
+  spawn; (3) the reloaded Terminal panel queries `pty:listLive` and reconciles — a survivor tab
+  reattaches (re-subscribe `pty:data`/`pty:exit`, re-fit, push a resize → SIGWINCH → the claude TUI
+  repaints; best-effort, no main-side output buffer), a live pane missing from the (debounced) snapshot
+  is ADOPTED as a tab, and a restored-but-dead tab resumes via the existing autoStart/exit-banner path.
+  The renderer's `TerminalView` disposes the PTY ONLY on a GENUINE tab close (a panel-level
+  intentional-close guard) — a StrictMode double-invoke / rail switch / reload unmount does NOT dispose,
+  so the survivor persists (this also removed the pre-existing dev double-spawn on load). This fixes the
+  former DEV-ONLY wake-reload restart (Vite's HMR client hard-codes a `location.reload()` on WS
+  reconnect after sleep, which used to `killAll`+respawn — banner, lost auto-accept, stale scrollback)
+  AND improves a genuine Cmd+R in packaged builds. **Kill happens ONLY on a genuine quit/close**, never
+  on a reload — see the next bullet. (The rolled-back `location.reload`-override direction A must NOT be
+  re-proposed: `window.location.reload` is non-configurable in a real Chromium/Electron renderer, so an
+  override THROWS at startup and white-screens the app — jsdom let it pass, a jsdom-green/runtime-broken
+  trap.)
+- **Kill happens ONLY on a genuine quit/close.** `killAll()` on window `closed` (a reload does NOT fire
+  `closed` — the window survives), and `killAllSync()` on `window-all-closed`/`before-quit`/`will-quit`
+  (group SIGHUP → bounded grace → SIGKILL survivors). This is the load-bearing ZERO-orphans invariant
+  (`session-resume-relaunch-v3`) and is unchanged by the keep-alive-on-reload work.
+- **Respawn happens ONLY for: an explicit user restart, or first launch / relaunch resume.** No
+  automatic respawn on a lifecycle event, and no respawn on a reload (the session survives + reattaches).
 - **A respawn is always a NEW process, so in-session-only TUI state is unavoidably lost.** Auto-accept
   mode (the shift+tab toggle) lives in the running `claude` process and is exposed on no IPC/stream
   surface; per the two-channels invariant (§1) cosmos never scrapes or injects TUI state. So the

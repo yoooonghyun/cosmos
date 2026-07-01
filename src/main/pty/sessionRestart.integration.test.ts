@@ -113,11 +113,39 @@ function makeGroupKiller(): ProcessGroupKiller {
 }
 
 /**
+ * cosmos-dev-wake-reload-session-survival-v1: a recording group-killer that EXPOSES the signals it
+ * sent, so the quit-path test can assert the ZERO-orphans group teardown (SIGHUP → SIGKILL
+ * escalation). `stubborn:true` models an MCP child that ignores SIGHUP (still alive at the grace
+ * deadline) so the SIGKILL escalation fires and reaps it.
+ */
+function makeRecordingGroupKiller(stubborn = false): {
+  groupKiller: ProcessGroupKiller
+  signals: Array<{ pid: number; signal: NodeJS.Signals }>
+} {
+  const signals: Array<{ pid: number; signal: NodeJS.Signals }> = []
+  const hupped = new Set<number>()
+  return {
+    signals,
+    groupKiller: {
+      killGroup: (pid, signal) => {
+        signals.push({ pid, signal })
+        if (signal === 'SIGHUP') hupped.add(pid)
+      },
+      isGroupAlive: (pid) => (stubborn ? true : !hupped.has(pid))
+    }
+  }
+}
+
+/**
  * A harness reproducing the index.ts pty:start / pty:restart wiring against the REAL PtyManager,
  * resolver, and backoff planner. `now` is an injectable clock so a session can be aged past the
  * 4000ms resume-failure window deterministically.
  */
-function makeHarness(opts?: { now?: () => number; lockEnv?: SessionLockEnv }) {
+function makeHarness(opts?: {
+  now?: () => number
+  lockEnv?: SessionLockEnv
+  groupKiller?: ProcessGroupKiller
+}) {
   const resumeMap = new Map<string, PaneSessionRecord>()
   const sessionMap = new Map<string, PaneSessionRecord>()
   const exits: PtyExitPayload[] = []
@@ -137,7 +165,7 @@ function makeHarness(opts?: { now?: () => number; lockEnv?: SessionLockEnv }) {
     sinks,
     { cwd: SANDBOX, command: PRESENT_CMD, spawn: (c, a, o) => pty.spawn(c, a, o) },
     opts?.now ?? Date.now,
-    makeGroupKiller()
+    opts?.groupKiller ?? makeGroupKiller()
   )
 
   // Mirror index.ts paneSpawnFor (resolve against the live maps; explicit-restart flag threaded).
@@ -325,5 +353,67 @@ describe('terminal session restart/recovery lifecycle (terminal-session-unnecess
     expect(retrySpawn.args).toEqual(['--resume', 'sess-original']) // SAME id, never minted fresh
     expect(h.mint).not.toHaveBeenCalled()
     expect(h.sessionMap.get('p1')).toEqual({ sessionId: 'sess-original', cwd: CWD })
+  })
+})
+
+/* ------------------------------------------------------------------------- *
+ * cosmos-dev-wake-reload-session-survival-v1 — a renderer reload KEEPS live sessions
+ * alive (main no longer kills on `did-start-navigation`) and the reloaded renderer
+ * REATTACHES via an idempotent `pty:start`; a genuine QUIT still tears down every
+ * session group with ZERO orphans. The LOAD-BEARING pairing: the reload path must not
+ * kill, but `killAllSync` on quit must STILL reap everything (a regression on either
+ * side reintroduces the wake-reload restart OR orphaned claude/MCP processes).
+ * ------------------------------------------------------------------------- */
+describe('dev wake-reload session survival (cosmos-dev-wake-reload-session-survival-v1)', () => {
+  it('RELOAD KEEPS the session alive: main does NOT killAll, and the re-issued pty:start reattaches (no kill, no respawn)', () => {
+    const h = makeHarness()
+    const CWD = '/Users/me/work'
+
+    // A restored tab resumes on first mount.
+    h.resumeMap.set('p1', { sessionId: 'sess-original', cwd: CWD })
+    h.ptyStart('p1')
+    const live = spawned[0]
+    expect(h.manager.isRunning('p1')).toBe(true)
+
+    // THE RELOAD: main's did-start-navigation listener NO LONGER calls ptyManager.killAll()
+    // (D1 — only the four non-PTY teardown calls remain, which do not touch the manager). So a
+    // reload does nothing to the live session. Reproduce that by asserting the session is untouched
+    // (there is no manager call to make on reload) and the pane is still live afterward.
+    expect(live.killed).toBe(false)
+    expect(h.manager.isRunning('p1')).toBe(true)
+
+    // The reloaded renderer re-mounts its tabs and re-issues pty:start for the SURVIVOR (reattach).
+    // Idempotent start ⇒ NO kill + NO respawn: the SAME process stays attached (no banner, no lost
+    // auto-accept, no stale scrollback — the whole point of the fix).
+    h.ptyStart('p1')
+    expect(live.killed).toBe(false)
+    expect(spawned).toHaveLength(1) // never respawned across the reload
+    expect(h.manager.isRunning('p1')).toBe(true)
+  })
+
+  it('QUIT PATH UNCHANGED (LOAD-BEARING): killAllSync group-tears-down every survivor with SIGKILL escalation and empties the map — ZERO orphans', () => {
+    // A stubborn group (an MCP child ignoring SIGHUP) forces the SIGKILL escalation, proving the
+    // quit path still reaps a group that survives the grace. A regression here reintroduces orphans.
+    const { groupKiller, signals } = makeRecordingGroupKiller(true)
+    const h = makeHarness({ groupKiller })
+
+    h.ptyStart('p1', '/work/a')
+    h.ptyStart('p2', '/work/b')
+    // Both survived a reload (never killed); now the user QUITS → will-quit/before-quit → killAllSync.
+    expect(h.manager.isRunning('p1')).toBe(true)
+    expect(h.manager.isRunning('p2')).toBe(true)
+
+    h.manager.killAllSync()
+
+    // Every session's GROUP got SIGHUP then, because it ignored it, SIGKILL — no orphaned claude or
+    // out/main/mcp/*Server.js survives a clean quit (session-resume-relaunch-v3 invariant, preserved).
+    for (const proc of spawned) {
+      expect(signals).toContainEqual({ pid: proc.pid, signal: 'SIGHUP' })
+      expect(signals).toContainEqual({ pid: proc.pid, signal: 'SIGKILL' })
+    }
+    // The live map is empty after the quit teardown.
+    expect(h.manager.isRunning('p1')).toBe(false)
+    expect(h.manager.isRunning('p2')).toBe(false)
+    expect(h.manager.listLive()).toEqual([])
   })
 })

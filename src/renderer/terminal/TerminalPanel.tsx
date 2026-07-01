@@ -41,6 +41,7 @@ import { resolveCloseTarget, resolveTabNavTarget } from '../tabs/closeTabRouting
 import { mapTerminalKey } from './terminalKeymap'
 import { exitRecoveryHint, formatExit } from './terminalExit'
 import { shouldDriveResize } from './terminalResize'
+import { planReattach } from './terminalReattach'
 import {
   isFolderOpen,
   nextTerminalIndex,
@@ -96,7 +97,8 @@ export function TerminalView({
   onOpenFilesChange,
   onViewerStateChange,
   onLiveChange,
-  registerSerializer
+  registerSerializer,
+  isClosing
 }: {
   paneId: string
   active: boolean
@@ -152,6 +154,17 @@ export function TerminalView({
   onLiveChange?: (paneId: string, live: boolean) => void
   /** Register this pane's scrollback serializer with the panel; returns an unregister fn. */
   registerSerializer: (paneId: string, serialize: () => string) => () => void
+  /**
+   * cosmos-dev-wake-reload-session-survival-v1 (D4/C1): the StrictMode/reload DISPOSE GUARD. The
+   * unmount cleanup disposes (kills) this pane's PTY ONLY when the panel reports this paneId is being
+   * INTENTIONALLY closed (a genuine tab close). A plain unmount — React StrictMode's mount→cleanup→
+   * remount double-invoke, a rail switch, or a renderer reload — is NOT an intentional close, so it
+   * must NOT dispose: the session stays alive and the fresh mount REATTACHES (main's idempotent
+   * `pty:start`). Without this guard the reload's fresh mount would mount→cleanup(dispose→kill)→remount
+   * and kill the very survivor the fix keeps alive. Optional: when absent (a standalone render) the
+   * legacy "dispose on unmount" behavior applies. A `mirror` view never disposes regardless.
+   */
+  isClosing?: (paneId: string) => boolean
 }): React.JSX.Element {
   const containerRef = useRef<HTMLDivElement | null>(null)
   const rowRef = useRef<HTMLDivElement | null>(null)
@@ -378,11 +391,16 @@ export function TerminalView({
       term.dispose()
       termRef.current = null
       fitRef.current = null
-      // FR-023: dispose this pane's PTY when its tab unmounts (tab closed).
+      // FR-023: dispose this pane's PTY when its tab is genuinely CLOSED.
       // cosmos-terminal-favorite-multiplex-v1 (FR-005, the dispose-danger): a MIRROR must NOT dispose
       // — it unmounts on every Home tab switch, and disposing would kill the shared PTY (and the
       // source terminal). Only the owning source view disposes.
-      if (!mirror) {
+      // cosmos-dev-wake-reload-session-survival-v1 (D4/C1, the reload/StrictMode guard): dispose ONLY
+      // on an INTENTIONAL close (the panel marked this paneId as closing). A plain unmount — StrictMode
+      // double-invoke, rail switch, or renderer reload — is NOT an intentional close: skip dispose so
+      // the live session survives and the fresh mount reattaches (main's idempotent `pty:start`).
+      // Reads the guard LAZILY at cleanup time so a genuine close marked just before unmount is seen.
+      if (!mirror && (isClosing ? isClosing(paneId) : true)) {
         window.cosmos.pty.dispose(paneId)
       }
     }
@@ -690,6 +708,15 @@ export function TerminalPanel({ active }: { active: boolean }): React.JSX.Elemen
     }
   }, [])
 
+  // cosmos-dev-wake-reload-session-survival-v1 (D4/C1): paneIds the user is INTENTIONALLY closing.
+  // Each TerminalView's unmount cleanup disposes (kills) its PTY ONLY when its id is in this set — a
+  // genuine tab close marks it here just before removing the tab. A plain unmount (React StrictMode
+  // double-invoke, rail switch, or renderer reload) is NOT marked, so its session survives and the
+  // fresh mount reattaches (main's idempotent `pty:start`). This is the necessary partner to main no
+  // longer killing PTYs on reload — and it also removes the pre-existing dev double-spawn on load.
+  const closingPaneIdsRef = useRef<Set<string>>(new Set())
+  const isClosing = useCallback((paneId: string): boolean => closingPaneIdsRef.current.has(paneId), [])
+
   // FR-024: always ≥1 terminal. Seed from the restored snapshot, else one default tab.
   // The counter starts AT the seed index — the seed must NOT advance it (StrictMode
   // double-invokes a `useState`/`useRef` initializer; a ref mutation there would skip
@@ -726,6 +753,48 @@ export function TerminalPanel({ active }: { active: boolean }): React.JSX.Elemen
     return { tabs: [first], activeTabId: first.id }
   })
   const { tabs, activeTabId, open, close, setActive, update } = usePanelTabs<TerminalTab>(initial)
+
+  // cosmos-dev-wake-reload-session-survival-v1 (D4/FR-005/FR-011/OQ-2): reconcile the rehydrated tabs
+  // against main's LIVE PTY sessions ONCE on mount (the reattach handshake). Main keeps sessions alive
+  // across a reload, so:
+  //   - A survivor tab (its id was in the restored snapshot) already `autoStart`s and REATTACHES via
+  //     main's idempotent `pty:start` — no respawn, no adoption needed.
+  //   - A live paneId with NO hydrated tab (minted AFTER the last debounced snapshot save) is ADOPTED
+  //     as a new tab here, so its surviving session is never left orphaned (FR-011).
+  //   - `liveSet` also drives `autoStart` below so an adopted tab attaches immediately.
+  // Best-effort: if `listLive` is missing (preload not restarted) or rejects, we skip reconciliation —
+  // survivors in the snapshot still reattach via their existing autoStart.
+  const [liveSet, setLiveSet] = useState<ReadonlySet<string>>(() => new Set())
+  useEffect(() => {
+    let cancelled = false
+    void (async () => {
+      try {
+        const { paneIds } = await window.cosmos.pty.listLive()
+        if (cancelled) {
+          return
+        }
+        setLiveSet(new Set(paneIds))
+        const { adopt } = planReattach(
+          initial.tabs.map((t) => t.id),
+          paneIds
+        )
+        for (const paneId of adopt) {
+          const index = nextTerminalIndex(everOpened.current)
+          everOpened.current = index
+          // Adopt the live pane as a tab bound to its EXISTING paneId (never a fresh id) so its
+          // surviving session reattaches. Deterministic glyph from the id (no Math.random side effect).
+          open({ id: paneId, label: terminalLabel(index), iconId: tabIconIdFromKey(paneId) })
+        }
+      } catch {
+        // listLive unavailable / rejected → skip reconcile (survivors still reattach via autoStart).
+      }
+    })()
+    return () => {
+      cancelled = true
+    }
+    // Mount-only: reconcile against the rehydrated set exactly once.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   // Build + report the terminal draft (FR-007; persist-workdir-open-files-v1 FR-003). Scrollback
   // is captured lazily via each pane's registered serializer; the per-pane open-files map supplies
@@ -786,6 +855,19 @@ export function TerminalPanel({ active }: { active: boolean }): React.JSX.Elemen
     })
   }, [])
 
+  // FR-023 / cosmos-dev-wake-reload-session-survival-v1 (D4/C1): a genuine tab close. MARK the paneId
+  // as intentionally closing BEFORE removing the tab so the view's unmount cleanup disposes its PTY
+  // (a plain StrictMode/reload/rail-switch unmount does NOT mark → the session survives + reattaches).
+  // Every genuine-close entry point routes through here: the strip `X`, the tree Delete command, and
+  // the Ctrl/Cmd+W shortcut.
+  const handleClose = useCallback(
+    (tabId: string): void => {
+      closingPaneIdsRef.current.add(tabId)
+      close(tabId)
+    },
+    [close]
+  )
+
   // cosmos-panel-tab-list-v1 (FR-005/FR-008): publish the Terminal panel's live tab list into the
   // App-root PanelTabsProvider so the Cosmos tree's "Terminal" group reflects every open terminal
   // tab (its label, e.g. "Terminal 2", + the active id), live. Non-secret { id, label } only — no
@@ -822,19 +904,16 @@ export function TerminalPanel({ active }: { active: boolean }): React.JSX.Elemen
   const tabCommands = useMemo<TabCommands>(
     () => ({
       onRename: (id, label) => update(id, { label, renamed: true }),
-      onClose: (id) => close(id)
+      // C1: route the tree Delete through handleClose so it marks the intentional close (disposes).
+      onClose: (id) => handleClose(id)
     }),
-    [update, close]
+    [update, handleClose]
   )
   usePublishTabCommands('terminal', tabCommands)
 
   const handleNewTab = (): void => {
     // FR-022: mint a new pane + open a tab (its TerminalView issues pty:start).
     open(mintTab())
-  }
-
-  const handleClose = (tabId: string): void => {
-    close(tabId)
   }
 
   // FR-024: if the collection ever empties (closed the last terminal), open a fresh
@@ -955,13 +1034,17 @@ export function TerminalPanel({ active }: { active: boolean }): React.JSX.Elemen
             key={t.id}
             paneId={t.id}
             active={t.id === activeTabId}
-            autoStart={restoredTabIdsRef.current.has(t.id)}
+            // cosmos-dev-wake-reload-session-survival-v1 (D4): autoStart (go live + reattach) for a
+            // RESTORED tab OR a SURVIVOR/adopted live pane; a freshly-minted tab (neither) defers to
+            // the [Open] picker. A live pane's re-issued pty:start reattaches (main idempotent).
+            autoStart={restoredTabIdsRef.current.has(t.id) || liveSet.has(t.id)}
             initialScrollback={restoredScrollbackRef.current.get(t.id)}
             restoredOpenFiles={restoredOpenFilesRef.current.get(t.id)}
             onOpenFilesChange={handleOpenFilesChange}
             onViewerStateChange={handleViewerStateChange}
             onLiveChange={handleLiveChange}
             registerSerializer={registerSerializer}
+            isClosing={isClosing}
           />
         ))}
       </div>

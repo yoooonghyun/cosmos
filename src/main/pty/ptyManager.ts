@@ -285,6 +285,16 @@ export class PtyManager {
   }
 
   /**
+   * The paneIds that CURRENTLY have a live PTY session
+   * (cosmos-dev-wake-reload-session-survival-v1, D3/FR-005). Map presence ⇒ live (a self-exit or
+   * `kill` deletes the entry). The reloaded renderer reads this to reconcile its rehydrated tabs
+   * against main's survivors (reattach vs. spawn vs. adopt). NON-SECRET — paneIds only.
+   */
+  listLive(): string[] {
+    return [...this.sessions.keys()]
+  }
+
+  /**
    * Spawn the `claude` process for `paneId` (FR-001, FR-009; panel-tabs v1
    * FR-021/FR-022). If a process is already running for this pane it is killed
    * first so restart reuses the same tab (FR-008/FR-026) — other panes are never
@@ -294,15 +304,25 @@ export class PtyManager {
   start(paneId: string, pane: PaneSpawnOptions = {}): void {
     const existing = this.sessions.get(paneId)
     if (existing) {
-      this.kill(paneId)
+      // cosmos-dev-wake-reload-session-survival-v1 (D2/FR-004): map presence ⇒ a STILL-LIVE session
+      // (a self-exit deletes the entry in `onExit`; `kill` deletes before teardown). A `pty:start`
+      // re-issued for a live pane means a renderer reload / React StrictMode remount is REATTACHING —
+      // it must NOT kill + respawn. That kill+respawn IS the visible "restart" the fix eliminates
+      // (startup banner, lost in-TUI auto-accept, stale scrollback replacing the live screen). Leave
+      // the process running and return; the renderer re-subscribes to `pty:data`/`pty:exit` and nudges
+      // a resize (SIGWINCH → the claude TUI repaints). Idempotent. A GENUINE respawn goes through
+      // `restart`, which explicitly kills first.
+      return
     }
 
     const command = this.options.command ?? 'claude'
     // Base args (e.g. `--mcp-config <path>`) + this pane's resume/session flags (D2).
     const args = [...(this.options.args ?? []), ...(pane.args ?? [])]
     const cwd = pane.cwd ?? this.options.cwd
-    const cols = existing?.cols ?? this.defaultCols
-    const rows = existing?.rows ?? this.defaultRows
+    // No live session reaches here (a live one returns early above — idempotent reattach), so a fresh
+    // spawn always starts at the manager defaults; a subsequent `pty:resize` sets the real size.
+    const cols = this.defaultCols
+    const rows = this.defaultRows
     const resume = pane.resume === true
     // session-resume-relaunch-v1: the id this pane carries (`--resume <id>` or `--session-id <id>`)
     // so an "already in use" rejection knows which id to free. Either flag is immediately followed
@@ -426,10 +446,16 @@ export class PtyManager {
    * explorer, which roots on this cwd — to the manager-default sandbox dir
    * (terminal-restart-cwd-regression). A restart is always a FRESH spawn (no `--resume`),
    * so it never re-arms the resume-failure window. Other panes are unaffected. The pane's
-   * cwd must be read BEFORE `start` kills the existing session (which clears it).
+   * cwd must be read BEFORE the kill (which clears the session record).
+   *
+   * cosmos-dev-wake-reload-session-survival-v1 (D2): `start` is now IDEMPOTENT (a re-issued start
+   * for a live pane reattaches, no respawn), so `restart` must EXPLICITLY `kill` first — otherwise a
+   * restart on a live pane would be a silent no-op. Kill removes the map entry, so the subsequent
+   * `start` sees no live session and spawns fresh.
    */
   restart(paneId: string): void {
     const cwd = this.sessions.get(paneId)?.cwd
+    this.kill(paneId)
     this.start(paneId, cwd !== undefined ? { cwd } : {})
   }
 

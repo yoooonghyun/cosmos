@@ -41,6 +41,7 @@ import {
   type PtyExitPayload,
   type PtyInputPayload,
   type PtyPickDirectoryResult,
+  type PtyListLiveResult,
   type PtyResizePayload,
   type ClientConfigClearPayload,
   type ClientConfigSavePayload,
@@ -98,6 +99,12 @@ const ptyApi: PtyApi = {
   // method — requires a full `npm run dev` restart; HMR won't expose it live.
   pickDirectory(): Promise<PtyPickDirectoryResult> {
     return ipcRenderer.invoke(PtyChannel.PickDirectory)
+  },
+  // cosmos-dev-wake-reload-session-survival-v1 (FR-005/FR-011): list the live PTY sessions so the
+  // reloaded renderer can reconcile its rehydrated tabs against main's survivors. NON-SECRET (paneIds
+  // only). NEW preload method — requires a full `npm run dev` restart; HMR won't expose it live.
+  listLive(): Promise<PtyListLiveResult> {
+    return ipcRenderer.invoke(PtyChannel.ListLive)
   },
   sendInput(payload: PtyInputPayload): void {
     ipcRenderer.send(PtyChannel.Input, payload)

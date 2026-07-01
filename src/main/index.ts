@@ -53,6 +53,7 @@ import {
   type ConversationResult,
   type ClientConfigSaveResult,
   type PtyPickDirectoryResult,
+  type PtyListLiveResult,
   type SessionSnapshot,
   type UiDataModelPayload,
   type UiRenderPayload,
@@ -1157,6 +1158,16 @@ function registerIpcHandlers(): void {
       // Treat any dialog failure as a cancel — no spawn, no error surfaced (FR-006).
       return { path: null }
     }
+  })
+
+  // cosmos-dev-wake-reload-session-survival-v1 (D3/FR-005/FR-011): list the paneIds with a live PTY
+  // session so the reloaded renderer can reconcile its rehydrated tabs against main's survivors
+  // (reattach a survivor, adopt a live pane whose tab wasn't in the debounced snapshot). The whole
+  // response is built in main from its session map; the request carries no field (ignored). NON-SECRET
+  // — renderer-minted paneIds only, no cwd/sessionId/scrollback/token. Request/response
+  // (`invoke`/`handle`), mirroring PickDirectory.
+  ipcMain.handle(PtyChannel.ListLive, (): PtyListLiveResult => {
+    return { paneIds: ptyManager?.listLive() ?? [] }
   })
 
   // FR-004 (panel-tabs v1 FR-021): forward keyboard input to the addressed pane
@@ -2462,14 +2473,19 @@ function createWindow(): void {
     mainWindow?.show()
   })
 
-  // Edge case: renderer reload MUST NOT orphan any PTY. Kill ALL pane sessions
-  // (panel-tabs v1, FR-023 teardown); the reloaded renderer re-mints its tabs and
-  // issues fresh `pty:start` calls per pane (no auto-start in main).
+  // cosmos-dev-wake-reload-session-survival-v1 (D1/FR-001): a renderer reload MUST NOT kill live PTY
+  // sessions. Previously this listener called `ptyManager.killAll()` so every pane's `claude`
+  // respawned after the reload — the visible dev "restart" (startup banner, lost in-TUI auto-accept,
+  // stale scrollback) on every Vite wake-reload / Cmd+R. That single call is REMOVED: sessions stay
+  // alive across the reload and the reloaded renderer REATTACHES by paneId (idempotent `pty:start` +
+  // the `pty:listLive` reconcile). Kill happens ONLY on a genuine quit/close (`killAll` on window
+  // `closed`, `killAllSync` on `window-all-closed`/`before-quit`/`will-quit` — all UNCHANGED, so the
+  // ZERO-orphans invariant holds). A reload does NOT fire `closed` (the window survives). The other
+  // four teardown calls below are NOT PTYs and stay (their state must reset across a reload).
   mainWindow.webContents.on('did-start-navigation', (event) => {
     if (event.isSameDocument) {
       return
     }
-    ptyManager?.killAll()
     // terminal-file-explorer-v1 (FR-016/SC-006): a reload re-mounts every explorer; release
     // ALL fs watchers so none leaks across the navigation (the renderer re-issues watchStart).
     fsExplorer?.stopAll()
