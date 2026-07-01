@@ -98,6 +98,22 @@ export interface ViewerEditorOptions {
   renderWhitespace: 'none'
   fontFamily: string
   fontSize: number
+  /**
+   * monaco-worker-missing-method-v1: the three editor features that delegate their compute to a
+   * LANGUAGE worker (json/css/html) via `getWorker(_, label)`. Our `MonacoEnvironment.getWorker`
+   * returns the BASE editor worker for EVERY label (read-only viewer, one small worker — no
+   * ts/json/css/html language workers), and the base worker does NOT implement `getFoldingRanges`
+   * / `findDocumentLinks` / `findDocumentSymbols`. So when the full `monaco-editor` barrel's
+   * json/css/html modes register their folding / link / document-symbol providers and these
+   * DEFAULT-ON features fire them on a matching model, the provider calls the base worker for a
+   * method it lacks → "Missing requestHandler or method: …" console spam. A read-only viewer needs
+   * none of code-folding, link detection, or the sticky-scroll outline, so we turn them OFF at the
+   * source (never asking the worker) rather than shipping the heavier language workers. Syntax
+   * highlighting is UNAFFECTED — monarch tokenizers run on the main thread, not the worker.
+   */
+  folding: boolean
+  links: boolean
+  stickyScroll: { enabled: boolean }
 }
 
 /** Build the viewer's editor options for a file at `relPath`. Pure. */
@@ -114,6 +130,10 @@ export function buildViewerEditorOptions(relPath: string): ViewerEditorOptions {
     automaticLayout: true,
     renderWhitespace: 'none',
     fontFamily: 'Menlo, Monaco, "SF Mono", "Courier New", monospace',
-    fontSize: 13
+    fontSize: 13,
+    // monaco-worker-missing-method-v1: disable the worker-backed language features (see interface).
+    folding: false,
+    links: false,
+    stickyScroll: { enabled: false }
   }
 }

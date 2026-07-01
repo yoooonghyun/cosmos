@@ -62,4 +62,22 @@ describe('buildViewerEditorOptions (file-viewer-color-wrap-v1, #94 fix 2)', () =
     // Unknown extension → the safe plaintext default (viewer still renders).
     expect(buildViewerEditorOptions('LICENSE').language).toBe('plaintext')
   })
+
+  it('disables the worker-backed language features (folding, links, sticky-scroll outline) — monaco-worker-missing-method-v1', () => {
+    // These three features delegate to a LANGUAGE worker (getFoldingRanges / findDocumentLinks /
+    // findDocumentSymbols). Our read-only viewer serves the BASE editor worker for every label, so
+    // leaving them at Monaco's DEFAULT-ON would fire provider calls the base worker can't answer →
+    // "Missing requestHandler or method: …" spam when opening a json/css/html file. They MUST be off.
+    const opts = buildViewerEditorOptions('config.json')
+    expect(opts.folding).toBe(false)
+    expect(opts.links).toBe(false)
+    expect(opts.stickyScroll.enabled).toBe(false)
+  })
+
+  it('keeps syntax highlighting on — the language id is still resolved (main-thread monarch)', () => {
+    // The fix must NOT regress highlighting: monarch tokenizers run on the main thread, so the
+    // language stays set even though the worker-backed features above are disabled.
+    expect(buildViewerEditorOptions('style.css').language).toBe('css')
+    expect(buildViewerEditorOptions('page.html').language).toBe('html')
+  })
 })

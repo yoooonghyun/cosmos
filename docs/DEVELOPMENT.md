@@ -425,6 +425,24 @@ detail.
     (`useFileExplorerShare.dom.test.tsx`) is mandatory and locks it. **READ-ONLY (OQ-1):** the editor
     stays `readOnly`/`domReadOnly`; no `fs:write`/edit/save path is introduced — the shared model is
     content-sync only (the seam a future editability feature would build on, not that feature).
+- **GOTCHA — the read-only Monaco viewer serves only the BASE editor worker, so its worker-backed
+  language features MUST be disabled (monaco-worker-missing-method-v1).** `monacoSetup.ts` wires
+  `MonacoEnvironment.getWorker` to return the base `editor.worker` for EVERY label (one small worker
+  by design — no ts/json/css/html language workers). But the full `monaco-editor` barrel registers
+  the json/css/html language MODES, whose folding / link / document-symbol PROVIDERS delegate their
+  compute to a LANGUAGE worker. The base worker does NOT implement `getFoldingRanges` /
+  `findDocumentLinks` / `findDocumentSymbols` (they live in `vs/language/common/lspLanguageFeatures.js`),
+  so when Monaco's DEFAULT-ON `folding` / `links` / `stickyScroll` features query those providers on a
+  json/css/html/scss/less model, the call hits the base worker → "Missing requestHandler or method: …"
+  console spam. FIX: `buildViewerEditorOptions` (`monacoTheme.ts`) sets `folding:false`, `links:false`,
+  `stickyScroll:{enabled:false}` — disable the CONSUMER features so the providers are never queried.
+  Disable the consumers, NOT the providers: Monaco queries + MERGES all registered document-symbol
+  providers, so a no-op provider would NOT stop the worker-backed one; only turning off sticky scroll
+  prevents `OutlineModel.create`. Syntax highlighting is UNAFFECTED (monarch tokenizers run on the main
+  thread; the language id is still resolved) — never drop the language to `plaintext` to fix this, that
+  needlessly kills highlighting. If a read-only feature ever genuinely needs folding/links/outline, add
+  the real language workers (grow the bundle) rather than re-enabling the features against the base
+  worker. Regression: `monacoTheme.test.ts` asserts the three disabled flags + language still resolved.
 - **GOTCHA — the terminal-favorite mirror MUST `React.lazy`-import `TerminalView`.** `TerminalPanel.tsx`
   statically imports the Monaco-backed file explorer (the `../fileExplorer` barrel), which **crashes
   jsdom on import** (`queryCommandSupported`). Importing `TerminalView` eagerly from
