@@ -16,6 +16,14 @@ For the authoritative design see `docs/ARCHITECTURE.md`.
 
 ## Next
 
+- [ ] Manual GUI verification of the **terminal tab delete persistence fix**
+  (bug `terminal-tab-delete-persists-restart-v1`) via a full `npm run dev` restart: delete a terminal
+  tab, then fully QUIT + relaunch cosmos — the deleted tab must stay gone (previously it resurrected
+  because the deletion sat in the 600ms debounce and the fire-and-forget teardown-flush IPC was
+  dropped on a prompt quit; now a genuine close persists eagerly via `registry.flush()`). Covered at
+  the jsdom layer by `TerminalTabCloseEagerSave.dom.test.tsx` (TERM-CLOSE-EAGER-SAVE-01); the
+  quit-timing itself is the part only a human restart can confirm.
+
 - [ ] Manual GUI verification (full `npm run dev` restart — session persistence touched) of the
   **per-tab random "cosmos" glyph** (`cosmos-random-tab-icons-v1`): opening new tabs across Jira/
   Slack/Confluence/Calendar + Terminal shows a VARIED leading space glyph per tab (terminal tab now

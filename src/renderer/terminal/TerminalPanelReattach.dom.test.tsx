@@ -71,7 +71,11 @@ const restored: { tabs: Array<{ id: string; label: string }>; activeTabId: strin
 }
 vi.mock('../session/SessionProvider', () => ({
   useRestoredTerminalPanel: () => restored,
-  useReportPanel: () => () => {}
+  useReportPanel: () => () => {},
+  // terminal-tab-delete-persists-restart-v1: TerminalPanel now calls useSessionRegistry()
+  // for the close-flush effect. No tabs are closed in these tests so flush() is never
+  // invoked, but the call itself must not throw (undefined is not a function).
+  useSessionRegistry: () => ({ flush: vi.fn() })
 }))
 
 import { TerminalPanel } from './TerminalPanel'

@@ -368,6 +368,19 @@ detail.
   close** (a panel-level intentional-close ref set, marked by every close entry point — the strip `X`,
   the tree Delete, and Ctrl/Cmd+W); a plain unmount (StrictMode double-invoke / rail switch / reload)
   does NOT dispose, so the session survives + reattaches.
+- **A structural session change made just before quit must be persisted EAGERLY, not on the debounce
+  (terminal-tab-delete-persists-restart-v1).** `SessionRegistry.report` trailing-debounces the save
+  by `SAVE_DEBOUNCE_MS` (600ms), and the teardown flush (`SessionProvider` `pagehide`/`beforeunload`
+  → `registry.flush()` → `saveNow`) is a FIRE-AND-FORGET `session:save` IPC that is NOT guaranteed to
+  reach main before a prompt quit exits the process. So a change inside the debounce window (e.g. a
+  terminal tab DELETE) can be lost, restoring the pre-change snapshot — a deleted tab reappears. The
+  fix pattern (same as favorites-lost-on-restart-v1's `setFavorites`→`saveNow`): route the mutation
+  through an EAGER `registry.flush()` so its IPC is sent during normal operation. `TerminalPanel`'s
+  `handleClose` sets a `pendingCloseFlushRef`; an effect declared AFTER the report effect (so it runs
+  once the post-close draft is in the registry's contributions) flushes when the flag is set — only on
+  a genuine close, so opens/renames/switches keep their debounce. NB: the adopt path (`planReattach`)
+  is NOT the resurrection vector — `pty:dispose`→`ptyManager.kill` removes the pane from `listLive`, so
+  a deleted pane is never re-adopted; this is purely a save-timing defect.
 - **A FRESH terminal tab defers its spawn until a directory is picked (terminal-open-directory-
   picker-v1).** A new tab mounts in an `awaiting` phase showing an `[Open]` empty state and does
   NOT auto-`pty:start`; clicking `[Open]` calls `window.cosmos.pty.pickDirectory()` →

@@ -55,7 +55,7 @@ import {
   type LivePanelTabs,
   type TabCommands
 } from '../panelTabs'
-import { useReportPanel, useRestoredTerminalPanel } from '../session/SessionProvider'
+import { useReportPanel, useRestoredTerminalPanel, useSessionRegistry } from '../session/SessionProvider'
 import { buildTerminalDraft, capScrollback, hydrateTerminalTabs } from '../session/sessionSnapshot'
 import { terminalThemeFromTokens } from './terminalTheme'
 import './TerminalPanel.css'
@@ -669,6 +669,11 @@ export function TerminalPanel({ active }: { active: boolean }): React.JSX.Elemen
   // session). Read once; the lazy initializers below seed from it.
   const restored = useRestoredTerminalPanel()
   const report = useReportPanel()
+  // terminal-tab-delete-persists-restart-v1: the shared save coordinator, used to persist a tab
+  // CLOSE eagerly (see `handleClose` + the close-flush effect below) — the debounced save + the
+  // teardown flush's fire-and-forget IPC are both unreliable on a prompt quit, so a deletion made
+  // just before quitting would otherwise never reach disk and the tab would resurrect on relaunch.
+  const registry = useSessionRegistry()
 
   // Restored scrollback by paneId, so each TerminalView pre-writes its history. Read
   // once into a ref; consumed by render and never re-seeded (a re-render must not
@@ -716,6 +721,14 @@ export function TerminalPanel({ active }: { active: boolean }): React.JSX.Elemen
   // longer killing PTYs on reload — and it also removes the pre-existing dev double-spawn on load.
   const closingPaneIdsRef = useRef<Set<string>>(new Set())
   const isClosing = useCallback((paneId: string): boolean => closingPaneIdsRef.current.has(paneId), [])
+
+  // terminal-tab-delete-persists-restart-v1: set by `handleClose` (a genuine tab close) so the
+  // close-flush effect below persists the deletion EAGERLY once the post-close draft has been
+  // reported. Without an eager save the deletion sits in the 600ms debounce window and, on a
+  // prompt quit, the teardown flush's fire-and-forget `session:save` IPC is not guaranteed to reach
+  // main before the process exits — so the pre-delete snapshot (still listing the tab) is what
+  // restores and the tab reappears. Same failure class + fix pattern as favorites-lost-on-restart-v1.
+  const pendingCloseFlushRef = useRef(false)
 
   // FR-024: always ≥1 terminal. Seed from the restored snapshot, else one default tab.
   // The counter starts AT the seed index — the seed must NOT advance it (StrictMode
@@ -834,6 +847,21 @@ export function TerminalPanel({ active }: { active: boolean }): React.JSX.Elemen
     reportTerminal({ tabs, activeTabId })
   }, [tabs, activeTabId, reportTerminal])
 
+  // terminal-tab-delete-persists-restart-v1: after a genuine tab CLOSE, persist the deletion EAGERLY.
+  // Declared AFTER the report effect above so it runs SECOND on the close render — the post-close
+  // draft is already in the registry's contributions, and `flush()` sends the `session:save` IPC NOW
+  // (during normal operation) instead of leaving it in the 600ms debounce. Without this the deletion
+  // only ever rode the debounce + the teardown flush, whose fire-and-forget IPC is unreliable on a
+  // prompt quit, so the pre-delete snapshot restored and the tab reappeared (same class + fix as
+  // favorites-lost-on-restart-v1). Only fires on a close (the flag is set solely by `handleClose`),
+  // so opens/renames/switches keep their debounce.
+  useEffect(() => {
+    if (pendingCloseFlushRef.current) {
+      pendingCloseFlushRef.current = false
+      registry.flush()
+    }
+  }, [tabs, registry])
+
   // cosmos-terminal-favorite-multiplex-v1 (FR-009/FR-014): which panes are LIVE (their PTY spawned),
   // reported by each owning TerminalView via `handleLiveChange`. STATE (not a ref) so the publish
   // memo re-runs when a pane goes live ⇒ its `serialize` seed accessor is published, flipping a Home
@@ -863,6 +891,10 @@ export function TerminalPanel({ active }: { active: boolean }): React.JSX.Elemen
   const handleClose = useCallback(
     (tabId: string): void => {
       closingPaneIdsRef.current.add(tabId)
+      // terminal-tab-delete-persists-restart-v1: flag the deletion for an EAGER save (the close-flush
+      // effect runs it after the post-close draft is reported) so it reaches disk immediately, not on
+      // the debounce/teardown-flush path that a prompt quit drops.
+      pendingCloseFlushRef.current = true
       close(tabId)
     },
     [close]
